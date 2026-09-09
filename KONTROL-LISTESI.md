@@ -3,6 +3,8 @@
 Gereksinim belgesinin (CNC-TLM-001) **Bölüm 03**'ünü sahada doldurmak için çalışma
 listesi. Kutuları işaretleyerek ilerle; öğrenilen bilgileri "Bulgular" bölümüne yaz.
 
+> **Makineye gidiyorsan:** adım adım saha listesi için → **[MAKINE-BASINDA.md](MAKINE-BASINDA.md)**
+>
 > Öncelik sırası (bilgi değerine göre): **2 → 3 → 1 → 4**
 > Ama **1'i bugün gönder** — bayi cevabı günler alır, o saat işlerken diğerlerini yap.
 

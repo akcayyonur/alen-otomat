@@ -1,0 +1,238 @@
+/* CNC Telemetri Dashboard - gereksinim belgesiyle (CNC-TLM-001) ayni tasarim dili. */
+:root{
+  --paper:#EEF1F1; --surface:#FFFFFF; --surface-2:#F4F6F6;
+  --ink:#1A2229; --ink-soft:#4C5760; --ink-faint:#7C868D;
+  --line:#D3DADC; --line-strong:#B9C2C5;
+  --accent:#1F5A82; --accent-soft:#E4EDF2;
+  /* Seri rengi (kategorik slot 1) - tek serili grafiklerde */
+  --series:#2a78d6; --series-wash:rgba(42,120,214,.10);
+  /* Durum paleti - sabit, tema ile degismez; her zaman ikon+etiket ile birlikte */
+  --st-run:#0ca30c; --st-idle:#fab219; --st-alarm:#d03b3b;
+  --st-off:#8A949B; --st-none:#B9C2C5;
+  --font:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+  --font-cond:'IBM Plex Sans Condensed',system-ui,sans-serif;
+  --mono:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#14181B; --surface:#1B2126; --surface-2:#20272C;
+    --ink:#E7EBEC; --ink-soft:#A8B2B8; --ink-faint:#71797F;
+    --line:#2B3339; --line-strong:#3A444B;
+    --accent:#6FA9D2; --accent-soft:#1E2E38;
+    --series:#3987e5; --series-wash:rgba(57,135,229,.14);
+    --st-off:#6E787E; --st-none:#3A444B;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#14181B; --surface:#1B2126; --surface-2:#20272C;
+  --ink:#E7EBEC; --ink-soft:#A8B2B8; --ink-faint:#71797F;
+  --line:#2B3339; --line-strong:#3A444B;
+  --accent:#6FA9D2; --accent-soft:#1E2E38;
+  --series:#3987e5; --series-wash:rgba(57,135,229,.14);
+  --st-off:#6E787E; --st-none:#3A444B;
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--font);font-size:15px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+.app{max-width:1480px;margin:0 auto;padding:20px 22px 64px;}
+
+/* ---------- ust bar ---------- */
+.topbar{
+  display:flex;align-items:flex-end;justify-content:space-between;
+  gap:20px;flex-wrap:wrap;margin-bottom:20px;
+}
+.eyebrow{
+  font-family:var(--font-cond);font-weight:600;font-size:11.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--accent);
+}
+.topbar h1{margin:.15em 0 0;font-size:1.6rem;font-weight:700;letter-spacing:-.01em;}
+.topbar-right{display:flex;align-items:center;gap:12px;}
+
+.conn{
+  display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);
+  border:1px solid var(--line);background:var(--surface);
+  padding:6px 12px;border-radius:2px;
+}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--st-off);flex:none;}
+.conn.live .conn-dot{background:var(--st-run);animation:pulse 2s ease-in-out infinite;}
+.conn.down .conn-dot{background:var(--st-alarm);}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.conn.live .conn-dot{animation:none}}
+
+.icon-btn{
+  border:1px solid var(--line);background:var(--surface);
+  padding:6px 12px;border-radius:2px;cursor:pointer;
+  font-size:12.5px;color:var(--ink-soft);
+}
+.icon-btn:hover{border-color:var(--line-strong);color:var(--ink);}
+
+/* ---------- KPI satiri ---------- */
+.kpis{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:2px;overflow:hidden;margin-bottom:22px;
+}
+.kpi{background:var(--surface);padding:13px 16px;}
+.kpi-label{
+  display:flex;align-items:center;gap:7px;
+  font-family:var(--font-cond);font-size:11px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-faint);margin-bottom:5px;
+}
+.kpi-value{font-size:1.85rem;font-weight:600;line-height:1.1;}
+.kpi-sub{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);}
+
+/* ---------- ana yerlesim ---------- */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:22px;align-items:start;}
+@media (max-width:1080px){.main{grid-template-columns:1fr;}}
+
+.fleet{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px;}
+
+/* ---------- tezgah karti ---------- */
+.card{
+  background:var(--surface);border:1px solid var(--line);border-radius:2px;
+  padding:14px 16px 12px;cursor:pointer;text-align:left;width:100%;
+  display:flex;flex-direction:column;gap:11px;
+  transition:border-color .12s ease;
+}
+.card:hover{border-color:var(--line-strong);}
+.card[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);}
+
+.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.card-name{font-weight:600;font-size:15px;line-height:1.3;text-wrap:balance;}
+.card-id{font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);}
+
+/* durum rozeti: renk + ikon + metin - renk tek basina anlam tasimaz */
+.badge{
+  display:inline-flex;align-items:center;gap:6px;flex:none;
+  font-family:var(--font-cond);font-size:11.5px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 9px 3px 7px;border-radius:2px;white-space:nowrap;
+  border:1px solid transparent;
+}
+.badge-glyph{font-size:11px;line-height:1;}
+.badge.run{color:#0a7a0a;background:rgba(12,163,12,.13);border-color:rgba(12,163,12,.3);}
+.badge.idle{color:#8a5e00;background:rgba(250,178,25,.17);border-color:rgba(250,178,25,.42);}
+.badge.alarm{color:#a82c2c;background:rgba(208,59,59,.13);border-color:rgba(208,59,59,.32);}
+.badge.off{color:var(--ink-soft);background:var(--surface-2);border-color:var(--line);}
+.badge.none{color:var(--ink-soft);background:var(--surface-2);border-color:var(--line-strong);border-style:dashed;}
+:root[data-theme="dark"] .badge.run,
+:root:not([data-theme="light"]) .badge.run{color:#5cc45c;}
+:root[data-theme="dark"] .badge.idle,
+:root:not([data-theme="light"]) .badge.idle{color:#fab219;}
+:root[data-theme="dark"] .badge.alarm,
+:root:not([data-theme="light"]) .badge.alarm{color:#f07979;}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]) .badge.run{color:#0a7a0a;}
+  :root:not([data-theme="dark"]) .badge.idle{color:#8a5e00;}
+  :root:not([data-theme="dark"]) .badge.alarm{color:#a82c2c;}
+}
+
+.card-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.metric-label{
+  font-family:var(--font-cond);font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-faint);
+}
+.metric-value{
+  font-family:var(--mono);font-size:14px;color:var(--ink);
+  font-variant-numeric:tabular-nums;
+}
+.metric-value.empty{color:var(--ink-faint);}
+.metric-unit{font-size:10.5px;color:var(--ink-faint);margin-left:2px;}
+
+.card-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  font-family:var(--mono);font-size:11.5px;color:var(--ink-faint);
+}
+.src-tag{
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);
+  border:1px solid var(--line);border-radius:999px;padding:0 7px;
+}
+
+/* ---------- durum seridi ---------- */
+.ribbon{display:flex;gap:0;height:22px;border-radius:2px;overflow:hidden;background:var(--surface-2);}
+.ribbon.lg{height:34px;}
+.ribbon span{flex:1 1 0;min-width:0;}
+.rb-R{background:var(--st-run);}
+.rb-I{background:var(--st-idle);}
+.rb-A{background:var(--st-alarm);}
+.rb-O{background:var(--st-off);}
+.rb-empty{
+  background:repeating-linear-gradient(45deg,var(--st-none),var(--st-none) 3px,transparent 3px,transparent 6px);
+}
+.ribbon-axis{
+  display:flex;justify-content:space-between;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-top:4px;
+}
+
+/* ---------- detay paneli ---------- */
+.detail{
+  background:var(--surface);border:1px solid var(--line);border-radius:2px;
+  padding:18px 20px 22px;position:sticky;top:20px;max-height:calc(100vh - 40px);
+  overflow-y:auto;
+}
+.detail h2{margin:0 0 2px;font-size:1.15rem;font-weight:700;}
+.detail-id{font-family:var(--mono);font-size:12px;color:var(--ink-faint);}
+.detail-empty{color:var(--ink-faint);font-size:14px;padding:26px 0;text-align:center;}
+
+.spec{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;margin:14px 0 0;font-size:13px;}
+.spec dt{font-family:var(--font-cond);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);padding-top:3px;}
+.spec dd{margin:0;font-family:var(--mono);font-size:12.5px;color:var(--ink);}
+
+.note{
+  margin-top:12px;padding:10px 12px;font-size:12.5px;line-height:1.5;
+  border:1px solid var(--line);border-left:3px solid var(--accent);
+  background:var(--accent-soft);border-radius:2px;color:var(--ink-soft);
+}
+.note.alarm{border-left-color:var(--st-alarm);background:rgba(208,59,59,.09);}
+.note-label{
+  display:block;font-family:var(--font-cond);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px;
+}
+.alarm-item{font-family:var(--mono);font-size:12px;color:var(--ink);}
+
+.sec{margin-top:20px;}
+.sec-title{
+  font-family:var(--font-cond);font-size:11px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px;
+  display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+}
+.sec-title .cur{font-family:var(--mono);font-size:12.5px;color:var(--ink);letter-spacing:0;text-transform:none;}
+
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;}
+.legend-item{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-soft);}
+.legend-key{width:11px;height:11px;border-radius:2px;flex:none;}
+
+/* ---------- grafik ---------- */
+.chart{position:relative;}
+.chart svg{display:block;width:100%;height:auto;}
+.chart-empty{
+  border:1px dashed var(--line-strong);border-radius:2px;
+  padding:16px;font-size:12.5px;color:var(--ink-faint);line-height:1.5;
+  background:var(--surface-2);
+}
+.tooltip{
+  position:absolute;pointer-events:none;z-index:5;
+  background:var(--surface);border:1px solid var(--line-strong);
+  border-radius:2px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;
+  color:var(--ink);white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.13);
+  opacity:0;transition:opacity .1s ease;
+}
+.tooltip.on{opacity:1;}
+
+/* ---------- calisma orani metresi ---------- */
+.meter{height:8px;border-radius:2px;background:var(--accent-soft);overflow:hidden;}
+.meter-fill{height:100%;background:var(--series);}
+
+.footnote{
+  margin-top:26px;padding-top:14px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--ink-faint);display:flex;
+  justify-content:space-between;gap:14px;flex-wrap:wrap;
+}

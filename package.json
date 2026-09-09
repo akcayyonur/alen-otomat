@@ -1,0 +1,13 @@
+{
+  "name": "cnc-telemetri",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CNC Telemetri Platformu - simulator + backend + canli dashboard iskeleti (CNC-TLM-001)",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node backend/server.js",
+    "sim": "node simulator/index.js",
+    "dev": "node scripts/dev.js"
+  }
+}

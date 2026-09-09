@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNC Filo Telemetrisi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="eyebrow">CNC-TLM-001 · Canlı Telemetri</span>
+        <h1>Filo Genel Bakış</h1>
+      </div>
+      <div class="topbar-right">
+        <div class="conn" id="conn">
+          <span class="conn-dot"></span>
+          <span id="conn-text">bağlanıyor…</span>
+        </div>
+        <button class="icon-btn" id="theme-toggle" type="button">Tema</button>
+      </div>
+    </header>
+
+    <section class="kpis" id="kpis" aria-label="Filo özeti"></section>
+
+    <div class="main">
+      <section class="fleet" id="fleet" aria-label="Tezgahlar"></section>
+      <aside class="detail" id="detail" aria-live="polite">
+        <p class="detail-empty">Ayrıntı için bir tezgah kartı seçin.</p>
+      </aside>
+    </div>
+
+    <footer class="footnote">
+      <span id="foot-stats">—</span>
+      <span>Simüle veri · gerçek tezgah entegrasyonu envanter sonrası (Bölüm 03)</span>
+    </footer>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+[
+  {
+    "id": "CNC-01",
+    "name": "Dikey İşleme Merkezi 1",
+    "vendor": "Fanuc",
+    "controller": "0i-MF",
+    "year": 2019,
+    "source": "focas",
+    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"]
+  },
+  {
+    "id": "CNC-02",
+    "name": "Dikey İşleme Merkezi 2",
+    "vendor": "Siemens",
+    "controller": "Sinumerik 840D sl",
+    "year": 2021,
+    "source": "opcua",
+    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"]
+  },
+  {
+    "id": "CNC-03",
+    "name": "CNC Torna 1",
+    "vendor": "Mazak",
+    "controller": "Smooth G",
+    "year": 2020,
+    "source": "mtconnect",
+    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"]
+  },
+  {
+    "id": "CNC-04",
+    "name": "Dikey İşleme Merkezi 3",
+    "vendor": "Haas",
+    "controller": "NGC",
+    "year": 2016,
+    "source": "modbus",
+    "note": "PLC üzerinden yalnızca temel sinyaller açık — devir/ilerleme okunamıyor.",
+    "reports": ["partCount", "program", "alarms", "downtimeReason"]
+  },
+  {
+    "id": "CNC-05",
+    "name": "Üniversal Torna (legacy)",
+    "vendor": "Bilinmiyor",
+    "controller": "Ağ arayüzü yok",
+    "year": 1997,
+    "source": "retrofit-io",
+    "note": "2000 öncesi tezgah: kontrolcüden veri okunamıyor. Durum, panoya takılan akım trafosu + röle kontağından çıkarılıyor.",
+    "reports": ["partCount"]
+  }
+]

@@ -6,6 +6,8 @@ import { loadInventory } from '../shared/inventory.js';
  * kullanir; tek bir makine farkli davranacaksa PER_MACHINE'e eklenir.
  */
 const LATHE_DEFAULTS = {
+  // Govde etiketi: 7.5 kW, azami 6000 rpm. Tornalamada tipik calisma devri
+  // azaminin yarisi civarindadir.
   spindleTarget: 3000,
   feedTarget: 320,
   cycleSec: [120, 240],

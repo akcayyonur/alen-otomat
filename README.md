@@ -62,8 +62,10 @@ her tezgah yalnızca kendi kimliğini (id, ad, seri no) taşır. Yeni tezgah ekl
 | Kontrolcü | SYNTEC 11B (panel: 11TB) | About ekranı |
 | Yazılım | 10.116.54S | About ekranı |
 | Platform | Windows CE / AM335x-H | About ekranı |
-| Tezgah üreticisi | ARIX | panel |
-| Tip | Lathe (torna) | About ekranı |
+| Tezgah | **ARIX T-42CL** (torna) | gövde etiketi |
+| Üretim | 2020.06 | gövde etiketi |
+| Spindle | 7.5 kW · azami 6000 rpm | gövde etiketi |
+| Üretici iletişim | ARIX, +886-6-384-1900 (Tainan/TW) | gövde etiketi |
 | LAN portu | **var, boşta** | pano fotoğrafı |
 | Haberleşme opsiyonu | Software Option listesinde **yok** | System Permissions |
 

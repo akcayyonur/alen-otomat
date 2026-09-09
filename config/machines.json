@@ -1,28 +1,46 @@
 {
   "_aciklama": "Makine envanteri (CNC-TLM-001 Bölüm 03A). Filo tek tip: tüm tezgahlar aynı Syntec 11B kontrolcü. Ortak ayarlar 'defaults' altında; her tezgah yalnızca kendi kimliğini taşır. Yeni tezgah eklemek için 'machines' dizisine bir satır ekle.",
-
   "defaults": {
     "vendor": "Syntec",
     "controller": "SYNTEC 11B",
     "controllerPanel": "SYNTEC 11TB",
     "softwareVersion": "10.116.54S",
     "machineBuilder": "ARIX",
+    "machineModel": "T-42CL",
+    "builderCompany": "ARIX CNC Machines Co., Ltd.",
+    "builderPhone": "+886-6-384-1900",
+    "builderAddress": "No. 69, Keji 5th Road, Tainan Technology Industry Park, 709 Tainan City, Taiwan",
+    "spindlePowerKw": 7.5,
+    "spindleMaxRpm": 6000,
+    "supplyVoltage": "3 faz 380V",
+    "powerKva": 15,
+    "weightKg": 3330,
     "machineType": "Lathe",
     "platform": "Windows CE",
     "cpuBoard": "AM335x-H",
     "source": "syntec-remoteapi",
-
-    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"],
+    "reports": [
+      "spindleRpm",
+      "feedRate",
+      "partCount",
+      "cycleTimeSec",
+      "program",
+      "alarms",
+      "downtimeReason"
+    ],
     "reportsVerified": false,
-    "_reportsNotu": "Bu liste HENÜZ DOĞRULANMADI - RemoteAPI bağlantısı kurulmadan hangi alanların gerçekten okunabildiği bilinmiyor. Pilot testten sonra okunamayan alanlar buradan çıkarılacak ve reportsVerified true yapılacak."
+    "_reportsNotu": "Bu liste HENÜZ DOĞRULANMADI - RemoteAPI bağlantısı kurulmadan hangi alanların gerçekten okunabildiği bilinmiyor. Pilot testten sonra okunamayan alanlar buradan çıkarılacak ve reportsVerified true yapılacak.",
+    "_plcNotu": "Parça sayacı ve çevrim süresi CNC çekirdeğinde değil ARIX PLC ladder programında (PLC Ver 1.01). Bu alanları okumak için ARIX PLC adres haritası gerekiyor - builderPhone üzerinden istenecek."
   },
-
   "machines": [
     {
       "id": "CNC-01",
       "name": "ARIX Torna 1",
       "cncSerial": "M9L4379",
-      "note": "About ekranından okundu. LAN portu mevcut."
+      "note": "About ekranından okundu. LAN portu mevcut. Gövde etiketi: ARIX T-42CL, seri 20062108, üretim 2020.06. UYARI: etiketin bu kontrolcüye mi yoksa diğerine mi ait olduğu teyit edilmedi.",
+      "year": 2020,
+      "machineSerial": "20062108",
+      "builtDate": "2020-06"
     },
     {
       "id": "CNC-02",

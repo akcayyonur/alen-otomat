@@ -22,7 +22,13 @@ Tezgahların kendi ekranlarından okundu — doğrulanmış birincil bilgi.
 | Platform | Windows CE |
 | CPUBoard | AM335x-H (TI Sitara ARM) |
 | MachineType | Lathe (torna) |
-| Bilinen seri numaraları | M9L4379 · M4L0007 |
+| Bilinen kontrolcü serileri | M9L4379 · M4L0007 |
+| Tezgah modeli | **ARIX T-42CL** |
+| Tezgah seri no | 20062108 (hangi kontrolcüye ait olduğu teyit edilmedi) |
+| Üretim tarihi | **2020.06** |
+| Spindle | 7.5 kW · azami 6000 rpm |
+| Besleme | 3 faz 380V · 15 kVA · 3330 kg |
+| **ARIX iletişim** | **+886-6-384-1900** · Tainan, Tayvan |
 
 **Filo tek tip:** Birden fazla tezgah var, hepsi aynı kontrolcü ve aynı yapılandırma.
 Karma marka filosu riski (Bölüm 12) gerçekleşmedi — bir adaptör yazılıp N tezgaha
@@ -43,6 +49,12 @@ riski gündemden düştü.
 - [x] **Machine Builder Info bir şey söylüyor mu?** → **Hayır.** Üretici alanları
       boş bırakmış (Machine Model, Serial No, Built Date, Builder Phone). Yalnızca
       Builder Code `6***` ve PLC Ver 1.01 var. Bu yol kapalı — bayi sorusu kritik.
+
+### Açık nokta
+
+Gövde etiketi tek bir tezgahtan alındı (seri 20062108). Bu etiketin hangi
+kontrolcüye (M9L4379 mi, M4L0007 mi) ait olduğu teyit edilmedi — diğer
+tezgahların etiketleri çekilince eşleştirilecek.
 
 ### Bakılacak iki ipucu
 
@@ -73,6 +85,16 @@ yeteneğine işaret ediyor olabilir — fırsat olursa bu ekranlara da bakılmal
 > 3. Bu sürümde Modbus TCP (LAN üzerinden slave) kullanılabiliyor mu?
 > 4. Gerekiyorsa yazılım yükseltmesi mümkün mü, bedeli ve riski nedir?
 > 5. RemoteAPI dokümanı ve SDK'sını bizimle paylaşabilir misiniz?
+> 6. Tezgahın **PLC adres haritasını** paylaşabilir misiniz — parça sayacı,
+>    çevrim süresi ve durum bitleri hangi PLC register'larında tutuluyor?
+>    Tezgah: ARIX T-42CL, seri 20062108, üretim 2020.06, PLC Ver 1.01.
+
+**Bu 6. madde ayrıca doğrudan ARIX'e de sorulabilir** — gövde etiketinden çıkan
+iletişim: **+886-6-384-1900** (ARIX CNC Machines Co., Ltd., Tainan, Tayvan).
+Parça sayacı ve çevrim süresi CNC çekirdeğinde değil, ARIX'in yazdığı PLC ladder
+programında tutuluyor; bu adresleri yalnızca ARIX bilir.
+
+- [ ] ARIX'e PLC adres haritası soruldu
 
 </details>
 
@@ -88,6 +110,8 @@ En kritik adım bu. Dördünün de fotoğrafını çek.
 
 - [x] **System Permissions** ekranı — yapıldı, bulgular yukarıda
 - [x] **Machine Builder Info** ekranı — yapıldı, alanlar boş çıktı
+- [x] **Gövde etiketi** — yapıldı, ARIX T-42CL / 20062108 / 2020.06 okundu
+- [ ] Diğer tezgahların gövde etiketleri (her birinin seri no + üretim tarihi)
 - [ ] **Online Service** ekranı — alt menüdeki buton, bağlantı ayarı içerebilir
 - [ ] **Set Kernel Server** ekranı — `F5 Maintain` → `F2 Set Kernel Server`
       → CNC'nin IP adresi ve ağ ayarları

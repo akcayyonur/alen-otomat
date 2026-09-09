@@ -3,6 +3,8 @@
 `cnc-telemetri-gereksinim.html` (CNC-TLM-001) belgesindeki mimarinin çalışan ilk
 katmanı: **simülatör → backend → canlı dashboard**.
 
+Sahada doldurulacak sıradaki adımlar: **[KONTROL-LISTESI.md](KONTROL-LISTESI.md)**
+
 Belgenin Bölüm 13, adım 4'ünü uygular — *"Donanım beklemeden, sahte veri üreten bir
 simülatörle dashboard iskeletini kurmaya başla."* Gerçek tezgah entegrasyonu makine
 envanteri (Bölüm 03A) netleştikten sonra eklenecek.

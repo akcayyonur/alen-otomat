@@ -1,0 +1,772 @@
+<title>CNC Telemetri Platformu</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --paper:#EEF1F1;
+    --surface:#FFFFFF;
+    --surface-2:#F4F6F6;
+    --ink:#1A2229;
+    --ink-soft:#4C5760;
+    --ink-faint:#7C868D;
+    --line:#D3DADC;
+    --line-strong:#B9C2C5;
+    --accent:#1F5A82;
+    --accent-ink:#0F3A55;
+    --accent-soft:#E4EDF2;
+    --warn:#A9690B;
+    --warn-soft:#F6EAD4;
+    --risk:#A8402E;
+    --risk-soft:#F3E1DC;
+    --good:#3E7A4E;
+    --good-soft:#E1EFE3;
+    --font-display:'IBM Plex Sans',system-ui,sans-serif;
+    --font-eyebrow:'IBM Plex Sans Condensed',system-ui,sans-serif;
+    --font-body:'IBM Plex Sans',system-ui,sans-serif;
+    --font-mono:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14181B;
+      --surface:#1B2126;
+      --surface-2:#20272C;
+      --ink:#E7EBEC;
+      --ink-soft:#A8B2B8;
+      --ink-faint:#71797F;
+      --line:#2B3339;
+      --line-strong:#3A444B;
+      --accent:#6FA9D2;
+      --accent-ink:#BEDCF0;
+      --accent-soft:#1E2E38;
+      --warn:#E0A140;
+      --warn-soft:#332911;
+      --risk:#E08871;
+      --risk-soft:#34211D;
+      --good:#7FBE8F;
+      --good-soft:#1D2B21;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14181B;
+    --surface:#1B2126;
+    --surface-2:#20272C;
+    --ink:#E7EBEC;
+    --ink-soft:#A8B2B8;
+    --ink-faint:#71797F;
+    --line:#2B3339;
+    --line-strong:#3A444B;
+    --accent:#6FA9D2;
+    --accent-ink:#BEDCF0;
+    --accent-soft:#1E2E38;
+    --warn:#E0A140;
+    --warn-soft:#332911;
+    --risk:#E08871;
+    --risk-soft:#34211D;
+    --good:#7FBE8F;
+    --good-soft:#1D2B21;
+  }
+
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:16px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--accent-soft);color:var(--accent-ink);}
+
+  a{color:var(--accent);}
+  a:focus-visible, button:focus-visible, summary:focus-visible{
+    outline:2px solid var(--accent);
+    outline-offset:2px;
+  }
+
+  .page{
+    max-width:1180px;
+    margin:0 auto;
+    padding:28px 24px 96px;
+  }
+
+  /* ---------- title block ---------- */
+  .titleblock{
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+    border-radius:2px;
+    overflow:hidden;
+    margin-bottom:36px;
+  }
+  .titleblock-head{
+    padding:22px 26px 18px;
+    border-bottom:1px solid var(--line);
+  }
+  .titleblock-eyebrow{
+    font-family:var(--font-eyebrow);
+    font-weight:600;
+    font-size:12px;
+    letter-spacing:.11em;
+    text-transform:uppercase;
+    color:var(--accent);
+  }
+  .titleblock h1{
+    margin:.3em 0 .2em;
+    font-family:var(--font-display);
+    font-weight:700;
+    font-size:clamp(1.7rem,3vw,2.35rem);
+    letter-spacing:-.01em;
+    text-wrap:balance;
+  }
+  .titleblock-sub{
+    color:var(--ink-soft);
+    font-size:1.02rem;
+    max-width:62ch;
+  }
+  .titleblock-grid{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    background:var(--line);
+    gap:1px;
+  }
+  .tb-cell{
+    background:var(--surface-2);
+    padding:12px 16px;
+  }
+  .tb-label{
+    font-family:var(--font-eyebrow);
+    font-size:10.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--ink-faint);
+    display:block;
+    margin-bottom:4px;
+  }
+  .tb-value{
+    font-family:var(--font-mono);
+    font-size:13.5px;
+    color:var(--ink);
+    font-variant-numeric:tabular-nums;
+  }
+  .status-pill{
+    display:inline-block;
+    font-family:var(--font-mono);
+    font-size:12px;
+    padding:2px 8px;
+    border-radius:2px;
+    background:var(--warn-soft);
+    color:var(--warn);
+    border:1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  }
+
+  /* ---------- layout: toc + content ---------- */
+  .layout{
+    display:grid;
+    grid-template-columns:220px minmax(0,1fr);
+    gap:48px;
+    align-items:start;
+  }
+  nav.toc{
+    position:sticky;
+    top:24px;
+    font-family:var(--font-eyebrow);
+  }
+  .toc-title{
+    font-size:11px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--ink-faint);
+    margin:0 0 10px;
+  }
+  .toc ol{
+    list-style:none;
+    margin:0;
+    padding:0;
+    border-left:1px solid var(--line);
+  }
+  .toc li{margin:0;}
+  .toc a{
+    display:block;
+    padding:6px 0 6px 14px;
+    font-size:13.5px;
+    font-weight:500;
+    color:var(--ink-soft);
+    text-decoration:none;
+    border-left:2px solid transparent;
+    margin-left:-1px;
+  }
+  .toc a:hover{color:var(--accent);border-left-color:var(--line-strong);}
+  .toc-num{
+    font-family:var(--font-mono);
+    color:var(--ink-faint);
+    margin-right:.5em;
+  }
+
+  main{min-width:0;}
+
+  section.doc-section{
+    padding:34px 0;
+    border-bottom:1px solid var(--line);
+    scroll-margin-top:20px;
+  }
+  section.doc-section:last-child{border-bottom:none;}
+
+  .sec-eyebrow{
+    font-family:var(--font-mono);
+    font-size:12.5px;
+    color:var(--accent);
+    letter-spacing:.02em;
+  }
+  h2{
+    font-family:var(--font-display);
+    font-weight:700;
+    font-size:1.5rem;
+    margin:.25em 0 .7em;
+    text-wrap:balance;
+  }
+  h3{
+    font-family:var(--font-display);
+    font-weight:600;
+    font-size:1.08rem;
+    margin:1.5em 0 .6em;
+  }
+  .prose{max-width:70ch;}
+  .prose p{margin:.7em 0;color:var(--ink);}
+  .prose p.lede{color:var(--ink-soft);font-size:1.03rem;}
+  .wide{max-width:none;}
+
+  ul.plain, ol.plain{padding-left:1.2em;margin:.6em 0;}
+  ul.plain li, ol.plain li{margin:.35em 0;}
+
+  code, .mono{font-family:var(--font-mono);font-size:.92em;}
+
+  .callout{
+    border:1px solid var(--line);
+    border-left:3px solid var(--accent);
+    background:var(--accent-soft);
+    padding:14px 18px;
+    border-radius:2px;
+    margin:1.1em 0;
+    font-size:.96rem;
+  }
+  .callout.risk{border-left-color:var(--risk);background:var(--risk-soft);}
+  .callout.warn{border-left-color:var(--warn);background:var(--warn-soft);}
+  .callout p{margin:.3em 0;}
+  .callout-label{
+    font-family:var(--font-eyebrow);
+    font-size:10.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--ink-faint);
+    display:block;
+    margin-bottom:6px;
+  }
+
+  /* ---------- diagram ---------- */
+  figure.diagram{margin:1.6em 0 0.6em;}
+  figure.diagram svg{width:100%;height:auto;display:block;}
+  figcaption{
+    font-size:13px;
+    color:var(--ink-faint);
+    margin-top:10px;
+    max-width:70ch;
+  }
+
+  /* ---------- checklist ---------- */
+  .checklist-group{margin-bottom:26px;}
+  .checklist-group h3{margin-top:0;}
+  .checklist{
+    list-style:none;
+    margin:0;
+    padding:0;
+    display:grid;
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+    border-radius:2px;
+    overflow:hidden;
+  }
+  .checklist li{
+    background:var(--surface);
+    padding:10px 14px;
+    display:grid;
+    grid-template-columns:20px 1fr;
+    gap:10px;
+    align-items:start;
+    font-size:14.5px;
+  }
+  .checklist .box{
+    font-family:var(--font-mono);
+    color:var(--ink-faint);
+    line-height:1.5;
+  }
+  .checklist .field{color:var(--ink-soft);}
+  .checklist .field b{color:var(--ink);font-weight:600;}
+
+  /* ---------- tables ---------- */
+  .table-wrap{overflow-x:auto;margin:1.2em 0;border:1px solid var(--line);border-radius:2px;}
+  table{
+    border-collapse:collapse;
+    width:100%;
+    min-width:560px;
+    font-size:14px;
+    background:var(--surface);
+  }
+  thead th{
+    text-align:left;
+    font-family:var(--font-eyebrow);
+    font-size:11px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--ink-faint);
+    background:var(--surface-2);
+    padding:10px 14px;
+    border-bottom:1px solid var(--line-strong);
+    white-space:nowrap;
+  }
+  tbody td{
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+    vertical-align:top;
+    color:var(--ink);
+  }
+  tbody tr:last-child td{border-bottom:none;}
+  td.mono, th.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+  td.num{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+
+  .tag{
+    display:inline-block;
+    font-family:var(--font-mono);
+    font-size:11px;
+    padding:1px 7px;
+    border-radius:999px;
+    border:1px solid var(--line-strong);
+    color:var(--ink-soft);
+  }
+  .tag.good{color:var(--good);background:var(--good-soft);border-color:transparent;}
+  .tag.warn{color:var(--warn);background:var(--warn-soft);border-color:transparent;}
+  .tag.risk{color:var(--risk);background:var(--risk-soft);border-color:transparent;}
+
+  /* ---------- next steps ---------- */
+  ol.steps{
+    list-style:none;
+    padding:0;
+    margin:1em 0;
+    counter-reset:step;
+    display:grid;
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+    border-radius:2px;
+    overflow:hidden;
+  }
+  ol.steps li{
+    counter-increment:step;
+    background:var(--surface);
+    padding:12px 16px 12px 52px;
+    position:relative;
+    font-size:14.5px;
+  }
+  ol.steps li::before{
+    content:counter(step);
+    position:absolute;
+    left:16px;
+    top:11px;
+    font-family:var(--font-mono);
+    font-weight:500;
+    font-size:13px;
+    color:var(--accent);
+    background:var(--accent-soft);
+    width:22px;height:22px;
+    border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  footer.doc-footer{
+    margin-top:20px;
+    padding-top:20px;
+    border-top:1px solid var(--line);
+    color:var(--ink-faint);
+    font-size:12.5px;
+    display:flex;
+    justify-content:space-between;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+
+  @media (max-width:860px){
+    .layout{grid-template-columns:1fr;gap:8px;}
+    nav.toc{position:static;margin-bottom:8px;}
+    .toc ol{columns:2;border-left:none;}
+    .toc a{border-left:none;padding:5px 0;}
+    .titleblock-grid{grid-template-columns:repeat(2,1fr);}
+  }
+</style>
+
+<div class="page">
+
+  <div class="titleblock">
+    <div class="titleblock-head">
+      <span class="titleblock-eyebrow">Gereksinim ve Mimari Taslağı</span>
+      <h1>CNC Telemetri Platformu</h1>
+      <p class="titleblock-sub">CNC tezgahlarından canlı üretim verisinin toplanıp bir dashboard'da anlık gösterilmesi için uçtan uca sistem tanımı. Marka/model bağımsız — makine envanteri netleştikçe Bölüm 03 ve 05 güncellenecek.</p>
+    </div>
+    <div class="titleblock-grid">
+      <div class="tb-cell"><span class="tb-label">Doküman No</span><span class="tb-value">CNC-TLM-001</span></div>
+      <div class="tb-cell"><span class="tb-label">Revizyon</span><span class="tb-value">v0.1</span></div>
+      <div class="tb-cell"><span class="tb-label">Tarih</span><span class="tb-value">2026-09-09</span></div>
+      <div class="tb-cell"><span class="tb-label">Durum</span><span class="status-pill">TASLAK — bilgi toplanıyor</span></div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Bölümler">
+      <p class="toc-title">Bölümler</p>
+      <ol>
+        <li><a href="#amac"><span class="toc-num">01</span>Amaç &amp; Kapsam</a></li>
+        <li><a href="#mimari"><span class="toc-num">02</span>Genel Mimari</a></li>
+        <li><a href="#bilinmeyenler"><span class="toc-num">03</span>Toplanacak Bilgiler</a></li>
+        <li><a href="#veri-modeli"><span class="toc-num">04</span>Veri Modeli</a></li>
+        <li><a href="#protokol"><span class="toc-num">05</span>Protokol Seçimi</a></li>
+        <li><a href="#iletisim"><span class="toc-num">06</span>Gerçek Zamanlı Katman</a></li>
+        <li><a href="#dashboard"><span class="toc-num">07</span>Dashboard</a></li>
+        <li><a href="#guvenlik"><span class="toc-num">08</span>Güvenlik &amp; Ağ</a></li>
+        <li><a href="#gelistirme"><span class="toc-num">09</span>Geliştirme Ortamı</a></li>
+        <li><a href="#teknoloji"><span class="toc-num">10</span>Teknoloji Yığını</a></li>
+        <li><a href="#olcek"><span class="toc-num">11</span>Ölçek &amp; Roller</a></li>
+        <li><a href="#riskler"><span class="toc-num">12</span>Riskler</a></li>
+        <li><a href="#sonraki"><span class="toc-num">13</span>Sonraki Adımlar</a></li>
+      </ol>
+    </nav>
+
+    <main>
+
+      <section class="doc-section" id="amac">
+        <span class="sec-eyebrow">01</span>
+        <h2>Amaç &amp; Kapsam</h2>
+        <div class="prose">
+          <p class="lede">Bu belge, CNC tezgahlarından canlı üretim verisi toplayıp bir dashboard'da anlık gösterecek sistemin gereksinimlerini tanımlar. Kapsam yalnızca "veriyi çekmek" değil, sahadan ekrana kadar tüm hattı kapsar.</p>
+          <p><b>Kapsam içi:</b> saha tarafında veri toplama (edge/gateway), iletim ve tamponlama, merkezi depolama, gerçek zamanlı yayın, dashboard arayüzü, çoklu kullanıcı/çoklu PC erişimi.</p>
+          <p><b>Kapsam dışı (bu aşamada):</b> tezgahlara komut gönderme veya uzaktan kontrol, üretim planlama / MES-ERP entegrasyonu, bakım öngörüsü (predictive maintenance) modelleri — bunlar telemetri katmanı oturduktan sonra ayrı birer belge olarak ele alınabilir.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="mimari">
+        <span class="sec-eyebrow">02</span>
+        <h2>Genel Mimari</h2>
+        <div class="prose">
+          <p>Sistem beş katmandan oluşur ve en kritik sınır, atölye ağı (OT) ile IT/bulut tarafı arasındaki geçiştir — bu geçiş tek yönlü ve salt-okunur olmalıdır.</p>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 940 400" role="img" aria-label="CNC makinelerinden dashboard'a veri akışı: atölye ağındaki tezgahlar OPC-UA, MTConnect veya vendor SDK üzerinden Edge Agent'a bağlanır; Edge Agent normalize edilmiş veriyi tek yönlü, salt-okunur bir bağlantıyla OT sınırının dışındaki backend'e iletir; backend veriyi zaman serisi veritabanına yazar ve WebSocket üzerinden birden çok PC'deki dashboard istemcisine yayınlar.">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+              </marker>
+              <marker id="arrowAccent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+
+            <!-- OT boundary -->
+            <rect x="14" y="30" width="330" height="300" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" stroke-dasharray="5 5"/>
+            <text x="30" y="52" font-family="IBM Plex Mono" font-size="11.5" letter-spacing="0.06em" fill="currentColor" fill-opacity="0.7">ATÖLYE AĞI (OT)</text>
+
+            <!-- machines (stacked) -->
+            <rect x="42" y="130" width="140" height="42" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <rect x="50" y="122" width="140" height="42" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <rect x="58" y="114" width="140" height="42" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="128" y="139" text-anchor="middle" font-family="IBM Plex Sans" font-size="13" font-weight="600" fill="currentColor">CNC Tezgahları</text>
+
+            <!-- arrow machines -> edge agent -->
+            <line x1="198" y1="135" x2="248" y2="135" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="223" y="112" text-anchor="middle" font-family="IBM Plex Mono" font-size="10.5" fill="currentColor" fill-opacity="0.75">OPC-UA /</text>
+            <text x="223" y="124" text-anchor="middle" font-family="IBM Plex Mono" font-size="10.5" fill="currentColor" fill-opacity="0.75">MTConnect / SDK</text>
+
+            <!-- edge agent -->
+            <rect x="250" y="108" width="86" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="293" y="132" text-anchor="middle" font-family="IBM Plex Sans" font-size="12.5" font-weight="600" fill="currentColor">Edge /</text>
+            <text x="293" y="147" text-anchor="middle" font-family="IBM Plex Sans" font-size="12.5" font-weight="600" fill="currentColor">Gateway Agent</text>
+
+            <!-- boundary crossing arrow (accent) -->
+            <line x1="336" y1="135" x2="452" y2="135" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrowAccent)"/>
+            <text x="394" y="112" text-anchor="middle" font-family="IBM Plex Mono" font-size="10.5" font-weight="500" fill="var(--accent)">tek yönlü</text>
+            <text x="394" y="124" text-anchor="middle" font-family="IBM Plex Mono" font-size="10.5" font-weight="500" fill="var(--accent)">salt-okunur</text>
+
+            <!-- IT/cloud boundary -->
+            <rect x="456" y="30" width="470" height="300" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" stroke-dasharray="5 5"/>
+            <text x="472" y="52" font-family="IBM Plex Mono" font-size="11.5" letter-spacing="0.06em" fill="currentColor" fill-opacity="0.7">IT / BULUT</text>
+
+            <!-- backend box -->
+            <rect x="480" y="108" width="120" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="540" y="132" text-anchor="middle" font-family="IBM Plex Sans" font-size="12.5" font-weight="600" fill="currentColor">Backend</text>
+            <text x="540" y="147" text-anchor="middle" font-family="IBM Plex Sans" font-size="12.5" font-weight="600" fill="currentColor">+ Broker</text>
+
+            <!-- backend -> db (down) -->
+            <line x1="540" y1="164" x2="540" y2="228" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="552" y="200" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.75">yazar</text>
+            <rect x="480" y="230" width="120" height="46" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="540" y="248" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" font-weight="600" fill="currentColor">Zaman Serisi</text>
+            <text x="540" y="262" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" font-weight="600" fill="currentColor">Veritabanı</text>
+
+            <!-- backend -> dashboard -->
+            <line x1="600" y1="135" x2="682" y2="135" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="641" y="118" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.75">WebSocket</text>
+
+            <!-- dashboard box -->
+            <rect x="684" y="108" width="100" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="734" y="132" text-anchor="middle" font-family="IBM Plex Sans" font-size="12.5" font-weight="600" fill="currentColor">Dashboard</text>
+            <text x="734" y="147" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="currentColor" fill-opacity="0.8">(web)</text>
+
+            <!-- dashboard -> 2 pcs -->
+            <line x1="784" y1="122" x2="834" y2="100" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <line x1="784" y1="148" x2="834" y2="170" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <rect x="836" y="78" width="70" height="40" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="871" y="102" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" fill="currentColor">PC 1</text>
+            <rect x="836" y="152" width="70" height="40" rx="3" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/>
+            <text x="871" y="176" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" fill="currentColor">PC 2</text>
+          </svg>
+          <figcaption>Tezgahlar atölye ağının (OT) içinde kalır; Edge Agent verileri normalize edip tek yönlü, salt-okunur bir bağlantıyla IT/bulut tarafına iletir. Dashboard'a birden fazla PC'den aynı anda erişilebilir çünkü istemci tarafı sıradan bir web sayfasıdır.</figcaption>
+        </figure>
+
+        <div class="prose" style="margin-top:1.4em;">
+          <h3>Katman özetleri</h3>
+          <ul class="plain">
+            <li><b>Edge / Gateway Agent</b> — atölye ağına erişimi olan bir PC veya küçük endüstriyel bilgisayarda çalışır; her makinenin native protokolünü (OPC-UA/MTConnect/vendor SDK) konuşur, ortak bir şemaya (ör. JSON) çevirir.</li>
+            <li><b>Backend + Broker</b> — normalize edilmiş veriyi karşılar, doğrular, zaman serisi veritabanına yazar ve bağlı dashboard istemcilerine anlık yayınlar.</li>
+            <li><b>Zaman Serisi Veritabanı</b> — geçmiş trend, OEE hesapları ve raporlama için.</li>
+            <li><b>Dashboard</b> — web tabanlı; aynı anda birden fazla PC/lokasyondan erişilebilir, ek bir kurulum gerektirmez.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section" id="bilinmeyenler">
+        <span class="sec-eyebrow">03</span>
+        <h2>Toplanması Gereken Bilgiler</h2>
+        <div class="prose">
+          <p>Marka/model henüz belli olmadığı için mimari kararların çoğu bu bölümdeki bilgiler netleşince kesinleşecek. Aşağıdaki listeler sahada/IT ile doldurulacak bir kontrol listesi olarak tasarlandı.</p>
+        </div>
+
+        <div class="checklist-group">
+          <h3>A. Makine Envanteri <span class="tag warn">her tezgah için ayrı ayrı</span></h3>
+          <ul class="checklist">
+            <li><span class="box">☐</span><span class="field"><b>Marka / model</b> — ör. Fanuc, Siemens, Heidenhain, Mitsubishi, Haas, Mazak</span></li>
+            <li><span class="box">☐</span><span class="field"><b>Kontrolcü tipi ve versiyonu</b> — ör. Sinumerik 840D sl, Fanuc 0i-MF</span></li>
+            <li><span class="box">☐</span><span class="field"><b>Üretim yılı</b> — ağ arayüzü olup olmadığına dair ilk gösterge</span></li>
+            <li><span class="box">☐</span><span class="field">Kontrolcüde <b>Ethernet portu</b> var mı, aktif mi</span></li>
+            <li><span class="box">☐</span><span class="field"><b>OPC-UA / MTConnect / Data Server</b> opsiyonu satın alınmış mı</span></li>
+            <li><span class="box">☐</span><span class="field">Yoksa: opsiyonun <b>fiyatı ve tedarik süresi</b> üretici/bayiden alındı mı</span></li>
+          </ul>
+        </div>
+
+        <div class="checklist-group">
+          <h3>B. Ağ &amp; Altyapı</h3>
+          <ul class="checklist">
+            <li><span class="box">☐</span><span class="field">Atölye ağı (OT) ile ofis ağı (IT) <b>fiziksel/VLAN olarak ayrık mı</b></span></li>
+            <li><span class="box">☐</span><span class="field">Tezgahların <b>IP adresleri sabit mi</b>, bir IP planı var mı</span></li>
+            <li><span class="box">☐</span><span class="field">Edge Agent'ın çalışacağı <b>PC/donanım nerede konumlanacak</b> (atölyede mi, hangi ağ segmentinde)</span></li>
+            <li><span class="box">☐</span><span class="field">Atölyeden <b>internet çıkışı / VPN</b> var mı (uzaktan geliştirme için)</span></li>
+            <li><span class="box">☐</span><span class="field">Firewall kuralı gerekiyorsa <b>kimin onayı</b> gerekiyor (IT sorumlusu)</span></li>
+          </ul>
+        </div>
+
+        <div class="checklist-group">
+          <h3>C. Kurumsal / Ticari</h3>
+          <ul class="checklist">
+            <li><span class="box">☐</span><span class="field">SDK/lisans/opsiyon bedelleri için <b>bütçe onayı</b> var mı</span></li>
+            <li><span class="box">☐</span><span class="field">Kurumsal bir <b>OT güvenlik politikası</b> var mı (uyulması gereken kurallar)</span></li>
+            <li><span class="box">☐</span><span class="field">Entegrasyonu <b>kim yapacak</b> — iç ekip mi, makine bayisi mi, üçüncü parti entegratör mü</span></li>
+          </ul>
+        </div>
+
+        <div class="checklist-group">
+          <h3>D. Mevcut Sistemler</h3>
+          <ul class="checklist">
+            <li><span class="box">☐</span><span class="field">Atölyede zaten çalışan bir <b>SCADA / MES</b> var mı — varsa doğrudan oradan veri çekmek daha kolay olabilir</span></li>
+            <li><span class="box">☐</span><span class="field">Bir <b>ERP</b> sistemiyle ileride entegrasyon planlanıyor mu (parça/sipariş eşleştirme için)</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section" id="veri-modeli">
+        <span class="sec-eyebrow">04</span>
+        <h2>Veri Modeli</h2>
+        <div class="prose">
+          <p>Dashboard'ın göstereceği asgari veri seti. Makine markası netleşince hangi alanların gerçekten okunabildiği doğrulanacak.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Parametre</th><th>Açıklama</th><th>Birim</th><th>Sıklık</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Makine durumu</td><td>Çalışıyor / Boşta / Alarm / Kapalı</td><td class="mono">durum kodu</td><td class="mono">değişimde anlık</td></tr>
+              <tr><td>Spindle hızı</td><td>Mil devri</td><td class="mono">RPM</td><td class="mono">~1 sn</td></tr>
+              <tr><td>İlerleme (feed rate)</td><td>Eksen ilerleme hızı</td><td class="mono">mm/dk</td><td class="mono">~1 sn</td></tr>
+              <tr><td>Aktif program</td><td>Çalışan NC programı / parça no</td><td class="mono">metin</td><td class="mono">program değişiminde</td></tr>
+              <tr><td>Parça sayacı</td><td>Tamamlanan parça adedi</td><td class="mono">adet</td><td class="mono">parça bitince</td></tr>
+              <tr><td>Alarm / hata kodu</td><td>Aktif alarm listesi</td><td class="mono">kod + metin</td><td class="mono">anlık</td></tr>
+              <tr><td>Çevrim süresi</td><td>Son parçanın üretim süresi</td><td class="mono">sn</td><td class="mono">parça bitince</td></tr>
+              <tr><td>Duruş nedeni</td><td>Operatör tarafından girilen açıklama</td><td class="mono">metin</td><td class="mono">olay bazlı</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="protokol">
+        <span class="sec-eyebrow">05</span>
+        <h2>Entegrasyon Protokolü Seçim Kriterleri</h2>
+        <div class="prose">
+          <p>Hangi protokolün kullanılacağı makine markasına göre değişir; aşağıdaki tablo genel karşılaştırmadır.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Protokol</th><th>Maliyet</th><th>Ön koşul</th><th>Ne zaman tercih edilir</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="mono">OPC-UA</td><td><span class="tag warn">genelde lisanslı opsiyon</span></td><td>Kontrolcüde OPC-UA sunucu paketi aktif olmalı</td><td>Siemens / Fanuc / Mitsubishi'nin yeni nesil kontrolcülerinde, uzun vadeli standart tercih</td></tr>
+              <tr><td class="mono">MTConnect</td><td><span class="tag good">protokol ücretsiz</span><br><span class="tag warn">adapter ücretli olabilir</span></td><td>Üreticide hazır adapter yoksa yazılması/satın alınması gerekir</td><td>Mazak / Okuma / bazı Haas modellerinde fabrikadan hazır geliyorsa ilk tercih</td></tr>
+              <tr><td class="mono">Vendor SDK (FOCAS vb.)</td><td><span class="tag risk">lisanslı, ücretli</span></td><td>Üreticiden SDK lisansı + kontrolcüde ilgili opsiyon</td><td>OPC-UA/MTConnect yoksa ve marka kendi SDK'sını sunuyorsa (ör. Fanuc)</td></tr>
+              <tr><td class="mono">Modbus TCP</td><td><span class="tag good">ücretsiz / açık</span></td><td>Makine üreticisinin PLC verisini bu şekilde açık bırakmış olması</td><td>Basit durum/sayaç verisi yeterliyse, düşük maliyetli hızlı çözüm</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout warn">
+          <span class="callout-label">Not</span>
+          <p>Legacy (eski, ağ arayüzsüz) tezgahlarda bu dört yol da yetersiz kalabilir; seri port → Ethernet gateway gibi ek bir donanım gerekebilir. Bkz. Bölüm 12 — Riskler.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="iletisim">
+        <span class="sec-eyebrow">06</span>
+        <h2>Gerçek Zamanlı İletişim Katmanı</h2>
+        <div class="prose">
+          <ul class="plain">
+            <li>Edge Agent, makineden okuduğu veriyi ortak bir şemaya (ör. JSON) normalize eder.</li>
+            <li>Normalize veri bir mesaj kuyruğuna (ör. MQTT) veya doğrudan backend'e HTTP push ile iletilir.</li>
+            <li>Backend, bağlı dashboard istemcilerine WebSocket üzerinden anlık yayın yapar.</li>
+            <li><b>Ağ kesintisi durumu:</b> Edge Agent, backend'e ulaşamadığında veriyi yerel diskte (ör. SQLite) geçici olarak kuyruklar; bağlantı geri geldiğinde senkronize eder — veri kaybı yerine gecikmeli teslim.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section" id="dashboard">
+        <span class="sec-eyebrow">07</span>
+        <h2>Dashboard Gereksinimleri</h2>
+        <h3>Fonksiyonel</h3>
+        <div class="prose">
+          <ul class="plain">
+            <li>Tezgah bazlı canlı durum kartı — anlamsal renk kodu (çalışıyor / boşta / alarm)</li>
+            <li>Filo genel bakış ekranı — tüm tezgahlar tek ekranda</li>
+            <li>Geçmiş/trend grafikleri (spindle yükü, ilerleme, duruş süreleri)</li>
+            <li>OEE hesabı — Kullanılabilirlik × Performans × Kalite</li>
+            <li>Alarm geçmişi ve filtreleme</li>
+            <li>Rapor / CSV dışa aktarma</li>
+          </ul>
+        </div>
+        <h3>Fonksiyonel olmayan</h3>
+        <div class="prose">
+          <ul class="plain">
+            <li>Uçtan uca gecikme hedefi: <span class="mono">&lt; 2–5 sn</span></li>
+            <li>Rol bazlı erişim: operatör / vardiya amiri / yönetici</li>
+            <li>Aynı anda birden fazla PC/lokasyondan erişim — web tabanlı olduğu için doğal olarak sağlanır</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section" id="guvenlik">
+        <span class="sec-eyebrow">08</span>
+        <h2>Güvenlik &amp; Ağ Gereksinimleri</h2>
+        <div class="prose">
+          <ul class="plain">
+            <li>Edge Agent'ın makinelere erişimi <b>yalnızca okuma</b> olmalı; yazma/komut yeteneği olan API çağrıları kullanılmamalı.</li>
+            <li>OT (tezgah) ağı ile IT/bulut tarafı arasında <b>tek yönlü</b> veri akışı — Bölüm 02'deki diyagramdaki sınır geçişi.</li>
+            <li>Uzaktan geliştirme/VPN erişimi <b>en az ayrıcalık</b> ilkesiyle sınırlandırılmalı.</li>
+            <li>Dashboard'da kimlik doğrulama + rol bazlı yetkilendirme zorunlu.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section" id="gelistirme">
+        <span class="sec-eyebrow">09</span>
+        <h2>Geliştirme Ortamı &amp; Çoklu PC Çalışma</h2>
+        <div class="prose">
+          <ul class="plain">
+            <li><b>Git-first:</b> her oturum sonunda commit/push; hangi PC'de çalışılırsa çalışılsın state git üzerinden taşınır, dosya kopyalamaya gerek kalmaz.</li>
+            <li><b>Edge Agent / protokol entegrasyonu</b> — gerçek tezgaha bağlanan kısım, atölye ağına erişimi olan PC'de geliştirilip test edilmeli.</li>
+            <li><b>Dashboard/backend</b> — mock/simüle veri kaynağıyla atölye ağından bağımsız herhangi bir ortamda (ikinci PC dahil) geliştirilebilir.</li>
+            <li>Erken aşamada bir <b>simülatör</b> yazmak (sahte makine verisi üreten küçük servis), donanım/ağ erişimi beklemeden dashboard geliştirmesinin ilerlemesini sağlar.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section" id="teknoloji">
+        <span class="sec-eyebrow">10</span>
+        <h2>Teknoloji Yığını <span class="tag">öneri — kesinleşmedi</span></h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Katman</th><th>Öneri</th><th>Not</th></tr></thead>
+            <tbody>
+              <tr><td>Edge Agent</td><td class="mono">Python / Node.js</td><td>OPC-UA ve MTConnect istemci kütüphaneleri her ikisinde de olgun; vendor SDK C/.NET gerektiriyorsa küçük bir adapter süreci</td></tr>
+              <tr><td>Mesajlaşma</td><td class="mono">MQTT (Mosquitto) veya HTTP push</td><td>Ölçek küçükse doğrudan HTTP + WebSocket yeterli olabilir</td></tr>
+              <tr><td>Backend</td><td class="mono">Node/NestJS veya .NET</td><td>Ayrı repo/proje — bu belge archx-poc'tan bağımsız</td></tr>
+              <tr><td>Zaman serisi DB</td><td class="mono">TimescaleDB veya InfluxDB</td><td>Postgres tabanlıysa TimescaleDB, mevcut altyapıyla uyum kolaylığı</td></tr>
+              <tr><td>Dashboard</td><td class="mono">Angular + WebSocket</td><td>Mevcut ArchX frontend deneyimiyle örtüşüyor, tercih meselesi</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="olcek">
+        <span class="sec-eyebrow">11</span>
+        <h2>Ölçek &amp; Roller</h2>
+        <ul class="checklist">
+          <li><span class="box">☐</span><span class="field">Kaç tezgah / kaç lokasyon kapsanacak</span></li>
+          <li><span class="box">☐</span><span class="field">Dashboard'ı kimler kullanacak (operatör, vardiya amiri, yönetim, kaç kullanıcı)</span></li>
+          <li><span class="box">☐</span><span class="field">Entegrasyonu kim yürütecek (iç ekip / bayi / üçüncü parti)</span></li>
+        </ul>
+      </section>
+
+      <section class="doc-section" id="riskler">
+        <span class="sec-eyebrow">12</span>
+        <h2>Riskler &amp; Varsayımlar</h2>
+        <div class="callout risk">
+          <span class="callout-label">Risk</span>
+          <p>Eski/legacy tezgahlarda ağ arayüzü hiç bulunmayabilir → seri-Ethernet gateway gibi ek donanım gerekebilir, maliyet ve süre artar.</p>
+        </div>
+        <div class="callout risk">
+          <span class="callout-label">Risk</span>
+          <p>Vendor SDK / opsiyon lisans maliyetleri önceden netleşmediği için bütçe onayı süreci gecikebilir.</p>
+        </div>
+        <div class="callout warn">
+          <span class="callout-label">Varsayım</span>
+          <p>IT/OT ağ ayrımı olmadığı senaryoda, edge agent devreye alınmadan önce ağ mimarisi gözden geçirilmelidir (bkz. Bölüm 08).</p>
+        </div>
+        <div class="callout warn">
+          <span class="callout-label">Varsayım</span>
+          <p>Filo karma markalardan oluşuyorsa (ör. hem Fanuc hem Siemens), her marka için ayrı bir adapter yazılması gerekir — entegrasyon süresi tezgah sayısından çok marka çeşitliliğine bağlı büyür.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sonraki">
+        <span class="sec-eyebrow">13</span>
+        <h2>Sonraki Adımlar</h2>
+        <ol class="steps">
+          <li>Tezgah envanterini çıkar — marka, model, kontrolcü versiyonu (Bölüm 03A).</li>
+          <li>Her makine için mevcut ağ/veri opsiyonlarını üretici veya bayi ile teyit et.</li>
+          <li>Atölye ağ topolojisini netleştir; Edge Agent'ın konumlanacağı PC/donanımı belirle.</li>
+          <li>Donanım beklemeden, sahte veri üreten bir simülatörle dashboard iskeletini kurmaya başla.</li>
+          <li>Bir pilot tezgah seç, uçtan uca akışı (tezgah → dashboard) kanıtla, sonra diğer tezgahlara ölçekle.</li>
+        </ol>
+      </section>
+
+      <footer class="doc-footer">
+        <span>CNC-TLM-001 · v0.1 · Taslak</span>
+        <span>Bölüm 03 ve 05, makine envanteri netleştikçe güncellenmelidir</span>
+      </footer>
+
+    </main>
+  </div>
+</div>

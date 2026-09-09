@@ -1,49 +1,34 @@
-[
-  {
-    "id": "CNC-01",
-    "name": "Dikey İşleme Merkezi 1",
-    "vendor": "Fanuc",
-    "controller": "0i-MF",
-    "year": 2019,
-    "source": "focas",
-    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"]
+{
+  "_aciklama": "Makine envanteri (CNC-TLM-001 Bölüm 03A). Filo tek tip: tüm tezgahlar aynı Syntec 11B kontrolcü. Ortak ayarlar 'defaults' altında; her tezgah yalnızca kendi kimliğini taşır. Yeni tezgah eklemek için 'machines' dizisine bir satır ekle.",
+
+  "defaults": {
+    "vendor": "Syntec",
+    "controller": "SYNTEC 11B",
+    "controllerPanel": "SYNTEC 11TB",
+    "softwareVersion": "10.116.54S",
+    "machineBuilder": "ARIX",
+    "machineType": "Lathe",
+    "platform": "Windows CE",
+    "cpuBoard": "AM335x-H",
+    "source": "syntec-remoteapi",
+
+    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"],
+    "reportsVerified": false,
+    "_reportsNotu": "Bu liste HENÜZ DOĞRULANMADI - RemoteAPI bağlantısı kurulmadan hangi alanların gerçekten okunabildiği bilinmiyor. Pilot testten sonra okunamayan alanlar buradan çıkarılacak ve reportsVerified true yapılacak."
   },
-  {
-    "id": "CNC-02",
-    "name": "Dikey İşleme Merkezi 2",
-    "vendor": "Siemens",
-    "controller": "Sinumerik 840D sl",
-    "year": 2021,
-    "source": "opcua",
-    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"]
-  },
-  {
-    "id": "CNC-03",
-    "name": "CNC Torna 1",
-    "vendor": "Mazak",
-    "controller": "Smooth G",
-    "year": 2020,
-    "source": "mtconnect",
-    "reports": ["spindleRpm", "feedRate", "partCount", "cycleTimeSec", "program", "alarms", "downtimeReason"]
-  },
-  {
-    "id": "CNC-04",
-    "name": "Dikey İşleme Merkezi 3",
-    "vendor": "Haas",
-    "controller": "NGC",
-    "year": 2016,
-    "source": "modbus",
-    "note": "PLC üzerinden yalnızca temel sinyaller açık — devir/ilerleme okunamıyor.",
-    "reports": ["partCount", "program", "alarms", "downtimeReason"]
-  },
-  {
-    "id": "CNC-05",
-    "name": "Üniversal Torna (legacy)",
-    "vendor": "Bilinmiyor",
-    "controller": "Ağ arayüzü yok",
-    "year": 1997,
-    "source": "retrofit-io",
-    "note": "2000 öncesi tezgah: kontrolcüden veri okunamıyor. Durum, panoya takılan akım trafosu + röle kontağından çıkarılıyor.",
-    "reports": ["partCount"]
-  }
-]
+
+  "machines": [
+    {
+      "id": "CNC-01",
+      "name": "ARIX Torna 1",
+      "cncSerial": "M9L4379",
+      "note": "About ekranından okundu. LAN portu mevcut."
+    },
+    {
+      "id": "CNC-02",
+      "name": "ARIX Torna 2",
+      "cncSerial": "M4L0007",
+      "note": "System Permissions ekranından okundu. LAN portu mevcut ve boşta. Software Option listesinde haberleşme/API opsiyonu yok."
+    }
+  ]
+}

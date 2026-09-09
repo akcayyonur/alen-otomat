@@ -42,24 +42,38 @@ dashboard/             Bağımlılıksız web arayüzü (SSE ile canlı)
 ### Neden bu şema önemli
 
 `shared/schema.js` içindeki sözleşme, üst katmanları makinenin markasından ve
-yaşından yalıtır. Edge Agent veriyi OPC-UA'dan da okusa, 1997 model bir tezgahın
-pano röle kontağından da okusa backend'e aynı biçimde gönderir — backend ve
+protokolünden yalıtır. Edge Agent veriyi Syntec RemoteAPI'den de okusa, ileride
+başka marka bir tezgah eklense de backend'e aynı biçimde gönderir — backend ve
 dashboard farkı bilmez.
 
-Bunu göstermek için sahte filoya kasıtlı olarak farklı yetenekte tezgahlar konuldu:
+Ölçümlerin hepsi `null` olabilir. Bir alan okunamıyorsa `0` değil `null` gelir ve
+dashboard bunu "yok" olarak gösterip grafik yerine nedenini yazar. Bu, RemoteAPI
+testinde bazı alanların dönmediği ortaya çıkarsa kod değişikliği gerekmemesi için.
 
-| Tezgah | Yıl | Kaynak | Okunabilen veri |
-|---|---|---|---|
-| CNC-01 | 2019 | FOCAS | tümü |
-| CNC-02 | 2021 | OPC-UA | tümü |
-| CNC-03 | 2020 | MTConnect | tümü |
-| CNC-04 | 2016 | Modbus TCP | devir/ilerleme **yok** |
-| CNC-05 | **1997** | Retrofit I/O | yalnızca durum + parça sayacı |
+## Filo
 
-Her makinenin `reports` listesi neyi üretebildiğini söyler. Üretemediği alan `null`
-gelir — dashboard bunu `0` gibi değil, açıkça "yok" olarak gösterir ve grafik yerine
-nedenini yazar. Envanterde 2000 öncesi tezgah çıkması bu yüzden mimariyi değiştirmez;
-yalnızca o tezgahın Edge Agent tarafındaki okuma yöntemi değişir.
+Envanter: `config/machines.json`. Filo **tek tip** — tüm tezgahlar aynı Syntec 11B
+kontrolcü, aynı yazılım sürümü. Bu yüzden ortak ayarlar `defaults` altında tutulur,
+her tezgah yalnızca kendi kimliğini (id, ad, seri no) taşır. Yeni tezgah eklemek
+`machines` dizisine üç satır yazmak demek.
+
+| Alan | Değer | Kaynak |
+|---|---|---|
+| Kontrolcü | SYNTEC 11B (panel: 11TB) | About ekranı |
+| Yazılım | 10.116.54S | About ekranı |
+| Platform | Windows CE / AM335x-H | About ekranı |
+| Tezgah üreticisi | ARIX | panel |
+| Tip | Lathe (torna) | About ekranı |
+| LAN portu | **var, boşta** | pano fotoğrafı |
+| Haberleşme opsiyonu | Software Option listesinde **yok** | System Permissions |
+
+Bunun pratik sonucu: gereksinim belgesinin Bölüm 12'deki en kötü senaryosu — karma
+marka filosu, her marka için ayrı adaptör — gerçekleşmiyor. **Bir adaptör yazılıp
+N tezgaha kopyalanacak.** Entegrasyon süresi tezgah sayısıyla doğrusal büyür.
+
+> `reportsVerified: false` — `defaults.reports` listesi henüz doğrulanmadı.
+> RemoteAPI bağlantısı kurulup hangi alanların gerçekten okunabildiği görülene
+> kadar bu liste bir tahmindir. Pilot testten sonra düzeltilecek.
 
 ## API
 
@@ -91,7 +105,12 @@ Henüz yok (bilinçli olarak iskelet dışı):
 - **Tam OEE** — yalnızca "çalışma oranı" var; Performans ve Kalite bileşenleri için
   hedef çevrim süresi ve hurda verisi gerekiyor, ikisi de henüz tanımlı değil.
 - **CSV / rapor dışa aktarma** (Bölüm 07).
-- **Gerçek protokol adaptörleri** — envanter sonrası.
+- **Syntec RemoteAPI adaptörü** — asıl iş bu. `Syntec.OpenCNC.dll` bir .NET
+  kütüphanesi olduğu için bu tezgahların Edge Agent'ı **C#/.NET** olacak
+  (belgedeki "Python/Node" önerisi bu filo için geçerli değil). Adapter yalnızca
+  `/api/ingest`'e normalize JSON POST edecek; backend, veritabanı ve dashboard
+  değişmeyecek. Kontrolcü sürümü desteklenen aralığın alt ucunda olduğu için
+  **RemoteAPI 1.1.0** hedeflenmeli.
 
 ## Notlar
 

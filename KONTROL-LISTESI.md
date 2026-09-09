@@ -10,24 +10,45 @@ listesi. Kutuları işaretleyerek ilerle; öğrenilen bilgileri "Bulgular" böl�
 
 ## Bilinenler
 
-Aşağıdakiler tezgahın kendi About ekranından okundu — doğrulanmış birincil bilgi.
+Tezgahların kendi ekranlarından okundu — doğrulanmış birincil bilgi.
 
 | Alan | Değer |
 |---|---|
-| CNCModel | SYNTEC 11B |
-| CNCSerial | M9L4379 |
+| CNCModel | SYNTEC 11B (panel üzerinde: 11TB) |
+| Tezgah üreticisi | ARIX |
 | Product / Server / Client Ver | 10.116.54S |
 | Image Ver | 7.68 |
 | PLC Ver | 1.01 |
 | Platform | Windows CE |
 | CPUBoard | AM335x-H (TI Sitara ARM) |
 | MachineType | Lathe (torna) |
+| Bilinen seri numaraları | M9L4379 · M4L0007 |
 
-**Sonuç:** Bu bir legacy tezgah değil — modern, ağa bağlanabilir bir kontrolcü.
-Sensör retrofit riski (Bölüm 12) bu makine için gündemden düştü.
+**Filo tek tip:** Birden fazla tezgah var, hepsi aynı kontrolcü ve aynı yapılandırma.
+Karma marka filosu riski (Bölüm 12) gerçekleşmedi — bir adaptör yazılıp N tezgaha
+kopyalanacak.
 
-**Açık olan iki soru:** RemoteAPI bu ünitede etkin mi, ve ücretli lisans gerekiyor mu.
-Aşağıdaki adımlar bu ikisini kapatmak için.
+**Bu bir legacy tezgah değil** — modern, ağa bağlanabilir kontrolcü. Sensör retrofit
+riski gündemden düştü.
+
+### Kapanan sorular
+
+- [x] **LAN portu var mı?** → **VAR.** Panonun arkasında RJ45, "LAN" etiketli,
+      şu an boşta. Yanında RS485 (DB9) ve SPINDLE terminal bloğu.
+- [x] **Software Option listesinde RemoteAPI lisansı var mı?** → **Yok.** 40 opsiyon
+      slotunun tamamı talaşlı imalat / hareket kontrolü özelliği (RTCP, STCP,
+      five-axis, CAD/CAM, Vision, Wood…). Tek bir haberleşme/ağ/API kalemi yok.
+      Yorum: RemoteAPI bu kontrolcünün opsiyon sisteminde ücretli kalem olarak
+      tanımlı değil — lisans gerekme ihtimali düştü, ama kesin kanıt değil.
+- [x] **Machine Builder Info bir şey söylüyor mu?** → **Hayır.** Üretici alanları
+      boş bırakmış (Machine Model, Serial No, Built Date, Builder Phone). Yalnızca
+      Builder Code `6***` ve PLC Ver 1.01 var. Bu yol kapalı — bayi sorusu kritik.
+
+### Bakılacak iki ipucu
+
+Software Option listesindeki tek imalat-dışı kalem **"04. Enabled PlugIn Function"**,
+ve alt menüdeki **"Online Service"** butonu. İkisi de eklenti/uzaktan bağlantı
+yeteneğine işaret ediyor olabilir — fırsat olursa bu ekranlara da bakılmalı.
 
 ---
 
@@ -65,14 +86,12 @@ Bağımsız ikinci teyit yolu (bayi cevabını beklemeden):
 
 En kritik adım bu. Dördünün de fotoğrafını çek.
 
-- [ ] **System Permissions** ekranı — About ekranının altındaki buton
-      → RemoteAPI opsiyonu açık mı görünüyor mu
-- [ ] **Machine Builder Info** ekranı — yanındaki buton
-      → tezgah hangi opsiyonlarla sipariş edilmiş
+- [x] **System Permissions** ekranı — yapıldı, bulgular yukarıda
+- [x] **Machine Builder Info** ekranı — yapıldı, alanlar boş çıktı
+- [ ] **Online Service** ekranı — alt menüdeki buton, bağlantı ayarı içerebilir
 - [ ] **Set Kernel Server** ekranı — `F5 Maintain` → `F2 Set Kernel Server`
       → CNC'nin IP adresi ve ağ ayarları
-- [ ] **Panonun arkası / yanı** — fiziksel
-      → RJ45 portu var mı, kablo takılı mı
+- [x] **Panonun arkası** — yapıldı, LAN portu var ve boşta
 
 ---
 
@@ -108,7 +127,8 @@ Kapalı bir lisans dinleyen port bırakmaz.
 
 Makineyle ilgili değil — proje kapsamıyla ilgili, kod yazılabilmesi için gerekli.
 
-- [ ] Kaç tezgah bağlanacak? Hepsi Syntec 11B mi, karma mı?
+- [x] ~~Hepsi Syntec 11B mi, karma mı?~~ → **Tek tip, hepsi aynı config**
+- [ ] Kaç tezgah bağlanacak? (kesin sayı gerekiyor — `config/machines.json`'a işlenecek)
 - [ ] Edge Agent PC'si nerede duracak (atölye / ofis)?
 - [ ] Atölyede hâlihazırda ağ var mı, yoksa sıfırdan mı kurulacak?
 - [ ] Ağ/firewall değişikliğini kim onaylıyor (IT sorumlusu)?
@@ -126,6 +146,11 @@ max 100 m, her CNC'ye sabit IP. Bu ağ ofis ağından ayrı VLAN'da tutulmalı (
 
 | Tarih | Konu | Sonuç |
 |---|---|---|
+| 2026-09-09 | LAN portu | Var, boşta. RJ45, "LAN" etiketli |
+| 2026-09-09 | Software Option listesi | 40 slot, hepsi imalat özelliği. Haberleşme/API opsiyonu yok |
+| 2026-09-09 | Machine Builder Info | Üretici alanları boş, kullanılabilir bilgi yok |
+| 2026-09-09 | Filo yapısı | Birden fazla tezgah, hepsi aynı Syntec 11B config |
+| 2026-09-09 | Bilinen seriler | M9L4379, M4L0007 |
 |  |  |  |
 
 ---

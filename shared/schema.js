@@ -18,6 +18,7 @@ export const DataSource = Object.freeze({
   MTCONNECT: 'mtconnect',
   FOCAS: 'focas',
   MODBUS: 'modbus',
+  SYNTEC_REMOTEAPI: 'syntec-remoteapi',
   RETROFIT_IO: 'retrofit-io',
   SIMULATOR: 'simulator',
 });

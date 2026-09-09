@@ -10,7 +10,8 @@ const OFFLINE = { label: 'Bağlantı yok', glyph: '✕', cls: 'none' };
 
 const SOURCE_LABEL = {
   opcua: 'OPC-UA', mtconnect: 'MTConnect', focas: 'FOCAS',
-  modbus: 'Modbus TCP', 'retrofit-io': 'Retrofit I/O', simulator: 'Simülatör',
+  modbus: 'Modbus TCP', 'retrofit-io': 'Retrofit I/O',
+  'syntec-remoteapi': 'Syntec RemoteAPI', simulator: 'Simülatör',
 };
 
 const el = (id) => document.getElementById(id);

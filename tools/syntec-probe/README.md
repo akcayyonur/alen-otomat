@@ -86,7 +86,15 @@ Ekranda kontrolcü kimliği, sonra örnekleme, sonunda özet:
   READ_nc_current_block   CALISMADI  - donus kodu -18
 ```
 
-Her örnek JSONL olarak kaydedilir; ham veri sonradan tekrar incelenebilir.
+Her örnek **iki dosyaya** kaydedilir:
+
+- `.jsonl` — ham veri, programatik kullanım için
+- `.csv` — Excel'de açmak için (BOM + `sep=;`, ondalık virgül; Türkçe Excel'de
+  çift tıkla düzgün açılır)
+
+CSV'de hem bizim eşlediğimiz `durum` sütunu hem de Syntec'in ham `Status` /
+`Alarm` / `EMG` değerleri yan yana durur — hangi ham değerin hangi duruma
+haritalandığı böylece gözle doğrulanabilir.
 
 ## Bağlantı kurulamazsa
 

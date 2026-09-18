@@ -93,8 +93,17 @@ static class Probe
 
         Console.WriteLine();
         Console.WriteLine("[probe] veri toplaniyor...");
+        string csvDosya = Path.ChangeExtension(cikti, ".csv");
+        Console.WriteLine("[probe] excel      : " + csvDosya);
+        Console.WriteLine();
+
         using (var yazici = new StreamWriter(cikti, false, new UTF8Encoding(false)))
+        // Excel'in Turkce yerel ayarinda dogru acilmasi icin BOM + "sep=;" satiri.
+        using (var csv = new StreamWriter(csvDosya, false, new UTF8Encoding(true)))
         {
+            csv.WriteLine("sep=;");
+            csv.WriteLine(string.Join(";", CsvBaslik));
+
             var bitis = saniye <= 0 ? DateTime.MaxValue : DateTime.Now.AddSeconds(saniye);
             int ornek = 0;
             while (DateTime.Now < bitis)
@@ -103,6 +112,8 @@ static class Probe
                 var kayit = Ornekle(d);
                 yazici.WriteLine(kayit);
                 yazici.Flush();
+                csv.WriteLine(CsvSatir(d));
+                csv.Flush();
                 ornek++;
 
                 if (IngestUrl != null) Gonder(Normalize(d));
@@ -118,7 +129,8 @@ static class Probe
 
         try { CncType.GetMethod("Close").Invoke(Cnc, null); } catch { }
         Console.WriteLine();
-        Console.WriteLine("Ham kayit: " + Path.GetFullPath(cikti));
+        Console.WriteLine("Ham kayit : " + Path.GetFullPath(cikti));
+        Console.WriteLine("Excel     : " + Path.GetFullPath(csvDosya));
         return 0;
     }
 
@@ -170,7 +182,7 @@ static class Probe
             j.Append(",\"Alarm\":").Append(Js(st[5]));
             j.Append(",\"EMG\":").Append(Js(st[6]));
             j.Append("}");
-            d["MainProg"] = st[0]; d["CurProg"] = st[1]; d["Mode"] = st[3];
+            d["MainProg"] = st[0]; d["CurProg"] = st[1]; d["CurSeq"] = st[2]; d["Mode"] = st[3];
             d["Status"] = st[4]; d["Alarm"] = st[5]; d["EMG"] = st[6];
         }
 
@@ -183,7 +195,7 @@ static class Probe
             j.Append(",\"ActFeed\":").Append(Js(sp[2]));
             j.Append(",\"ActSpindle\":").Append(Js(sp[3]));
             j.Append("}");
-            d["ActFeed"] = sp[2]; d["ActSpindle"] = sp[3];
+            d["OvFeed"] = sp[0]; d["OvSpindle"] = sp[1]; d["ActFeed"] = sp[2]; d["ActSpindle"] = sp[3];
         }
 
         object[] pc = { 0, 0, 0 };
@@ -194,7 +206,7 @@ static class Probe
             j.Append(",\"required\":").Append(Js(pc[1]));
             j.Append(",\"total\":").Append(Js(pc[2]));
             j.Append("}");
-            d["PartCount"] = pc[0]; d["TotalPartCount"] = pc[2];
+            d["PartCount"] = pc[0]; d["RequiredPart"] = pc[1]; d["TotalPartCount"] = pc[2];
         }
 
         object[] tm = { 0, 0, 0, 0 };
@@ -206,7 +218,8 @@ static class Probe
             j.Append(",\"CuttingTimePerCycle\":").Append(Js(tm[2]));
             j.Append(",\"WorkTime\":").Append(Js(tm[3]));
             j.Append("}");
-            d["CycleTimeSec"] = tm[2];
+            d["PowerOnTime"] = tm[0]; d["AccumCutTime"] = tm[1];
+            d["CycleTimeSec"] = tm[2]; d["WorkTime"] = tm[3];
         }
 
         object[] al = { false, null, null };
@@ -363,6 +376,51 @@ static class Probe
     static object Al(Dictionary<string, object> d, string k)
     {
         return d.ContainsKey(k) ? d[k] : null;
+    }
+
+
+    static readonly string[] CsvBaslik = {
+        "zaman", "durum", "Mode", "Status", "Alarm", "EMG", "MainProg", "CurProg", "CurSeq",
+        "ActSpindle_rpm", "ActFeed_mm_dk", "OvSpindle_yuzde", "OvFeed_yuzde",
+        "Parca", "GerekenParca", "ToplamParca",
+        "PowerOnTime_sn", "AccumCutTime_sn", "CycleTime_sn", "WorkTime_sn",
+        "AlarmVar", "AlarmMesaj"
+    };
+
+    static string CsvSatir(Dictionary<string, object> d)
+    {
+        var h = new List<string>();
+        h.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        h.Add(DurumEsle(d));
+        foreach (var k in new[] { "Mode", "Status", "Alarm", "EMG", "MainProg", "CurProg", "CurSeq",
+                                  "ActSpindle", "ActFeed", "OvSpindle", "OvFeed",
+                                  "PartCount", "RequiredPart", "TotalPartCount",
+                                  "PowerOnTime", "AccumCutTime", "CycleTimeSec", "WorkTime" })
+            h.Add(Csv(Al(d, k)));
+
+        object isAlarm = Al(d, "IsAlarm");
+        h.Add(isAlarm == null ? "" : ((bool)isAlarm ? "EVET" : "hayir"));
+
+        var arr = Al(d, "AlmMsg") as Array;
+        var m = new List<string>();
+        if (arr != null) foreach (var x in arr) m.Add(Convert.ToString(x));
+        h.Add(Csv(string.Join(" | ", m.ToArray())));
+
+        return string.Join(";", h.ToArray());
+    }
+
+    /// Turkce Excel: ondalik ayraci virgul, alan ayraci noktali virgul.
+    static string Csv(object v)
+    {
+        if (v == null) return "";
+        string s;
+        if (v is float) s = ((float)v).ToString("0.###", CultureInfo.InvariantCulture).Replace('.', ',');
+        else if (v is double) s = ((double)v).ToString("0.###", CultureInfo.InvariantCulture).Replace('.', ',');
+        else s = Convert.ToString(v, CultureInfo.InvariantCulture);
+
+        if (s.IndexOf(';') >= 0 || s.IndexOf('"') >= 0 || s.IndexOf('\n') >= 0)
+            s = "\"" + s.Replace("\"", "\"\"") + "\"";
+        return s;
     }
 
     static Exception Kok(Exception ex) { return ex.InnerException ?? ex; }

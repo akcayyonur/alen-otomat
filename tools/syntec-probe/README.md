@@ -46,6 +46,31 @@ syntec-probe.exe --host 192.168.88.99 --seconds 60
 | `--interval` | `1000` | Örnekleme aralığı (ms) |
 | `--out` | otomatik | JSONL dosya adı |
 | `--dll` | `Syntec.RemoteCNC.Win32.dll` | İstemci kütüphanesi |
+| `--ingest` | yok | Verilirse her örnek bu adrese POST edilir |
+| `--machine-id` | `CNC-01` | `config/machines.json`'daki tezgah kimliği |
+
+`--seconds 0` verilirse süresiz çalışır — Edge Agent olarak kullanım şekli budur.
+
+## Edge Agent olarak çalıştırma
+
+```bat
+syntec-probe.exe --host 192.168.88.99 --seconds 0 --interval 1000 ^
+                 --machine-id CNC-01 --ingest http://SUNUCU:3000/api/ingest
+```
+
+Okuduğu veriyi `shared/schema.js`'teki sözleşmeye çevirip backend'e gönderir.
+Durum eşlemesi:
+
+| Syntec | Şema |
+|---|---|
+| `EMG = "EMG"` veya `Alarm = "ALARM"` | `ALARM` |
+| `Status` içinde RUN / START / BUSY / CYCLE | `RUNNING` |
+| `Status` içinde READY / STOP / PAUSE / HOLD / IDLE / RESET | `IDLE` |
+| tanınmayan | `IDLE` + **özette uyarı** |
+
+Tanınmayan bir değer sessizce eşlenmez; özette listelenir ki eşleme düzeltilebilsin.
+`OFF` durumu API'den gelmez — kontrolcü kapalıysa bağlantı kurulamaz, onu backend
+bağlantı kopukluğu olarak zaten takip ediyor.
 
 ## Çıktı
 

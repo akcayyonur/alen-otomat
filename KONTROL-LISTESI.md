@@ -97,6 +97,10 @@ Parça sayacı ve çevrim süresi CNC çekirdeğinde değil, ARIX'in yazdığı 
 programında tutuluyor; bu adresleri yalnızca ARIX bilir.
 
 - [ ] ARIX'e PLC adres haritası soruldu
+- [ ] **Bayiye/ARIX'e sorulacak (güncellendi):** "TCP 5678 ve 8080 portlarında
+      hangi servis çalışıyor? RemoteAPI dokümanı ve SDK'sını (`Syntec.OpenCNC.dll`)
+      paylaşabilir misiniz?" — artık kontrolcünün ağda olduğunu ve portların açık
+      olduğunu biliyoruz, soru çok daha somut.
 
 </details>
 
@@ -183,6 +187,10 @@ max 100 m, her CNC'ye sabit IP. Bu ağ ofis ağından ayrı VLAN'da tutulmalı (
 | 2026-09-18 | Ping / ARP | Cevap yok — kontrolcü IP'yi devreye almadı, **reboot gerekiyor** |
 | 2026-09-18 | Net Status satırı | Genel ağ durumu DEĞİL, SMB mount durumu — gösterge olarak kullanma |
 | 2026-09-18 | SMB paylaşımı | `\\DiskA\OpenCNC\NcFiles` mevcut — RemoteAPI çıkmazsa yedek yol |
+| 2026-09-18 | **Reboot sonrası** | **BAĞLANTI KURULDU** — ping 4/4, CNC-01 `192.168.88.99` üzerinde |
+| 2026-09-18 | Açık portlar | 21 (FTP, anonim açık), 23 (telnet), 80/443 (CE web), **5678**, **8080** |
+| 2026-09-18 | 5678 / 8080 | HTTP değil, ikili protokol — **RemoteAPI adayları** |
+| 2026-09-18 | **Lisans sorusu** | **Fiilen kapandı** — servisler çalışıyor, port açık. Kalan ihtiyaç: SDK + doküman |
 |  |  |  |
 
 ---

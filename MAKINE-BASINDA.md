@@ -241,3 +241,57 @@ Remove-NetIPAddress -InterfaceAlias $eth -AddressFamily IPv4 -Confirm:$false -Er
 Set-NetIPInterface -InterfaceAlias $eth -Dhcp Enabled
 Set-DnsClientServerAddress -InterfaceAlias $eth -ResetServerAddresses
 ```
+
+---
+
+## 2026-09-18 — reboot sonrası: BAĞLANTI KURULDU ✅
+
+Kontrolcü yeniden başlatıldı ve IP ayarı devreye girdi. Teşhis doğruymuş:
+**Syntec 11B ağ yapılandırmasını yalnızca açılışta uyguluyor.**
+
+```
+ping 192.168.88.99  →  4/4 cevap, TTL=128, ort. 2 ms
+ARP                 →  00-35-ff-74-b7-5f
+```
+
+### Açık portlar (1-10000 tam tarama)
+
+| Port | Servis | Durum |
+|---|---|---|
+| 21 | FTP | `220 Service ready for new user.` — **anonim giriş açık** (`230 User logged in`) |
+| 23 | Telnet | Canlı, IAC anlaşma baytları gönderiyor |
+| 80 | HTTP | Windows CE fabrika web sunucusu, kökte placeholder sayfa |
+| 443 | HTTPS | İstek bekliyor |
+| **5678** | **bilinmiyor — ikili protokol** | Sessiz, HTTP'ye cevap vermiyor |
+| **8080** | **bilinmiyor — ikili protokol** | Sessiz, HTTP'ye cevap vermiyor |
+
+### 5678 ve 8080 — RemoteAPI adayları
+
+Ham TCP üzerinden `GET / HTTP/1.1` gönderildi, ikisi de **cevapsız** kaldı.
+Bağlantıyı kabul ediyor ama HTTP anlamıyorlar → üreticiye özel ikili protokol.
+Bir API endpoint'inin tipik davranışı: istemcinin kendi protokolüyle konuşmasını
+bekliyor.
+
+> Tarayıcıda 8080'e giderken alınan "502 Bad Gateway" CNC'den değil, laptoptaki
+> kurumsal proxy'den geliyordu. Ham soket testi bunu ayırt etti.
+
+### Bunun anlamı: lisans sorusu fiilen kapandı
+
+Kontrolcüde çalışan ve dışarıya port açan servisler var. **Kapalı bir opsiyon
+dinleyen port bırakmaz.** Geriye kalan soru "lisansımız var mı" değil, "bu
+portlarla nasıl konuşulur" — yani **RemoteAPI SDK ve dokümanı**.
+
+### Sıradaki adım: SDK'yı almak
+
+Bayiye/ARIX'e gidilecek soru artık çok daha güçlü ve somut:
+
+> Kontrolcü ağa bağlandı (Syntec 11B, 10.116.54S). TCP 5678 ve 8080 portları
+> açık ve ikili bir protokol konuşuyor. Bu portlarda hangi servis çalışıyor?
+> RemoteAPI dokümanını ve SDK'sını (`Syntec.OpenCNC.dll`) paylaşabilir misiniz?
+
+### Kalan saha işleri
+
+- [ ] FTP kök dizin listesi (anonim giriş çalışıyor) — dosya sistemini görmek için
+- [ ] Parça sayacı operatör ekranında var mı — hâlâ bakılmadı
+- [ ] Diğer tezgahların envanteri (About + gövde etiketi) ve toplam sayı
+- [ ] Diğer tezgahlara da statik IP + reboot (aynı prosedür, IP'ler farklı olmalı)

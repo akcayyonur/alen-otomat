@@ -191,6 +191,9 @@ max 100 m, her CNC'ye sabit IP. Bu ağ ofis ağından ayrı VLAN'da tutulmalı (
 | 2026-09-18 | Açık portlar | 21 (FTP, anonim açık), 23 (telnet), 80/443 (CE web), **5678**, **8080** |
 | 2026-09-18 | 5678 / 8080 | HTTP değil, ikili protokol — **RemoteAPI adayları** |
 | 2026-09-18 | **Lisans sorusu** | **KAPANDI** — RemoteAPI ücretli opsiyon değil, sadece kapalıydı |
+| 2026-09-18 | **SDK bulundu** | syntecclub üyeliğiyle: `11BLathe_W32_10.116.56Q.zip` (PC Simulator, DLL'ler içinde) |
+| 2026-09-18 | **Simulator çalıştı** | Aynı OCAPIServer'ı yerelde açıyor — **makineye gitmeden geliştirme mümkün** |
+| 2026-09-18 | **API doğrulandı** | 5/6 fonksiyon çalıştı, Bölüm 04 veri modelinin tamamı karşılanıyor |
 | 2026-09-18 | **OCAPIServer** | `Start server while boot: Close` idi → `Start Server` ile açıldı |
 | 2026-09-18 | **API portları** | **5566 / 5568 / 5570 / 5572 AÇIK** — 2020 ServLOG kaydıyla birebir |
 | 2026-09-18 | 5678 / 8080 düzeltme | RemoteAPI değilmiş — çıkarımdı, yanlış çıktı |

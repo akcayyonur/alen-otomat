@@ -135,3 +135,81 @@ eşlenecek — eşleme tablosu pilot testte gerçek değerler görülünce kesin
 - `Dipole Log` durumu gösterir (`OCAPIServer is not running.` / port listesi)
 
 Yapılandırma dosyası kontrolcüde: `\DiskC\WinCE\Shared\DipoleSettings.xml`
+
+---
+
+## Doğrulama — 2026-09-18, PC Simulator
+
+`tools/syntec-probe` ile 60 saniyelik yakalama yapıldı. Hedef: Syntec'in
+**W32 PC Simulator**'ı (`11BLathe_W32_10.116.56Q`), `127.0.0.1`.
+
+Simulator, kontrolcünün çalıştırdığı **aynı `OCAPIServer`'ı** yerelde çalıştırıyor
+ve aynı dört portu açıyor (5566/5568/5570/5572). Yani **adaptör makineye gitmeden
+geliştirilip test edilebiliyor**; gerçek tezgaha geçiş tek satır IP değişikliği.
+
+### Kontrolcü kimliği (okundu)
+
+```
+SeriesNo     : M9A0001          (simulator)
+CncType      : 11B
+Seri (M/T)   : Lathe
+Eksen        : 4  →  X, Y, Z, C
+Azami eksen  : 10
+NC sürüm     : 10.116.56.17
+CncOption    : 4 5
+```
+
+### Fonksiyon sonuçları
+
+| Fonksiyon | Sonuç |
+|---|---|
+| `READ_status` | ✅ 60/60 |
+| `READ_spindle` | ✅ 60/60 |
+| `READ_part_count` | ✅ 60/60 |
+| `READ_time` | ✅ 60/60 |
+| `READ_alm_current` | ✅ 60/60 |
+| `READ_nc_current_block` | ❌ dönüş kodu **-18** (*Not supported*) |
+
+Bölüm 04 veri modelinin tamamı çalışan beş fonksiyondan karşılanıyor.
+`READ_nc_current_block` kritik değildi.
+
+### Gözlenen alan değerleri
+
+```json
+"status":    {"MainProg":"", "CurProg":"", "CurSeq":0,
+              "Mode":"AUTO", "Status":"READY", "Alarm":"****", "EMG":"****"}
+"spindle":   {"OvFeed":100, "OvSpindle":100, "ActFeed":0, "ActSpindle":1000}
+"partCount": {"part":0, "required":0, "total":0}
+"time":      {"PowerOnTime":782, "AccumulateCuttingTime":0,
+              "CuttingTimePerCycle":0, "WorkTime":0}
+"alarm":     {"isAlarm":false, "messages":[]}
+```
+
+**Verinin canlı olduğunun kanıtı:** `PowerOnTime` her örnekte bir artıyor
+(782 → 840 arası 58 sn). `ActSpindle: 1000`, simulator ekranındaki değerle birebir.
+
+| Alan | Gözlenen | Not |
+|---|---|---|
+| `Mode` | `AUTO` | MDI / JOG / HOME gibi başka değerler de bekleniyor |
+| `Status` | `READY` | **çalışırken ne döndüğü henüz bilinmiyor** |
+| `Alarm` | `****` | alarm varsa `ALARM` |
+| `EMG` | `****` | acil stop varsa `EMG` |
+
+### Açık nokta: `RUNNING` eşlemesi
+
+Yakalama tezgah boştayken yapıldı, elimizde yalnızca `READY` var. Şemadaki
+`RUNNING` durumuna hangi `Status` değerinin karşılık geldiği doğrulanmadı.
+
+Kapatma yolu: simulator'da bir program çalıştırıp yakalamayı tekrarlamak, ya da
+gerçek tezgahta (Auto/Busy durumdayken) ölçmek.
+
+**Adaptör tasarım kararı:** Tanınmayan bir `Status` değeri sessizce
+eşlenmeyecek, **loglanacak**. Beklenmedik bir değer yanlış duruma haritalanmaktansa
+görünür olmalı.
+
+### Mimari not: `OFF` durumu API'den gelmez
+
+Kontrolcü kapalıysa bağlantı zaten kurulamaz, dolayısıyla `OFF` bir API cevabı
+olarak okunamaz. Şemadaki karşılığı backend'in ayrıca takip ettiği **bağlantı
+kopukluğu** (`connected: false`, dashboard'da "Bağlantı yok"). `OFF` enum değeri
+şemada kalır ama RemoteAPI üzerinden doldurulmaz.

@@ -4,7 +4,8 @@
 katmanı: **simülatör → backend → canlı dashboard**.
 
 Sıradaki adımlar: **[KONTROL-LISTESI.md](KONTROL-LISTESI.md)** ·
-Makine başında yapılacaklar: **[MAKINE-BASINDA.md](MAKINE-BASINDA.md)**
+Makine başında yapılacaklar: **[MAKINE-BASINDA.md](MAKINE-BASINDA.md)** ·
+Adaptör spesifikasyonu: **[SYNTEC-REMOTEAPI.md](SYNTEC-REMOTEAPI.md)**
 
 Belgenin Bölüm 13, adım 4'ünü uygular — *"Donanım beklemeden, sahte veri üreten bir
 simülatörle dashboard iskeletini kurmaya başla."* Gerçek tezgah entegrasyonu makine
@@ -108,12 +109,12 @@ Henüz yok (bilinçli olarak iskelet dışı):
 - **Tam OEE** — yalnızca "çalışma oranı" var; Performans ve Kalite bileşenleri için
   hedef çevrim süresi ve hurda verisi gerekiyor, ikisi de henüz tanımlı değil.
 - **CSV / rapor dışa aktarma** (Bölüm 07).
-- **Syntec RemoteAPI adaptörü** — asıl iş bu. `Syntec.OpenCNC.dll` bir .NET
-  kütüphanesi olduğu için bu tezgahların Edge Agent'ı **C#/.NET** olacak
-  (belgedeki "Python/Node" önerisi bu filo için geçerli değil). Adapter yalnızca
-  `/api/ingest`'e normalize JSON POST edecek; backend, veritabanı ve dashboard
-  değişmeyecek. Kontrolcü sürümü desteklenen aralığın alt ucunda olduğu için
-  **RemoteAPI 1.1.0** hedeflenmeli.
+- **Syntec RemoteAPI adaptörü** — asıl iş bu. Tam spesifikasyon:
+  **[SYNTEC-REMOTEAPI.md](SYNTEC-REMOTEAPI.md)**. Kısaca: .NET kütüphaneleri
+  gerektiği için Edge Agent **C#/.NET** olacak; `READ_status`, `READ_spindle`,
+  `READ_part_count`, `READ_time`, `READ_alm_current` çağrılıp normalize JSON
+  olarak `/api/ingest`'e POST edilecek. Backend, veritabanı ve dashboard
+  değişmeyecek. Eksik olan tek şey Syntec'in istemci DLL'leri.
 
 ## Notlar
 

@@ -295,3 +295,162 @@ Bayiye/ARIX'e gidilecek soru artık çok daha güçlü ve somut:
 - [ ] Parça sayacı operatör ekranında var mı — hâlâ bakılmadı
 - [ ] Diğer tezgahların envanteri (About + gövde etiketi) ve toplam sayı
 - [ ] Diğer tezgahlara da statik IP + reboot (aynı prosedür, IP'ler farklı olmalı)
+
+---
+
+## 2026-09-18 (2. tur) — OCAPIServer AÇILDI, API PORTLARI AYAKTA ✅
+
+Günün asıl sonucu: **RemoteAPI sunucusu kapalıymış, açtık.** Satın alınacak bir şey
+çıkmadı — kapatılmış bir anahtardı.
+
+### Menü haritası (artık tahmin yok)
+
+```
+F1 Coord.     F2 Program      F3 Offset/Setting   F4 Monitor
+F5 Maintain   F6 User Param.  F7 Fast Diag.       F8 About
+```
+
+`F5 Maintain` alt menüsü:
+
+```
+Alarm | Set Kernel Server | Fast Diag. | PLC Param. | Sys. Setting | Backup Sys. | — | Use Time Setting
+```
+
+`Set Kernel Server` ekranının alt butonları:
+
+```
+Save Setting | Cancel | — | — | Set Kernel Server | Wifi Module Setting
+```
+
+Ve **`Set Kernel Server` → `Kernel Server Setting`** ekranı:
+
+```
+Start server while boot:  [Close]        ← SORUN BURADAYDI
+TimeOut (milisec):        [0]
+
+[Start Server] | [OK] | [Cancel] | [Dipole Log]
+```
+
+### Teşhis ve çözüm
+
+`Dipole Log` açıkça yazıyordu:
+
+```
+OCAPIServer is not running.
+```
+
+**`Start Server`** butonuna basıldı. Hemen ardından laptoptan tarama:
+
+```
+ACIK: 5566, 5568, 5570, 5572
+```
+
+Bu portlar, 2020 tarihli `\DiskC\ServLOG_2.txt` kaydıyla birebir aynı:
+
+```
+[9/17/2020 4:47:31 PM] OCAPIServer SYNTEC Inc. (C) 2011
+[9/17/2020 4:47:32 PM] Start listening to port 5566   ← Dipole (veri kanalı)
+[9/17/2020 4:47:32 PM] Start listening to port 5568
+[9/17/2020 4:47:32 PM] Start listening to port 5570
+[9/17/2020 4:47:32 PM] Start listening to port 5572   ← FileTransfer
+[9/17/2020 4:47:49 PM] IP: 192.168.24.104 connected, TCP Dipole Service starts
+```
+
+> **YAPILACAK:** `Start server while boot` hâlâ `Close`. Böyle kalırsa her reboot'ta
+> sunucu kapalı gelir. Açık seçeneğe çevirip `OK` ile kaydedilmeli.
+
+### Düzeltme: 5678 / 8080 RemoteAPI değil
+
+Önceki turda bu iki portu "RemoteAPI adayı" diye işaretlemiştik — **bu bir çıkarımdı,
+kanıt değildi ve yanlış çıktı.** Gerçek API portları 5566-5572. 5678/8080 başka bir
+Syntec servisine ait, henüz kimliği belirsiz.
+
+### Protokol ipucu
+
+2020 logundaki hata mesajı:
+
+```
+Dipole(5566) SocketError -> ReceiveLengthTooShort
+```
+
+Protokolün **uzunluk önekli çerçeveleme** kullandığını gösteriyor. SDK hiç
+gelmezse protokolü çözmek için başlangıç noktası bu.
+
+---
+
+## Parça sayacı bulundu — ARIX bağımlılığı kalktı
+
+`F4 Monitor` ekranı (14:01):
+
+```
+Accum Run Time:  484 : 7 : 39
+Run Time:        0 : 0 : 15
+Part No.:        962
+TotalAcumPart:   11064
+1st Spindle:     2000 RPM (Override 100%)
+```
+
+Ve `F1 Coord.` ekranı:
+
+```
+$1:  F 8469.6 mm/min (Actual)   S 1977 RPM (Actual)
+$2:  F 0.0 mm/min               S 1977 RPM (Actual)
+```
+
+**Bölüm 04 veri modelinin neredeyse tamamı kontrolcüde mevcut:**
+
+| İstenen | Durum | Kaynak |
+|---|---|---|
+| Makine durumu | ✅ | Auto / Busy / Alarm göstergeleri |
+| Spindle devri | ✅ | 2000 komut / 1977 gerçek |
+| İlerleme | ✅ | 8469.6 mm/dk gerçek |
+| Aktif program | ✅ | `BERG\140100187` |
+| **Parça sayacı** | ✅ | 962 / toplam 11064 |
+| Çevrim süresi | ✅ | Accum Cycle Time tutuluyor |
+| Duruş nedeni | ❓ | Operatör girişi, muhtemelen yok |
+
+Parça sayacı CNC çekirdeğinde olduğu için **ARIX'in PLC adres haritasına olan
+bağımlılık ortadan kalktı.** (EMQX Neuron'un SYNTEC sürücüsü de `partCount.total`
+listeliyor — birebir örtüşüyor.)
+
+## Tezgah çift kanallı
+
+`$1` ve `$2` ayrı eksen setleri (X/Z/Y/C ve X1/Z1), ayrı F/S değerleri.
+Muhtemelen çift taretli / karşı puntalı torna. **Veri modeli kanal bazlı
+düşünülmeli** — şu anki şema tek set değer varsayıyor.
+
+## Doğrulanan sistem bilgisi (`F7 Fast Diag.`)
+
+```
+Software Ver:      10.116.54S
+Controller Model:  11B
+```
+
+---
+
+## SONRAKİ ADIMLAR
+
+### Makinede
+
+- [ ] `Start server while boot` → açık seçenek → `OK` (reboot'ta kalıcı olsun)
+- [ ] `Dipole Log`'u tekrar aç, dinlenen portları doğrula 📷
+- [ ] Diğer tezgahlarda aynı işlem: statik IP + Kernel Server başlat
+- [ ] `F5 Maintain → PLC Param.` içinde `Pr3234` (Modbus Slave) ve `S098/S099` var mı bak
+
+### PC tarafı — asıl kalan iş
+
+RemoteAPI 1.1.0 istemcisi gerekiyor. Bayiden/ARIX'ten istenecek:
+
+> Kernel Server'ı etkinleştirdik, 5566/5568/5570/5572 portları açık.
+> **RemoteAPI 1.1.0 istemci paketini** (`Syntec.OpenCNC.dll` / OpenCNCShared,
+> `DipoleSettings.xml`) ve dokümanını paylaşabilir misiniz?
+
+Artık "yapabilir miyiz" sorusu değil — çalışan bir sunucuya istemci istiyoruz.
+
+### Yedek yol: Modbus TCP
+
+`Pr3234 = 9` (LAN) ile açılabiliyor, `Pr3235` slave ID. Sürüm eşiği `10.116.54F`,
+bizimki `10.116.54S` — destekleniyor görünüyor. Avantajı SDK gerektirmemesi;
+dezavantajı ham R register verip anlamını vermemesi
+(`R[n] High = n×2`, `R[n] Low = n×2+1`).
+RemoteAPI çalışırsa buna gerek kalmaz.

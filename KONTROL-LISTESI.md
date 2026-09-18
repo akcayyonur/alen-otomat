@@ -97,10 +97,10 @@ Parça sayacı ve çevrim süresi CNC çekirdeğinde değil, ARIX'in yazdığı 
 programında tutuluyor; bu adresleri yalnızca ARIX bilir.
 
 - [ ] ARIX'e PLC adres haritası soruldu
-- [ ] **Bayiye/ARIX'e sorulacak (güncellendi):** "TCP 5678 ve 8080 portlarında
-      hangi servis çalışıyor? RemoteAPI dokümanı ve SDK'sını (`Syntec.OpenCNC.dll`)
-      paylaşabilir misiniz?" — artık kontrolcünün ağda olduğunu ve portların açık
-      olduğunu biliyoruz, soru çok daha somut.
+- [ ] **Bayiye/ARIX'e sorulacak (son hâli):** "Kernel Server'ı etkinleştirdik,
+      5566/5568/5570/5572 portları açık. RemoteAPI 1.1.0 istemci paketini
+      (`Syntec.OpenCNC.dll` / OpenCNCShared, `DipoleSettings.xml`) ve dokümanını
+      paylaşabilir misiniz?" — artık çalışan bir sunucuya istemci istiyoruz.
 
 </details>
 
@@ -190,7 +190,13 @@ max 100 m, her CNC'ye sabit IP. Bu ağ ofis ağından ayrı VLAN'da tutulmalı (
 | 2026-09-18 | **Reboot sonrası** | **BAĞLANTI KURULDU** — ping 4/4, CNC-01 `192.168.88.99` üzerinde |
 | 2026-09-18 | Açık portlar | 21 (FTP, anonim açık), 23 (telnet), 80/443 (CE web), **5678**, **8080** |
 | 2026-09-18 | 5678 / 8080 | HTTP değil, ikili protokol — **RemoteAPI adayları** |
-| 2026-09-18 | **Lisans sorusu** | **Fiilen kapandı** — servisler çalışıyor, port açık. Kalan ihtiyaç: SDK + doküman |
+| 2026-09-18 | **Lisans sorusu** | **KAPANDI** — RemoteAPI ücretli opsiyon değil, sadece kapalıydı |
+| 2026-09-18 | **OCAPIServer** | `Start server while boot: Close` idi → `Start Server` ile açıldı |
+| 2026-09-18 | **API portları** | **5566 / 5568 / 5570 / 5572 AÇIK** — 2020 ServLOG kaydıyla birebir |
+| 2026-09-18 | 5678 / 8080 düzeltme | RemoteAPI değilmiş — çıkarımdı, yanlış çıktı |
+| 2026-09-18 | **Parça sayacı** | Monitor ekranında: 962 / toplam 11064 → **ARIX PLC bağımlılığı kalktı** |
+| 2026-09-18 | Devir / ilerleme | Gerçek değerler ekranda: 1977 RPM, 8469.6 mm/dk |
+| 2026-09-18 | Tezgah yapısı | **Çift kanallı** ($1/$2, ayrı eksen ve iş milleri) |
 |  |  |  |
 
 ---

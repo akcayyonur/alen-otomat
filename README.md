@@ -79,6 +79,36 @@ N tezgaha kopyalanacak.** Entegrasyon süresi tezgah sayısıyla doğrusal büy�
 > RemoteAPI bağlantısı kurulup hangi alanların gerçekten okunabildiği görülene
 > kadar bu liste bir tahmindir. Pilot testten sonra düzeltilecek.
 
+## Araçlar
+
+`tools/` altında, bağımlılıksız:
+
+| Araç | Ne yapar |
+|---|---|
+| `tools/modbus.js` | Asgari Modbus TCP istemcisi (yalnızca okuma: FC03/FC04) |
+| `tools/modbus-dump.js` | Register keşfi — aralığı periyodik okur, JSONL kaydeder, analiz eder |
+
+### Register keşfi
+
+Syntec'te Modbus ham `R` register'ı verir, hangisinin ne olduğunu vermez. Bu araç
+onu deneysel olarak çözmek için: ekranda değerini bildiğimiz büyüklükleri
+(parça sayacı, devir) register dökümünde arar.
+
+```bash
+node tools/modbus-dump.js --host 192.168.88.99 --start 0 --count 600      --seconds 60 --find 962,11064,1977
+```
+
+İki analiz üretir:
+
+1. **Değişen register'lar** — sabit olanlar ayardır, değişenler canlı veridir
+2. **Bilinen değer araması** — aranan sayı hangi adreste göründü; 16-bit ve
+   32-bit çift (`R[n] High = n×2`, `Low = n×2+1`) olarak ayrı ayrı
+
+Ham örnekler JSONL olarak kaydedilir, sonradan tekrar analiz edilebilir.
+
+> Ön koşul: kontrolcüde Modbus slave açık olmalı (`Pr3234 = 9` LAN),
+> slave ID `Pr3235`. Port 502.
+
 ## API
 
 | Yol | Açıklama |

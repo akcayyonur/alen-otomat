@@ -87,6 +87,21 @@ N tezgaha kopyalanacak.** Entegrasyon süresi tezgah sayısıyla doğrusal büy�
 |---|---|
 | `tools/modbus.js` | Asgari Modbus TCP istemcisi (yalnızca okuma: FC03/FC04) |
 | `tools/modbus-dump.js` | Register keşfi — aralığı periyodik okur, JSONL kaydeder, analiz eder |
+| `tools/syntec-probe/` | **RemoteAPI yakalama aracı** — hangi alanların gerçekten geldiğini ölçer |
+
+### RemoteAPI yakalama
+
+Kontrolcüye bağlanıp `READ_status`, `READ_spindle`, `READ_part_count`,
+`READ_time`, `READ_alm_current` çağırır; her örneği JSONL kaydeder ve sonunda
+hangi fonksiyonun çalıştığını özetler. `config/machines.json`'daki `reports`
+listesi bununla kesinleşecek.
+
+Ayrıntı: [`tools/syntec-probe/README.md`](tools/syntec-probe/README.md)
+
+> **PC Simulator'a karşı da çalışır.** Syntec'in W32 simulator paketi aynı
+> `OCAPIServer`'ı yerelde çalıştırıyor — yani adaptör makineye gitmeden
+> geliştirilip test edilebilir, sonra tek satır IP değişikliğiyle gerçek
+> tezgaha bağlanır.
 
 ### Register keşfi
 

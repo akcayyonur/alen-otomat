@@ -132,3 +132,112 @@ Kaç tezgah varsa hepsi için tekrarla. Tablo boş bırakılan yerleri doldur.
 
 Bu dördü gelince: envanter `config/machines.json`'a işlenir, `reports` listesi
 gerçeğe göre düzeltilir ve Syntec RemoteAPI adaptörünü yazmaya başlayabiliriz.
+
+---
+
+## 2026-09-18 saha ziyareti — CNC-01 (M9L4379 / BERG\140100187)
+
+### Yapılanlar
+
+- [x] **Online Service** ekranı → **elendi.** Yalnızca Syntec müşteri hizmetlerini
+      arama sihirbazı (WeChat / Common User seçimi). Veri entegrasyonuyla ilgisi yok.
+- [x] **LAN kablosu takıldı** → link kuruldu, laptopta `Status: Up, 100 Mbps`.
+      **Port fiziksel olarak çalışıyor.**
+- [x] **Ağ ayarları okundu ve değiştirildi** (aşağıda)
+- [x] **Ping / ARP testi** → cevap yok
+- [ ] Port taraması — bağlantı kurulamadığı için yapılamadı
+- [ ] Parça sayacı ekranda var mı — bakılmadı, sonraki ziyarette
+- [ ] Diğer tezgahların envanteri — bakılmadı
+
+### Değiştirilen ayar — geri almak gerekirse
+
+`F5 Maintain` → `F2 Set Kernel Server`
+
+| Alan | ÖNCE (orijinal) | SONRA (şu anki) |
+|---|---|---|
+| IP Address Setting | `Obtain an IP Address via DHCP` | `Specify an IP Address` |
+| IP Address | 192.168.24.107 *(DHCP altında görünen, bağlı değildi)* | **192.168.88.99** |
+| Subnet Mask | 255.255.255.0 | 255.255.255.0 |
+| Default Gateway | 192.168.24.1 | **192.168.88.1** |
+| Primary DNS | 192.168.24.1 | 0.0.0.0 |
+
+> "Specify an IP Address" seçilince kontrolcüde eskiden kayıtlı statik profil çıktı:
+> IP `192.168.88.99`, Gateway `10.10.65.1` (tutarsız, subnet dışı). Gateway
+> `192.168.88.1` yapılarak tutarlı hale getirildi.
+
+### Sonuç: kontrolcü IP'yi devreye almadı
+
+Ayar kaydedildi ve ekranlar arasında kalıcı — yani yazma çalışıyor. Ama:
+
+- `ping 192.168.88.99` → cevap yok
+- `arp -d *` sonrası `arp -a` → `.99` için MAC adresi yok
+
+ARP seviyesinde bile cevap yoksa cihaz o adreste değildir; TCP de çalışmaz.
+**Kontrolcü IP yapılandırmasını yalnızca açılışta uyguluyor** (gömülü sistemlerde
+standart davranış). Yapılabilecek ayar kalmadı.
+
+### Öğrenilen: `Net Status` satırı yanıltıcı
+
+`Net Status: Code 1222 The network is unreachable`, **genel ağ durumu değil** —
+"Network Disk Remote Host Path" bölümünün altında ve CNC'nin `\\SYNTECCNC\PUBLIC`
+paylaşımına bağlanma durumunu gösteriyor. Ağda o isimde bir PC olmadığı için IP
+ayarı düzelse bile bu satır "unreachable" kalır. **Gösterge olarak kullanma.**
+
+### Yan bulgu: SMB paylaşımı var
+
+`Resource Shared → Shared Folder Path: \DiskA\OpenCNC\NcFiles`
+Kontrolcü kendi klasörünü ağa paylaşabiliyor, ayrıca uzak bir Windows paylaşımını
+(`SYNTECCNC` / `PUBLIC`) bağlayabiliyor. Yol adındaki **OpenCNC**, RemoteAPI'nin
+kütüphanesi `Syntec.OpenCNC.dll` ile aynı isim. RemoteAPI çıkmazsa yedek yol.
+
+---
+
+## SONRAKİ ZİYARET — buradan devam et
+
+### 1. Kontrolcüyü yeniden başlat
+
+Operatörle birlikte, tezgah parça ortasında değilken kapat-aç.
+
+### 2. Laptopu hazırla
+
+```powershell
+$eth = "Ethernet"
+Set-NetIPInterface -InterfaceAlias $eth -Dhcp Disabled
+Remove-NetIPAddress -InterfaceAlias $eth -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias $eth -IPAddress 192.168.88.100 -PrefixLength 24
+```
+
+### 3. Bağlantıyı test et
+
+```powershell
+ping 192.168.88.99
+arp -a | Select-String "192.168.88"
+```
+
+### 4. Cevap gelirse: port taraması ⭐
+
+```powershell
+$ip = "192.168.88.99"
+$liste = 21,22,23,25,53,80,102,135,139,443,445,502,548,990,1024,1025,1433,2000,2001,3000,3389,4000,4840,5000,5001,5050,5051,5060,5555,6000,7000,8000,8080,8081,8090,9000,9100,10000,20000,44818
+$acik = @()
+foreach ($p in $liste) {
+  $c = New-Object System.Net.Sockets.TcpClient
+  try { if ($c.ConnectAsync($ip,$p).Wait(300)) { $acik += $p; Write-Host "ACIK: $p" -ForegroundColor Green } } catch {}
+  $c.Close()
+}
+Write-Host "`nHizli tarama: $($acik -join ', ')"
+```
+
+### 5. Reboot sonrası da cevap yoksa
+
+Kontrolcünün ağ arayüzü donanımsal ya da yazılımsal olarak pasif olabilir.
+O noktada bayiye/ARIX'e sorulacak soru netleşir: *"LAN portu etkin mi, etkinleştirmek
+için bir parametre veya opsiyon gerekiyor mu?"*
+
+### 6. Laptopu geri al
+
+```powershell
+Remove-NetIPAddress -InterfaceAlias $eth -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue
+Set-NetIPInterface -InterfaceAlias $eth -Dhcp Enabled
+Set-DnsClientServerAddress -InterfaceAlias $eth -ResetServerAddresses
+```

@@ -177,6 +177,12 @@ max 100 m, her CNC'ye sabit IP. Bu ağ ofis ağından ayrı VLAN'da tutulmalı (
 | 2026-09-09 | Machine Builder Info | Üretici alanları boş, kullanılabilir bilgi yok |
 | 2026-09-09 | Filo yapısı | Birden fazla tezgah, hepsi aynı Syntec 11B config |
 | 2026-09-09 | Bilinen seriler | M9L4379, M4L0007 |
+| 2026-09-18 | Online Service ekranı | Elendi — müşteri hizmetleri arama sihirbazı, veriyle ilgisi yok |
+| 2026-09-18 | LAN portu testi | **Link kuruldu, 100 Mbps Up** — port fiziksel olarak çalışıyor |
+| 2026-09-18 | CNC ağ ayarı | DHCP idi, statik `192.168.88.99/24` gw `192.168.88.1` yapıldı (CNC-01) |
+| 2026-09-18 | Ping / ARP | Cevap yok — kontrolcü IP'yi devreye almadı, **reboot gerekiyor** |
+| 2026-09-18 | Net Status satırı | Genel ağ durumu DEĞİL, SMB mount durumu — gösterge olarak kullanma |
+| 2026-09-18 | SMB paylaşımı | `\\DiskA\OpenCNC\NcFiles` mevcut — RemoteAPI çıkmazsa yedek yol |
 |  |  |  |
 
 ---

@@ -13,12 +13,18 @@
         .\kurulum.ps1 -Kaldir                 # kurulumu geri al
 
     Betik tekrar tekrar calistirilabilir; var olani gunceller.
+
+    PAKETLI KURULUM (installer\ ile uretilen Setup.exe): proje kokunde
+    runtime\node.exe ve agent\syntec-agent.exe varsa betik bunlari kullanir -
+    makinede Node kurulu olmasi, .NET derleyicisi ya da -SyntecBin gerekmez.
+    Setup.exe betigi bu yolla cagirir.
 #>
 
 [CmdletBinding()]
 param(
     # Syntec paketindeki Bin klasoru. Ajan BURADAN calisir - yanindaki native
-    # DLL'lere ihtiyaci var, dosyalari ayirmak calismaz.
+    # DLL'lere ihtiyaci var, dosyalari ayirmak calismaz. Paketli kurulumda
+    # gerekmez: ajan zaten <kok>\agent altinda, DLL'leriyle birlikte.
     [string]$SyntecBin,
 
     # Dashboard portu.
@@ -27,7 +33,11 @@ param(
     # Dashboard'a baska bilgisayarlardan da bakilacaksa guvenlik duvarinda ac.
     [switch]$AgaAc,
 
-    [switch]$Kaldir
+    [switch]$Kaldir,
+
+    # Gorevleri ve kurulum dizininden calisan surecleri durdurur, baska bir sey
+    # yapmaz. Setup.exe, dosyalari uzerine yazmadan once bunu cagirir.
+    [switch]$Durdur
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +48,10 @@ $FwKural      = 'CNC Telemetri'
 
 $ProjeKok = Split-Path -Parent $PSScriptRoot
 $LogDizin = Join-Path $ProjeKok 'logs'
+
+# Paketli kurulumda Setup.exe'nin yerlestirdigi dosyalar.
+$PaketliNode = Join-Path $ProjeKok 'runtime\node.exe'
+$PaketliAjan = Join-Path $ProjeKok 'agent\syntec-agent.exe'
 
 function Baslik($metin) {
     Write-Host ''
@@ -55,13 +69,46 @@ function YoneticiMi {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# ----------------------------------------------------------------- durdurma
+
+function GorevleriDurdur {
+    foreach ($g in @($BackendGorev, $AjanGorev)) {
+        if (Get-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue) {
+            Stop-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Kurulum dizininden calisan surecleri YOLA gore durdurur. Ada gore (node.exe)
+# oldurmek makinedeki baska Node islerini de vururdu. Calisan node.exe / ajan
+# kilitli oldugu icin dosyalar uzerine yazilamaz ve silinemez - Setup.exe bu
+# yuzden yukleme ve kaldirmadan once bunu ister.
+function KokSurecleriniDurdur {
+    $onek = $ProjeKok.TrimEnd('\') + '\'
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($onek, [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object {
+            try {
+                Stop-Process -Id $_.Id -Force -ErrorAction Stop
+                Bilgi "durduruldu: $($_.Name)"
+            } catch { }
+        }
+}
+
+if ($Durdur) {
+    GorevleriDurdur
+    KokSurecleriniDurdur
+    return
+}
+
 # ---------------------------------------------------------------- kaldirma
 
 if ($Kaldir) {
     Baslik 'Kurulum kaldiriliyor'
+    GorevleriDurdur
+    KokSurecleriniDurdur
     foreach ($g in @($BackendGorev, $AjanGorev)) {
         if (Get-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue) {
-            Stop-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue
             Unregister-ScheduledTask -TaskName $g -Confirm:$false
             Tamam "gorev silindi: $g"
         }
@@ -92,17 +139,26 @@ if (-not (YoneticiMi)) {
     exit 1
 }
 
+# Setup.exe betigi gizli pencerede calistirir; ekrana yazilanlar kaybolmasin,
+# bir sorun cikarsa tek bakilacak yer bu dosya olsun.
+New-Item -ItemType Directory -Force -Path $LogDizin | Out-Null
+try { Start-Transcript -Path (Join-Path $LogDizin 'kurulum.log') -Force | Out-Null } catch { }
+
 Baslik 'On kosullar'
 
 # --- Node ---
-$node = (Get-Command node -ErrorAction SilentlyContinue)
-if (-not $node) {
-    Hata 'Node.js kurulu degil.'
-    Bilgi 'Kurmak icin:   winget install OpenJS.NodeJS.LTS'
-    Bilgi 'Sonra bu pencereyi kapatip yeniden ac (PATH tazelensin) ve tekrar calistir.'
-    exit 1
+if (Test-Path $PaketliNode) {
+    $nodeYol = $PaketliNode
+} else {
+    $node = (Get-Command node -ErrorAction SilentlyContinue)
+    if (-not $node) {
+        Hata 'Node.js kurulu degil.'
+        Bilgi 'Kurmak icin:   winget install OpenJS.NodeJS.LTS'
+        Bilgi 'Sonra bu pencereyi kapatip yeniden ac (PATH tazelensin) ve tekrar calistir.'
+        exit 1
+    }
+    $nodeYol = $node.Source
 }
-$nodeYol = $node.Source
 $sv = (& $nodeYol -v) -replace '^v',''
 $parcali = $sv.Split('.')
 if ([int]$parcali[0] -lt 22 -or ([int]$parcali[0] -eq 22 -and [int]$parcali[1] -lt 5)) {
@@ -116,11 +172,16 @@ Tamam "Node v$sv  ($nodeYol)"
 # --- .NET Framework (ajan derlemesi icin) ---
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
 $ajanDerlenebilir = Test-Path $csc
-if ($ajanDerlenebilir) { Tamam '.NET Framework 4.0 derleyicisi bulundu' }
+$paketliAjanVar = Test-Path $PaketliAjan
+if ($paketliAjanVar) {
+    # Hazir derlenmis ajan var, derleyici gerekmez.
+} elseif ($ajanDerlenebilir) { Tamam '.NET Framework 4.0 derleyicisi bulundu' }
 else { Uyari '.NET Framework 4.0 yok - ajan derlenemeyecek, backend yine de kurulur' }
 
 # --- Syntec Bin ---
-if (-not $SyntecBin) {
+if ($paketliAjanVar) {
+    Tamam "Syntec paketi: kurulumla birlikte geldi ($(Split-Path -Parent $PaketliAjan))"
+} elseif (-not $SyntecBin) {
     Uyari 'Syntec Bin klasoru verilmedi (-SyntecBin). Yalnizca backend kurulacak.'
     Bilgi 'Ajani sonra kurmak icin betigi -SyntecBin ile tekrar calistir.'
 } elseif (-not (Test-Path $SyntecBin)) {
@@ -130,12 +191,22 @@ if (-not $SyntecBin) {
     Tamam "Syntec Bin: $SyntecBin"
 }
 
-New-Item -ItemType Directory -Force -Path $LogDizin | Out-Null
-
 # ------------------------------------------------------------- ajan kurulumu
 
 $ajanExe = $null
-if ($SyntecBin -and $ajanDerlenebilir) {
+$ajanCalismaDizini = $SyntecBin
+if ($paketliAjanVar) {
+    Baslik 'Edge Agent'
+
+    # Ajan, DLL'lerinin yanindan calismali: yonetilen sarmalayici native
+    # DLL'leri calisma aninda yukluyor. Setup.exe hepsini birlikte yerlestirdi.
+    $ajanCalismaDizini = Split-Path -Parent $PaketliAjan
+    Get-ChildItem $ajanCalismaDizini -Recurse -ErrorAction SilentlyContinue |
+        Unblock-File -ErrorAction SilentlyContinue
+
+    $ajanExe = $PaketliAjan
+    Tamam "hazir: $ajanExe"
+} elseif ($SyntecBin -and $ajanDerlenebilir) {
     Baslik 'Edge Agent'
 
     # Zip'ten cikan dosyalar Windows tarafindan bloke gelir (0x80131515).
@@ -187,7 +258,7 @@ if ($AgaAc) {
 
 Baslik 'Acilista baslatma'
 
-function GorevKur($ad, $program, $argumanlar, $calismaDizini, $log) {
+function GorevKur($ad, $program, $argumanlar, $calismaDizini, $log, $gecikmeSn = 0) {
     if (Get-ScheduledTask -TaskName $ad -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $ad -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $ad -Confirm:$false
@@ -204,6 +275,9 @@ function GorevKur($ad, $program, $argumanlar, $calismaDizini, $log) {
         -Argument "/c $komut" -WorkingDirectory $calismaDizini
 
     $tetik = New-ScheduledTaskTrigger -AtStartup
+    # Acilista iki gorev ayni anda tetiklenir; ajanin backend'den once kalkmamasi
+    # icin gecikme. Ajan backend'i zaten bekler (Agent.cs), bu ikinci guvence.
+    if ($gecikmeSn -gt 0) { $tetik.Delay = ('PT{0}S' -f $gecikmeSn) }
     $kimlik = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     # Coktugu yerde kalmasin: bir dakika sonra yeniden denesin, suresiz calissin.
     $ayar = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
@@ -223,7 +297,7 @@ if ($ajanExe) {
     $ajanLog = Join-Path $LogDizin 'ajan.log'
     # Tezgah listesi backend'den gelir; ajanin yaninda liste dosyasi tutulmaz.
     $ajanArg = "--ingest http://127.0.0.1:$Port/api/ingest"
-    GorevKur $AjanGorev $ajanExe $ajanArg $SyntecBin $ajanLog
+    GorevKur $AjanGorev $ajanExe $ajanArg $ajanCalismaDizini $ajanLog 30
 }
 
 # -------------------------------------------------------------- calistirma

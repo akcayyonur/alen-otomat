@@ -2,3 +2,10 @@ node_modules/
 *.log
 .DS_Store
 data/
+
+# Kurulum paketi: Syntec DLL'leri ve derleme ciktilari depoya GIRMEZ.
+# (build-installer.ps1 her derlemede DLL'leri disaridan alip payload'a koyar.)
+installer/payload/
+installer/output/
+*.exe
+*.dll

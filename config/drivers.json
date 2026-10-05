@@ -43,9 +43,10 @@
       ],
       "requires": [
         "Kontrolcüde Kernel Server çalışır durumda ('Start server while boot' = açık)",
-        "Ajanın yanındaki klasörde: Syntec.OpenCNC.dll, Syntec.RemoteCNC.dll, Syntec.RemoteObj.dll, OCAPI.dll, OCUSER.dll",
+        "Ajan, Syntec Bin klasörünün İÇİNDEN çalıştırılmalı — yönetilen sarmalayıcı, yanındaki native DLL'leri (OCApi.dll, OCUser.dll, MMICommon32.dll …) çalışma anında yüklüyor. Dosyaları tek tek seçip taşıma, klasörü bölme.",
         "PC güvenlik duvarında TCP 5568 ve 5570 GELEN bağlantıya açık (kontrolcü PC'ye geri bağlantı açıyor)",
-        "Ajan 32-bit (x86) derlenmiş olmalı — Syntec dll'leri native 32-bit"
+        "Ajan 32-bit (x86) derlenmiş olmalı — Syntec dll'leri native 32-bit",
+        "İndirilen paket Windows tarafından bloke gelir: Get-ChildItem -Recurse | Unblock-File"
       ],
       "notes": "Lisans ya da opsiyon kodu gerekmiyor. READ_nc_current_block kontrolcude desteklenmiyor (donus kodu -18), bu yuzden islenen NC satiri okunamiyor. downtimeReason kontrolcuden gelmez; operator girisi ya da durus suresinden turetilir.",
       "verifiedAgainst": "Gerçek tezgah (192.168.88.99) + Syntec W32 PC Simulator",

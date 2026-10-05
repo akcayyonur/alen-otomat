@@ -88,49 +88,49 @@ değerler" bölümünde görünür. Böylece eşleme **makineye gitmeden** doğr
 
 ---
 
-## 4. DLL'ler — nereye, hangileri
+## 4. DLL'ler — ajan nereden çalışır
 
-Syntec DLL'leri `11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin` içinden çıkıyor.
-
-**Gereken beş dosya, hepsi `syntec-agent.exe` ile AYNI klasörde:**
-
-```
-Syntec.RemoteCNC.Win32.dll     ← ajanın yansımayla yüklediği ana dosya
-Syntec.OpenCNC.dll
-Syntec.RemoteObj.dll
-OCAPI.dll
-OCUSER.dll
-```
-
-Önerilen yerleşim (repo dışında, çünkü DLL'ler dağıtılamaz):
+**Dosya seçip taşıma. Ajanı Syntec'in `Bin` klasörünün İÇİNE koy ve oradan
+çalıştır.** Gerçek tezgahtan alınan yakalama (`ornek-veri/`) tam olarak böyle
+yapıldı; kanıtlanmış yol budur.
 
 ```
-C:\cnc-ajan\
-    syntec-agent.exe        ← build.bat üretir
+...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin\
+    syntec-agent.exe        ← build.bat buraya kopyalar
     machines.txt            ← tezgah listesi
     Syntec.RemoteCNC.Win32.dll
-    Syntec.OpenCNC.dll
-    Syntec.RemoteObj.dll
-    OCAPI.dll
-    OCUSER.dll
+    OCApi.dll  OCUser.dll  MMICommon32.dll  ...   ← paketle birlikte gelir
 ```
+
+```bat
+cd tools\syntec-agent
+build.bat "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin"
+```
+
+> **Neden dosya listesi vermiyoruz:** `Syntec.RemoteCNC.Win32.dll` yönetilen bir
+> sarmalayıcı; arkasında bir dizi **native** DLL'i çalışma anında yüklüyor
+> (`OCApi.dll`, `OCUser.dll`, `MMICommon32.dll` ve başkaları). Bunlar yansımayla
+> değil, işletim sistemi yükleyicisiyle çözülüyor ve eksik olan ancak o yolu
+> çağıran bir fonksiyonda patlıyor — yani elle seçilen liste ilk denemede çalışıp
+> saatler sonra bozulabilir. Syntec'in manual'indeki beş dosyalık liste
+> (`Syntec.OpenCNC.dll`, `Syntec.RemoteCNC.dll`, `Syntec.RemoteObj.dll`,
+> `OCAPI.dll`, `OCUSER.dll`) bu pakete **uymuyor**: ad ve büyük/küçük harfler
+> farklı, `Syntec.RemoteObj.dll` pakette hiç yok. Klasörü bölme.
 
 ### Tuzaklar — hepsi sahada yaşandı
 
 1. **`/platform:x86` zorunlu.** Syntec DLL'leri native 32-bit. 64-bit derlenirse
    çalışma anında `BadImageFormatException` gelir. `build.bat` bunu ayarlı
    getiriyor.
-2. **İndirilen DLL'ler Windows tarafından bloke gelir** (`0x80131515`).
-   Çözüm: klasörün tamamında
-   `Get-ChildItem -Recurse | Unblock-File`
+2. **İndirilen dosyalar Windows tarafından bloke gelir** (`0x80131515`).
+   Paketin tamamında bir kez:
+   `Get-ChildItem "C:\...\11BLathe_W32_10.116.56Q" -Recurse | Unblock-File`
 3. **PC güvenlik duvarında TCP 5568 ve 5570 GELEN bağlantıya açık olmalı.**
    Manual §2.2: kontrolcü PC'ye **geri bağlantı açıyor**, akış çift yönlü.
    Bu açılmazsa bağlantı hiç kurulmaz.
 4. **PC'de birden fazla ağ kartı varsa**, tezgaha bakan kartın önceliği
    yükseltilmeli (§2.2), yoksa bağlantı kurulamaz.
 5. **PowerShell'de `.\` gerekir:** `.\syntec-agent.exe` (çıplak isim çalışmaz).
-
----
 
 ## 5. Kontrolcü tarafı — her tezgahta bir kez
 

@@ -155,6 +155,7 @@ Bunlar **tek ziyarette** yapılmalı, çünkü IP değişikliği reboot gerektir
 npm run dev     # backend + simülatör birlikte
 npm start       # yalnız backend  → http://localhost:3000
 npm run sim     # yalnız simülatör
+npm test        # backend testleri (node:test, bağımlılık yok)
 ```
 
 Gerçek tezgahla:
@@ -168,6 +169,9 @@ syntec-agent.exe --ingest http://OFIS-PC:3000/api/ingest --interval 1000
 dakikada bir tazeler. Tek gerçek kaynak ayarlar ekranının yazdığı
 `config/machines.json`; ajan kendi kopyasını tutmaz. Tezgah eklendiğinde ya da
 IP değiştiğinde ajan kendiliğinden yakalar, yeniden başlatma gerekmez.
+**Backend hazır değilse ajan çıkmaz, bekler** (hazır olana ya da liste dolana kadar 5
+sn'de bir, sonra dakikada bir dener): açılışta ikisi aynı anda kalkar ve çıkan bir
+ajanı kimse yeniden başlatmaz. Görev ayrıca 30 sn gecikmeyle tetiklenir.
 
 Geçersiz kılmak gerekirse:
 - tek tezgah: `--host 192.168.1.101 --machine-id CNC-01`
@@ -186,7 +190,41 @@ cd kurulum
 ```
 
 Ayrıntı ve sorun giderme: `kurulum/KURULUM.md`.
-**Not:** betik Windows'ta henüz çalıştırılmadı, yalnızca elle gözden geçirildi.
+**Not:** betik gerçek bir yönetici oturumunda henüz çalıştırılmadı (söz dizimi ve
+yönetici-denetimi/`-Durdur` yolları denendi).
+
+#### Setup.exe — ileri-ileri kurulum (`installer/`)
+
+Tek dosyalık sihirbaz kurulum: proje kodu + **gömülü Node** + **Syntec DLL'leri** +
+x86 ajan. Hedef PC'ye ayrıca bir şey kurmak gerekmez. Üretmek:
+
+```powershell
+cd installer
+.\build-installer.ps1 -SyntecBin "C:\...\DiskC\OpenCNC\Bin"   # → installer\output\CNC-Telemetri-Kurulum-<sürüm>.exe
+```
+
+- Setup.exe dosyaları `C:\CNC-Telemetri` altına koyar ve **`kurulum.ps1`'i
+  çağırır**; görev/güvenlik duvarı mantığı tek yerde (yineleme yok). `kurulum.ps1`,
+  proje kökünde `runtime\node.exe` ve `agent\syntec-agent.exe` varsa bunları
+  kullanır (derleme/Node kurulumu gerekmez), yoksa eski davranışa düşer.
+- **Syntec DLL'leri depoya girmez.** `installer/payload/`, `installer/output/`,
+  `*.exe`, `*.dll` `.gitignore`'da; DLL'ler her derlemede `-SyntecBin`'den alınır.
+  Paket yalnızca kendi izleme PC'lerine dağıtılır (DLL'ler Syntec'in).
+- `build-installer.ps1` Setup.exe üretmeden önce **duman testi** yapar: paketlenmiş
+  `node.exe` ile backend açılıyor mu, ajan Syntec DLL'lerini kendi klasöründen
+  yükleyebiliyor mu. Tutmazsa paket üretilmez.
+- **Masaüstü uygulaması** (`installer/launcher/Baslatici.cs` → `CNC Telemetri.exe`):
+  açınca backend + ajan ayakta mı bakar, değilse Görev Zamanlayıcı görevlerini
+  başlatır (gerektiğinde UAC ile; görevler SYSTEM'de), hazır olunca dashboard'u
+  açar. İkisi de çalışıyorsa pencere/UAC olmadan doğrudan dashboard. Simgesi
+  `make-icon.ps1` ile çizilir. Bayraklar: `--sessiz`, `--denetle`, `--port N`.
+- Güncellemede `config/machines.json` **ezilmez** (ayarlar ekranının yazdığı liste),
+  `data/` ve `logs/` kaldırmada silinmez.
+- **Denenmedi:** Setup.exe'nin yükseltilmiş (UAC) kurulumu — görevler, güvenlik
+  duvarı, açılışta başlatma. Ajan SYSTEM hesabıyla gerçek tezgahta çalıştırılmadı.
+  Masaüstü uygulamasının pencere ve UAC yolları da elle denenmedi (mantığı gerçek
+  süreçlerle `--sessiz` kodlarıyla ve derleme duman testinde sınandı).
+  Ayrıntı: `installer/README.md`.
 
 ### Derleme (Windows)
 ```bat
@@ -229,7 +267,7 @@ ayrışamaz.
 | `shared/schema.js` | Normalize telemetri sözleşmesi + ingest doğrulaması. Alan eklemek buradan başlar. |
 | `shared/drivers.js` · `config/drivers.json` | Sürücü kaydı (hangi protokol destekleniyor). |
 | `shared/inventory.js` · `config/machines.json` | Tezgah envanteri; ayarlar ekranı buraya yazar. |
-| `backend/db.js` | SQLite: `samples` (detay, 7 gün) + `spans` (durum aralıkları, 400 gün). Raporlar `spans`'ten gelir, satır sayısından bağımsız hızlı. |
+| `backend/db.js` | SQLite: `samples` (detay, 7 gün) + `spans` (durum aralıkları, 400 gün). Raporlar `spans`'ten gelir, satır sayısından bağımsız hızlı. **Yeniden başlamada** (`resumeTimelines`) PC'nin kapalı kaldığı süre `NO_DATA` yazılır — ani kapanışta açık kalan aralık yeniden başlama anında değil, tezgahın son kaydedilen örneğinde biter; testi `backend/restart.test.js`. |
 | `backend/store.js` | Canlı durum (bellek) + aralık yönetimi + veri boşluğu tespiti. |
 | `backend/server.js` | HTTP API + SSE. |
 | `dashboard/app.js` | Yönlendirme, SSE, filo ve detay görünümleri. |
@@ -240,6 +278,7 @@ ayrışamaz.
 | `tools/syntec-agent/Agent.cs` | Sürekli çalışan servis: tezgah başına iş parçacığı, yeniden bağlanma, tamponlama. |
 | `tools/syntec-probe/` | Tek seferlik saha teşhis aracı. |
 | `kurulum/` | İzleme PC'si kurulum betiği (`kurulum.ps1`) ve belgesi. |
+| `installer/` | Setup.exe üretimi (Inno Setup): `build-installer.ps1`, `cnc-telemetri.iss`. DLL'ler pakete derleme anında girer, depoda yok. |
 | `ornek-veri/` | **Gerçek tezgah yakalaması** — referans gerçek. |
 | `SYNTEC-REMOTEAPI.md` | Protokol notları, saha bulguları. |
 | `MAKINE-BASINDA.md` | Makine başında izlenecek adımlar. |
@@ -264,7 +303,10 @@ ayrışamaz.
 
 ## 10. Sıradaki işler
 
-- [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — hiç denenmedi.
+- [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — yükseltilmiş
+      oturumda hiç denenmedi. Artık en kolay yol: `installer/` ile üretilen
+      Setup.exe'yi hedef PC'de çalıştırmak (görev, güvenlik duvarı, açılışta
+      başlatma ve SYSTEM hesabında ajan ilk kez orada sınanır).
 - [ ] **Gerçek tezgahta ajanı çalıştır** — şimdiye kadar yalnızca sahte DLL ile
       uçtan uca test edildi; gerçek donanımda yalnızca probe çalıştı.
 - [ ] **Boşta/alarm ham değerlerini gerçek tezgahtan yakala** — `/api/health`

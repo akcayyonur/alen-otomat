@@ -1,6 +1,6 @@
 {
   "name": "cnc-telemetri",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "CNC Telemetri Platformu - Edge Agent + backend + canli dashboard (CNC-TLM-001)",
@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "sim": "node simulator/index.js",
-    "dev": "node scripts/dev.js"
+    "dev": "node scripts/dev.js",
+    "test": "node --test \"backend/**/*.test.js\""
   }
 }

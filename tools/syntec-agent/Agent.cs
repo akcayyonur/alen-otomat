@@ -1,0 +1,407 @@
+// Syntec Edge Agent - surekli calisan veri toplayici.
+//
+// Probe'dan farki: probe tek seferlik saha teshis araci (60 sn oku, CSV yaz,
+// cik). Bu ise uretim servisi - acik kalir, tum tezgahlari surekli okur,
+// kopan baglantiyi yeniden kurar ve backend kapaliyken veriyi tamponlar.
+//
+// Mimari siniri: DLL'ler BURADA kalir. Backend'e yalnizca HTTP uzerinden duz
+// JSON gider; backend hangi marka panel oldugunu bilmez (Bolum 02/05).
+//
+//   [Tezgah] --RemoteAPI--> [bu ajan + Syntec dll'leri] --HTTP JSON--> [backend]
+//
+// Her tezgah KENDI IS PARCACIGINDA okunur: bir kontrolcu yanit vermedigi zaman
+// cagri saniyelerce bloke olabilir, sirayla okunsa bir tezgah digerlerini
+// geciktirirdi.
+//
+// Hedef: .NET Framework 4.0 / C# 4.0 (csc.exe v4.0.30319).
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Threading;
+using Syntec.Telemetri;
+
+static class Agent
+{
+    static string IngestUrl;
+    static string DllYolu;
+    static int AralikMs;
+    static int YenidenDenemeMs;
+
+    /// Backend'e gonderilmeyi bekleyen mesajlar.
+    static readonly List<string> Tampon = new List<string>();
+    static readonly object TamponKilit = new object();
+    /// Backend uzun sure kapaliysa bellek sismesin - en eskiler dusurulur.
+    const int TamponSiniri = 20000;
+
+    static volatile bool Calisiyor = true;
+    static long ToplamOkunan, ToplamGonderilen, ToplamDusen;
+
+    class Tezgah
+    {
+        public string Id;
+        public string Host;
+        public SyntecReader Okuyucu;
+        public bool Bagli;
+        public DateTime SonBasari;
+        public string SonHata;
+        public long Okunan;
+    }
+
+    static readonly List<Tezgah> Tezgahlar = new List<Tezgah>();
+
+    static int Main(string[] argv)
+    {
+        Dictionary<string, string> arg = Args(argv);
+
+        if (arg.ContainsKey("help") || arg.ContainsKey("h"))
+        {
+            Yardim();
+            return 0;
+        }
+
+        IngestUrl = Get(arg, "ingest", "http://127.0.0.1:3000/api/ingest");
+        DllYolu = Get(arg, "dll", "Syntec.RemoteCNC.Win32.dll");
+        AralikMs = int.Parse(Get(arg, "interval", "1000"));
+        YenidenDenemeMs = int.Parse(Get(arg, "retry", "10000"));
+        string makineDosyasi = Get(arg, "machines", "machines.txt");
+
+        Console.WriteLine("=== Syntec Edge Agent ===");
+        Console.WriteLine("ingest    : " + IngestUrl);
+        Console.WriteLine("dll       : " + DllYolu);
+        Console.WriteLine("aralik    : " + AralikMs + " ms");
+        Console.WriteLine();
+
+        if (!MakineleriYukle(makineDosyasi, arg))
+        {
+            return 1;
+        }
+
+        // Ctrl+C: tamponu bosalt, sonra cik.
+        Console.CancelKeyPress += delegate(object s, ConsoleCancelEventArgs e)
+        {
+            e.Cancel = true;
+            Console.WriteLine();
+            Console.WriteLine("[ajan] kapaniyor, tampon bosaltiliyor...");
+            Calisiyor = false;
+        };
+
+        foreach (Tezgah t in Tezgahlar)
+        {
+            Tezgah yerel = t;
+            var th = new Thread(delegate() { TezgahDongusu(yerel); });
+            th.IsBackground = true;
+            th.Name = "oku-" + t.Id;
+            th.Start();
+        }
+
+        var gonderici = new Thread(GondericiDongusu);
+        gonderici.IsBackground = true;
+        gonderici.Name = "gonderici";
+        gonderici.Start();
+
+        DurumDongusu();
+
+        // Kapanirken kalan tamponu gondermeyi dene.
+        Gonder();
+        Console.WriteLine("[ajan] okunan " + ToplamOkunan + ", gonderilen " + ToplamGonderilen +
+                          ", dusen " + ToplamDusen);
+        return 0;
+    }
+
+    /// Tezgah listesi: --machines dosyasi ya da tek tezgah icin --host/--machine-id.
+    static bool MakineleriYukle(string dosya, Dictionary<string, string> arg)
+    {
+        string tekHost = Get(arg, "host", null);
+        if (tekHost != null)
+        {
+            Ekle(Get(arg, "machine-id", "CNC-01"), tekHost);
+        }
+        else if (File.Exists(dosya))
+        {
+            foreach (string ham in File.ReadAllLines(dosya))
+            {
+                string satir = ham.Trim();
+                if (satir.Length == 0 || satir.StartsWith("#")) continue;
+                string[] p = satir.Split(new[] { '=', ',', ';' }, 2);
+                if (p.Length != 2)
+                {
+                    Console.WriteLine("[ajan] satir atlandi (CNC-01=192.168.1.101 bekleniyor): " + satir);
+                    continue;
+                }
+                Ekle(p[0].Trim(), p[1].Trim());
+            }
+        }
+        else
+        {
+            Console.WriteLine("[ajan] tezgah listesi yok.");
+            Console.WriteLine("       --host 192.168.1.101 --machine-id CNC-01");
+            Console.WriteLine("       ya da " + dosya + " dosyasi olustur:");
+            Console.WriteLine();
+            Console.WriteLine("           CNC-01=192.168.1.101");
+            Console.WriteLine("           CNC-02=192.168.1.102");
+            Console.WriteLine();
+            return false;
+        }
+
+        if (Tezgahlar.Count == 0)
+        {
+            Console.WriteLine("[ajan] gecerli tezgah bulunamadi.");
+            return false;
+        }
+
+        Console.WriteLine("[ajan] " + Tezgahlar.Count + " tezgah:");
+        foreach (Tezgah t in Tezgahlar) Console.WriteLine("        " + t.Id.PadRight(10) + t.Host);
+        Console.WriteLine();
+        return true;
+    }
+
+    static void Ekle(string id, string host)
+    {
+        var t = new Tezgah();
+        t.Id = id;
+        t.Host = host;
+        t.Okuyucu = new SyntecReader(host, id);
+        Tezgahlar.Add(t);
+    }
+
+    /// Tek tezgahin okuma dongusu - kendi is parcaciginda.
+    static void TezgahDongusu(Tezgah t)
+    {
+        string hata = t.Okuyucu.Baglan(DllYolu);
+        if (hata != null)
+        {
+            // DLL hatasi kalicidir, yeniden denemenin anlami yok.
+            Console.WriteLine("[" + t.Id + "] " + hata);
+            return;
+        }
+
+        bool kimlikYazildi = false;
+
+        while (Calisiyor)
+        {
+            if (!t.Bagli)
+            {
+                if (t.Okuyucu.BaglantiVar())
+                {
+                    t.Bagli = true;
+                    t.SonHata = null;
+                    Console.WriteLine("[" + t.Id + "] baglandi (" + t.Host + ")");
+                    if (!kimlikYazildi)
+                    {
+                        kimlikYazildi = true;
+                        foreach (var kv in t.Okuyucu.Kimlik())
+                            Console.WriteLine("[" + t.Id + "]   " + kv.Key + ": " + kv.Value);
+                    }
+                }
+                else
+                {
+                    string h = t.Okuyucu.YenidenBaglan(DllYolu);
+                    if (h != null && h != t.SonHata)
+                    {
+                        t.SonHata = h;
+                        Console.WriteLine("[" + t.Id + "] baglanamadi: " + h);
+                    }
+                    Bekle(YenidenDenemeMs);
+                    continue;
+                }
+            }
+
+            try
+            {
+                Dictionary<string, object> d = t.Okuyucu.Oku();
+                if (d.Count == 0)
+                {
+                    // Hicbir fonksiyon donmedi - baglanti kopmus say.
+                    t.Bagli = false;
+                    Console.WriteLine("[" + t.Id + "] yanit yok, yeniden baglanilacak");
+                    continue;
+                }
+
+                Kuyrukla(t.Okuyucu.TelemetriJson(d));
+                t.Okunan++;
+                t.SonBasari = DateTime.Now;
+                Interlocked.Increment(ref ToplamOkunan);
+            }
+            catch (Exception ex)
+            {
+                t.Bagli = false;
+                Console.WriteLine("[" + t.Id + "] okuma hatasi: " + SyntecReader.Kok(ex).Message);
+            }
+
+            Bekle(AralikMs);
+        }
+    }
+
+    static void Kuyrukla(string json)
+    {
+        lock (TamponKilit)
+        {
+            Tampon.Add(json);
+            // Backend uzun sure kapali kalirsa en ESKI kayitlar dusurulur:
+            // canli durum, eski gecmisten daha degerli.
+            if (Tampon.Count > TamponSiniri)
+            {
+                int fazla = Tampon.Count - TamponSiniri;
+                Tampon.RemoveRange(0, fazla);
+                Interlocked.Add(ref ToplamDusen, fazla);
+            }
+        }
+    }
+
+    static void GondericiDongusu()
+    {
+        bool online = true;
+        while (Calisiyor)
+        {
+            bool ok = Gonder();
+            if (ok != online)
+            {
+                online = ok;
+                Console.WriteLine(ok ? "[ajan] backend'e baglandi" : "[ajan] backend yanit vermiyor, tamponlaniyor");
+            }
+            Bekle(1000);
+        }
+    }
+
+    /// Tamponu tek istekte gonderir. Basarisizsa mesajlar tamponda kalir.
+    static bool Gonder()
+    {
+        string[] batch;
+        lock (TamponKilit)
+        {
+            if (Tampon.Count == 0) return true;
+            batch = Tampon.ToArray();
+            Tampon.Clear();
+        }
+
+        var sb = new StringBuilder("[");
+        for (int i = 0; i < batch.Length; i++)
+        {
+            if (i > 0) sb.Append(",");
+            sb.Append(batch[i]);
+        }
+        sb.Append("]");
+
+        try
+        {
+            var req = (HttpWebRequest)WebRequest.Create(IngestUrl);
+            req.Method = "POST";
+            req.ContentType = "application/json";
+            req.Timeout = 15000;
+            byte[] govde = Encoding.UTF8.GetBytes(sb.ToString());
+            req.ContentLength = govde.Length;
+            using (Stream s = req.GetRequestStream()) s.Write(govde, 0, govde.Length);
+            using (var yanit = (HttpWebResponse)req.GetResponse())
+            {
+                if ((int)yanit.StatusCode >= 300)
+                    throw new Exception("HTTP " + (int)yanit.StatusCode);
+            }
+            Interlocked.Add(ref ToplamGonderilen, batch.Length);
+            return true;
+        }
+        catch
+        {
+            // Gonderilemedi - mesajlari tamponun BASINA geri koy, sira korunsun.
+            lock (TamponKilit)
+            {
+                Tampon.InsertRange(0, batch);
+                if (Tampon.Count > TamponSiniri)
+                {
+                    int fazla = Tampon.Count - TamponSiniri;
+                    Tampon.RemoveRange(0, fazla);
+                    Interlocked.Add(ref ToplamDusen, fazla);
+                }
+            }
+            return false;
+        }
+    }
+
+    /// Dakikada bir ozet satiri - servis olarak calisirken log dosyasina duser.
+    static void DurumDongusu()
+    {
+        DateTime sonrakiOzet = DateTime.Now.AddMinutes(1);
+        while (Calisiyor)
+        {
+            Bekle(500);
+            if (DateTime.Now < sonrakiOzet) continue;
+            sonrakiOzet = DateTime.Now.AddMinutes(1);
+
+            int bekleyen;
+            lock (TamponKilit) bekleyen = Tampon.Count;
+
+            var sb = new StringBuilder();
+            sb.Append("[ajan] ").Append(DateTime.Now.ToString("HH:mm:ss"));
+            sb.Append("  okunan=").Append(ToplamOkunan);
+            sb.Append(" gonderilen=").Append(ToplamGonderilen);
+            sb.Append(" bekleyen=").Append(bekleyen);
+            if (ToplamDusen > 0) sb.Append(" DUSEN=").Append(ToplamDusen);
+            Console.WriteLine(sb.ToString());
+
+            foreach (Tezgah t in Tezgahlar)
+            {
+                if (!t.Bagli)
+                    Console.WriteLine("        " + t.Id + " KOPUK" +
+                                      (t.SonHata == null ? "" : " (" + t.SonHata + ")"));
+                // Durum eslemesinde taninmayan deger ciktiysa duyur: RUNNING
+                // karsiligini sahadan ogrenmek icin bu uyari onemli.
+                if (t.Okuyucu.BilinmeyenDurum.Count > 0)
+                {
+                    Console.WriteLine("        " + t.Id + " TANINMAYAN DURUM: " +
+                                      string.Join(", ", new List<string>(t.Okuyucu.BilinmeyenDurum).ToArray()));
+                    t.Okuyucu.BilinmeyenDurum.Clear();
+                }
+            }
+        }
+    }
+
+    /// Kapanma istegine duyarli bekleme - Ctrl+C sonrasi 10 sn beklemesin.
+    static void Bekle(int ms)
+    {
+        int adim = 200;
+        while (ms > 0 && Calisiyor)
+        {
+            int bu = ms < adim ? ms : adim;
+            Thread.Sleep(bu);
+            ms -= bu;
+        }
+    }
+
+    static void Yardim()
+    {
+        Console.WriteLine("Syntec Edge Agent - tezgahlari surekli okur, backend'e JSON gonderir.");
+        Console.WriteLine();
+        Console.WriteLine("  --machines <dosya>   tezgah listesi (varsayilan machines.txt)");
+        Console.WriteLine("                       her satir:  CNC-01=192.168.1.101");
+        Console.WriteLine("  --host <ip>          tek tezgah icin (listeyi gecersiz kilar)");
+        Console.WriteLine("  --machine-id <id>    --host ile birlikte (varsayilan CNC-01)");
+        Console.WriteLine("  --ingest <url>       backend adresi");
+        Console.WriteLine("  --interval <ms>      okuma araligi (varsayilan 1000)");
+        Console.WriteLine("  --retry <ms>         yeniden baglanma araligi (varsayilan 10000)");
+        Console.WriteLine("  --dll <dosya>        Syntec.RemoteCNC.Win32.dll");
+        Console.WriteLine();
+        Console.WriteLine("Bu program Syntec dll'lerinin bulundugu klasorden calistirilmali.");
+    }
+
+    static Dictionary<string, string> Args(string[] argv)
+    {
+        var d = new Dictionary<string, string>();
+        for (int i = 0; i < argv.Length; i++)
+        {
+            if (!argv[i].StartsWith("--")) continue;
+            string k = argv[i].Substring(2);
+            string v = (i + 1 < argv.Length && !argv[i + 1].StartsWith("--")) ? argv[++i] : "1";
+            d[k] = v;
+        }
+        return d;
+    }
+
+    static string Get(Dictionary<string, string> d, string k, string varsayilan)
+    {
+        string v;
+        return d.TryGetValue(k, out v) ? v : varsayilan;
+    }
+}

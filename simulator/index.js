@@ -46,7 +46,8 @@ async function flush() {
 
 console.log(`[sim] ${machines.length} sanal tezgah, ${TICK_MS}ms araliklarla uretiliyor`);
 for (const m of machines) {
-  console.log(`[sim]   ${m.profile.id}  ${m.profile.vendor} ${m.profile.controller} (${m.profile.year}) via ${m.profile.source}`);
+  const yil = m.profile.year ? ` (${m.profile.year})` : '';
+  console.log(`[sim]   ${m.profile.id}  ${m.profile.vendor} ${m.profile.controller}${yil} via ${m.profile.driverId}`);
 }
 
 setInterval(() => {

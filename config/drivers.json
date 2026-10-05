@@ -1,0 +1,187 @@
+{
+  "_aciklama": "Sürücü kaydı (CNC-TLM-001 Bölüm 05). Her tezgah bir sürücüye bağlanır; sürücü, o markanın protokolünü konuşan Edge Agent'ı tanımlar. Backend bu dosyayı yalnızca OKUR — hangi alanların geleceğini ve ayarlar ekranındaki seçenekleri buradan öğrenir.",
+  "_statusAciklama": "supported = ajan yazılmış ve gerçek donanımda doğrulanmış. experimental = ajan var, sahada doğrulanmadı. planned = ajan HENÜZ YOK; ayarlar ekranında seçilemez. Bir sürücüyü 'supported' yapmadan önce gerçek tezgahta doğrulanmalı.",
+  "drivers": [
+    {
+      "id": "syntec-remoteapi",
+      "label": "Syntec RemoteAPI",
+      "vendor": "Syntec",
+      "status": "supported",
+      "protocol": "Dipole / OCAPIServer",
+      "transport": "TCP",
+      "ports": [
+        5566,
+        5568,
+        5570,
+        5572
+      ],
+      "defaultPort": 5566,
+      "agent": "tools/syntec-agent",
+      "verifiedOn": "2026-09-18",
+      "verifiedOn_detay": "GERÇEK TEZGAH: 192.168.88.99 üzerinde 16:35-16:37 arası 104 örnek alındı, tezgah KESERKEN. Status=START (104/104) → RUNNING eşlemesi doğrulandı. Parça sayacı 1298→1303 (2 dakikada 5 parça), ömür boyu 11400→11405, PowerOn/Kesme/Çalışma sayaçları saniyede 1 arttı. Program: 140100187. PC SIMULATOR: tezgah boştayken Status=READY → IDLE eşlemesi doğrulandı. READ_nc_current_block her ikisinde de -18 (desteklenmiyor).",
+      "controllers": [
+        "SYNTEC 11B",
+        "SYNTEC 11TB"
+      ],
+      "reads": [
+        "spindleRpm",
+        "feedRate",
+        "spindleOverridePct",
+        "feedOverridePct",
+        "partCount",
+        "partTarget",
+        "partTotal",
+        "cycleTimeSec",
+        "cuttingTimeSec",
+        "powerOnTimeSec",
+        "workTimeSec",
+        "blockNo",
+        "program",
+        "mainProgram",
+        "mode",
+        "alarms"
+      ],
+      "requires": [
+        "Kontrolcüde Kernel Server çalışır durumda ('Start server while boot' = açık)",
+        "Ajanın yanındaki klasörde: Syntec.OpenCNC.dll, Syntec.RemoteCNC.dll, Syntec.RemoteObj.dll, OCAPI.dll, OCUSER.dll",
+        "PC güvenlik duvarında TCP 5568 ve 5570 GELEN bağlantıya açık (kontrolcü PC'ye geri bağlantı açıyor)",
+        "Ajan 32-bit (x86) derlenmiş olmalı — Syntec dll'leri native 32-bit"
+      ],
+      "notes": "Lisans ya da opsiyon kodu gerekmiyor. READ_nc_current_block kontrolcude desteklenmiyor (donus kodu -18), bu yuzden islenen NC satiri okunamiyor. downtimeReason kontrolcuden gelmez; operator girisi ya da durus suresinden turetilir.",
+      "verifiedAgainst": "Gerçek tezgah (192.168.88.99) + Syntec W32 PC Simulator",
+      "observed": {
+        "Status": [
+          "START (çalışırken, gerçek tezgah)",
+          "READY (boşta, simulator)"
+        ],
+        "Mode": [
+          "AUTO"
+        ],
+        "Alarm": [
+          "**** (olay yok)",
+          "ALARM"
+        ],
+        "EMG": [
+          "**** (olay yok)",
+          "EMG"
+        ],
+        "RequiredPart": [
+          "0 — gerçek tezgahta hedef tanımlı değil"
+        ]
+      }
+    },
+    {
+      "id": "focas",
+      "label": "Fanuc FOCAS",
+      "vendor": "Fanuc",
+      "status": "planned",
+      "protocol": "FOCAS2 / Ethernet",
+      "transport": "TCP",
+      "defaultPort": 8193,
+      "agent": null,
+      "controllers": [
+        "0i",
+        "30i",
+        "31i",
+        "32i"
+      ],
+      "requires": [
+        "Fanuc FOCAS2 kütüphanesi (Fwlib32.dll) — Fanuc'tan lisanslı alınır",
+        "Kontrolcüde Ethernet opsiyonu etkin"
+      ],
+      "notes": "Ajan henüz yazılmadı. Yazıldığında backend tarafında hiçbir şey değişmez — aynı ingest sözleşmesini konuşur."
+    },
+    {
+      "id": "opcua",
+      "label": "OPC-UA",
+      "vendor": "Standart (Siemens, Heidenhain, Beckhoff...)",
+      "status": "planned",
+      "protocol": "OPC-UA",
+      "transport": "TCP",
+      "defaultPort": 4840,
+      "agent": null,
+      "requires": [
+        "Kontrolcüde ya da PLC'de OPC-UA sunucusu etkin",
+        "Node adres haritası (markaya göre değişir)"
+      ],
+      "notes": "Ajan henüz yazılmadı. Yeni tezgahların çoğu bunu destekliyor; marka bağımsız olduğu için ikinci sırada yazılması mantıklı."
+    },
+    {
+      "id": "mtconnect",
+      "label": "MTConnect",
+      "vendor": "Standart (Mazak, Okuma, Haas...)",
+      "status": "planned",
+      "protocol": "MTConnect HTTP/XML",
+      "transport": "HTTP",
+      "defaultPort": 5000,
+      "agent": null,
+      "requires": [
+        "Tezgahta ya da yanında MTConnect Agent çalışıyor olmalı"
+      ],
+      "notes": "Ajan henüz yazılmadı. Salt-okunur ve HTTP olduğu için en kolay eklenecek sürücü."
+    },
+    {
+      "id": "modbus",
+      "label": "Modbus TCP",
+      "vendor": "Genel (PLC üzerinden)",
+      "status": "experimental",
+      "protocol": "Modbus TCP",
+      "transport": "TCP",
+      "defaultPort": 502,
+      "agent": "tools/modbus.js",
+      "controllers": [],
+      "reads": [],
+      "requires": [
+        "Syntec'te Pr3234=9 (LAN) ve Pr3235 (slave id) ayarlanmalı — bu parametreler üretici seviyesi erişim istiyor",
+        "Register adres haritası (tools/modbus-dump.js ile çıkarılır)"
+      ],
+      "notes": "Okuyucu yazıldı ve sahte slave ile doğrulandı ama GERÇEK TEZGAHTA DENENMEDİ. Pr3234 üretici erişimi gerektirdiği için beklemeye alındı; RemoteAPI çalıştığı için şu an gerek yok. Eski tezgahlar için yedek yol olarak duruyor."
+    },
+    {
+      "id": "retrofit-io",
+      "label": "Donanım retrofit (akım/röle)",
+      "vendor": "Protokolsüz eski tezgahlar",
+      "status": "planned",
+      "protocol": "Dijital giriş / akım trafosu",
+      "transport": "Modbus TCP ya da MQTT (modül seçimine göre)",
+      "defaultPort": 502,
+      "agent": null,
+      "requires": [
+        "Tezgaha akım trafosu ya da kuru kontak modülü takılmalı"
+      ],
+      "notes": "Ajan henüz yazılmadı. Yalnızca RUNNING/IDLE/OFF ve parça sayımı verir — program, devir, alarm okunamaz. Haberleşmesi hiç olmayan tezgahlar için son çare."
+    },
+    {
+      "id": "simulator",
+      "label": "Simulator (test)",
+      "vendor": "—",
+      "status": "supported",
+      "protocol": "—",
+      "transport": "—",
+      "defaultPort": null,
+      "agent": "simulator/",
+      "reads": [
+        "spindleRpm",
+        "feedRate",
+        "spindleOverridePct",
+        "feedOverridePct",
+        "partCount",
+        "partTarget",
+        "partTotal",
+        "cycleTimeSec",
+        "cuttingTimeSec",
+        "powerOnTimeSec",
+        "workTimeSec",
+        "blockNo",
+        "program",
+        "mainProgram",
+        "mode",
+        "block",
+        "alarms",
+        "downtimeReason"
+      ],
+      "requires": [],
+      "notes": "Gerçek donanım olmadan geliştirme ve demo için. Bu sürücüyle gelen veri dashboard'da SİMÜLE olarak işaretlenir."
+    }
+  ]
+}

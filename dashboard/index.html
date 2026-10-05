@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CNC Filo Telemetrisi</title>
+<!-- Satir ici ikon: ek istek yok, konsolda 404 birakmaz. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%231F5A82' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%231F5A82'/%3E%3Cpath d='M16 16 L24 9' stroke='%230ca30c' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -14,29 +16,51 @@
     <header class="topbar">
       <div class="brand">
         <span class="eyebrow">CNC-TLM-001 · Canlı Telemetri</span>
-        <h1>Filo Genel Bakış</h1>
+        <h1 id="view-title">Filo Genel Bakış</h1>
       </div>
       <div class="topbar-right">
         <div class="conn" id="conn">
-          <span class="conn-dot"></span>
+          <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-text">bağlanıyor…</span>
         </div>
         <button class="icon-btn" id="theme-toggle" type="button">Tema</button>
       </div>
     </header>
 
-    <section class="kpis" id="kpis" aria-label="Filo özeti"></section>
+    <div class="layout">
+      <!-- Tezgah secici: her iki gorunumde de goruntude kalir -->
+      <nav class="sidebar" id="sidebar" aria-label="Tezgah seçimi">
+        <button class="mi mi-fleet" id="fleet-btn" type="button">
+          <span class="mi-dot st-none" aria-hidden="true"><i></i></span>
+          <span class="mi-main">
+            <span class="mi-name">Filo geneli</span>
+            <span class="mi-sub">tüm tezgahlar</span>
+          </span>
+        </button>
+        <p class="sidebar-label">Tezgahlar</p>
+        <ul class="machine-list" id="machine-list"></ul>
+        <button class="mi mi-config" id="config-btn" type="button">
+          <span class="mi-dot st-none" aria-hidden="true"></span>
+          <span class="mi-main">
+            <span class="mi-name">Ayarlar</span>
+            <span class="mi-sub">tezgah ve sürücü</span>
+          </span>
+        </button>
+      </nav>
 
-    <div class="main">
-      <section class="fleet" id="fleet" aria-label="Tezgahlar"></section>
-      <aside class="detail" id="detail" aria-live="polite">
-        <p class="detail-empty">Ayrıntı için bir tezgah kartı seçin.</p>
-      </aside>
+      <main class="content">
+        <section id="fleet-view">
+          <div class="kpis" id="kpis" aria-label="Filo özeti"></div>
+          <div class="fleet-grid" id="fleet-grid"></div>
+        </section>
+
+        <section class="detail" id="detail" aria-live="polite" hidden></section>
+        <section class="detail" id="config-view" hidden></section>
+      </main>
     </div>
 
     <footer class="footnote">
       <span id="foot-stats">—</span>
-      <span>Simüle veri · gerçek tezgah entegrasyonu envanter sonrası (Bölüm 03)</span>
     </footer>
   </div>
   <script type="module" src="/app.js"></script>

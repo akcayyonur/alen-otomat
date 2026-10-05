@@ -1,6 +1,7 @@
 {
-  "_aciklama": "Makine envanteri (CNC-TLM-001 Bölüm 03A). Filo tek tip: tüm tezgahlar aynı Syntec 11B kontrolcü. Ortak ayarlar 'defaults' altında; her tezgah yalnızca kendi kimliğini taşır. Yeni tezgah eklemek için 'machines' dizisine bir satır ekle.",
+  "_aciklama": "Makine envanteri (CNC-TLM-001 Bölüm 03A). Filo tek tip: tüm tezgahlar aynı Syntec 11B kontrolcü. Ortak ayarlar 'defaults' altında; her tezgah yalnızca kendi kimliğini taşır.",
   "defaults": {
+    "driverId": "syntec-remoteapi",
     "vendor": "Syntec",
     "controller": "SYNTEC 11B",
     "controllerPanel": "SYNTEC 11TB",
@@ -18,35 +19,56 @@
     "machineType": "Lathe",
     "platform": "Windows CE",
     "cpuBoard": "AM335x-H",
-    "source": "syntec-remoteapi",
-    "reports": [
-      "spindleRpm",
-      "feedRate",
-      "partCount",
-      "cycleTimeSec",
-      "program",
-      "alarms",
-      "downtimeReason"
-    ],
-    "reportsVerified": false,
-    "_reportsNotu": "Bu liste HENÜZ DOĞRULANMADI - RemoteAPI bağlantısı kurulmadan hangi alanların gerçekten okunabildiği bilinmiyor. Pilot testten sonra okunamayan alanlar buradan çıkarılacak ve reportsVerified true yapılacak.",
-    "_plcNotu": "Parça sayacı ve çevrim süresi CNC çekirdeğinde değil ARIX PLC ladder programında (PLC Ver 1.01). Bu alanları okumak için ARIX PLC adres haritası gerekiyor - builderPhone üzerinden istenecek."
+    "_parcaSayaciNotu": "Parca sayaci CNC cekirdeginde okunabiliyor (Monitor ekraninda 962 / 11064 goruldu, READ_part_count ayni degerleri donduruyor). ARIX PLC adres haritasina gerek kalmadi.",
+    "_durumEslemeNotu": "Ham Status -> normalize status eslemesi: READY/STOP/PAUSE/HOLD/IDLE/RESET -> IDLE, RUN/START/BUSY/CYCLE -> RUNNING, EMG veya Alarm -> ALARM. RUNNING icin donen gercek metin HENUZ DOGRULANMADI - yakalama sirasinda tezgah bostaydi, yalnizca READY goruldu. Taninmayan degerler sessizce eslenmez; ham deger controller.rawStatus olarak tasinir ve /api/health statusMapping altinda listelenir."
   },
   "machines": [
     {
       "id": "CNC-01",
       "name": "ARIX Torna 1",
+      "ip": "192.168.1.101",
+      "identified": true,
       "cncSerial": "M9L4379",
-      "note": "About ekranından okundu. LAN portu mevcut. Gövde etiketi: ARIX T-42CL, seri 20062108, üretim 2020.06. UYARI: etiketin bu kontrolcüye mi yoksa diğerine mi ait olduğu teyit edilmedi.",
-      "year": 2020,
-      "machineSerial": "20062108",
-      "builtDate": "2020-06"
+      "year": 2020
     },
     {
       "id": "CNC-02",
       "name": "ARIX Torna 2",
-      "cncSerial": "M4L0007",
-      "note": "System Permissions ekranından okundu. LAN portu mevcut ve boşta. Software Option listesinde haberleşme/API opsiyonu yok."
+      "ip": "192.168.1.102",
+      "identified": true,
+      "cncSerial": "M4L0007"
+    },
+    {
+      "id": "CNC-03",
+      "name": "ARIX Torna 3",
+      "ip": "192.168.1.103",
+      "identified": false
+    },
+    {
+      "id": "CNC-04",
+      "name": "ARIX Torna 4",
+      "ip": "192.168.1.104",
+      "identified": false
+    },
+    {
+      "id": "CNC-05",
+      "name": "ARIX Torna 5",
+      "ip": "192.168.1.105",
+      "identified": false
+    },
+    {
+      "id": "CNC-06",
+      "name": "ARIX Torna 6",
+      "ip": "192.168.1.106",
+      "identified": false
+    },
+    {
+      "id": "CNC-07",
+      "name": "ARIX Torna 7",
+      "ip": "192.168.1.107",
+      "identified": false
     }
-  ]
+  ],
+  "_ipNotu": "IP'ler kablo cekimi sirasinda atanacak. Kontrolcu ag ayarini YALNIZCA acilista uyguluyor, yani her IP degisikligi bir reboot demek - tek ziyarette yapilmali. Ayni ziyarette 'Start server while boot' ayari da acik konuma alinmali, yoksa reboot sonrasi OCAPIServer kapali gelir.",
+  "_surucuNotu": "Hangi alanlarin okunabildigi config/drivers.json'daki surucu tanimindan gelir, buradan degil. Bir tezgah istisnaysa kendi 'reports' listesini yazarak ezebilir. Tezgaha farkli bir marka panel takilirsa yalnizca 'driverId' degisir."
 }

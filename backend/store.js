@@ -1,100 +1,153 @@
-import { MachineStatus } from '../shared/schema.js';
+import { MachineStatus, TimelineState } from '../shared/schema.js';
 import { loadInventory } from '../shared/inventory.js';
+import { TelemetryDb, GAP_THRESHOLD_MS } from './db.js';
 
-const RIBBON_CHAR = {
-  [MachineStatus.RUNNING]: 'R',
-  [MachineStatus.IDLE]: 'I',
-  [MachineStatus.OFF]: 'O',
-  [MachineStatus.ALARM]: 'A',
-};
+const RIBBON_CHAR = Object.freeze({
+  [TimelineState.RUNNING]: 'R',
+  [TimelineState.IDLE]: 'I',
+  [TimelineState.ALARM]: 'A',
+  [TimelineState.OFF]: 'O',
+  [TimelineState.NO_DATA]: 'N',
+});
 const RIBBON_SLOTS = 120;
+/** Kart uzerindeki seride ve canli grafiklerde gosterilen pencere. */
+export const LIVE_WINDOW_MS = 15 * 60_000;
+/** Kartlardaki calisma orani bu pencere uzerinden hesaplanir (bir vardiya). */
+export const SHIFT_WINDOW_MS = 8 * 3_600_000;
+
+/** Sparkline icin ~15 dakikalik bellek ici pencere (1 Hz varsayimiyla). */
+const HISTORY_CAP = 900;
 
 /**
- * Gecmisi sabit sayida kovaya indirger. Her kovada en cok gorulen durum kazanir
- * (calisma oranini dogru gostermek icin); alarm varsa her zaman o kazanir -
+ * Durum araliklarini sabit sayida kovaya boyar. Ornek saymak yerine araliklari
+ * kullanir: bir kovaya dusen en uzun durum kazanir, ALARM her zaman kazanir -
  * kisa suren bir alarm indirgemede kaybolmamali.
  */
-function buildRibbon(history) {
-  if (history.length === 0) return '';
-  const out = new Array(RIBBON_SLOTS).fill('-');
-  const perSlot = history.length / RIBBON_SLOTS;
+function buildRibbon(spans, fromMs, toMs, slots = RIBBON_SLOTS) {
+  const out = new Array(slots).fill('-');
+  const span = toMs - fromMs;
+  if (span <= 0) return out.join('');
+  const slotMs = span / slots;
 
-  for (let slot = 0; slot < RIBBON_SLOTS; slot += 1) {
-    const start = Math.floor(slot * perSlot);
-    const end = Math.max(start + 1, Math.floor((slot + 1) * perSlot));
+  /** @type {Map<string, number>[]} */
+  const tally = Array.from({ length: slots }, () => new Map());
 
-    const tally = new Map();
-    let hasAlarm = false;
-    for (let i = start; i < end && i < history.length; i += 1) {
-      const s = history[i].status;
-      if (s === MachineStatus.ALARM) hasAlarm = true;
-      tally.set(s, (tally.get(s) ?? 0) + 1);
+  for (const s of spans) {
+    const first = Math.max(0, Math.floor((s.startedAt - fromMs) / slotMs));
+    const last = Math.min(slots - 1, Math.floor((s.endedAt - fromMs) / slotMs));
+    for (let i = first; i <= last; i += 1) {
+      const slotStart = fromMs + i * slotMs;
+      const overlap =
+        Math.min(s.endedAt, slotStart + slotMs) - Math.max(s.startedAt, slotStart);
+      if (overlap <= 0) continue;
+      tally[i].set(s.state, (tally[i].get(s.state) ?? 0) + overlap);
     }
-    if (tally.size === 0) continue;
+  }
 
-    let winner = MachineStatus.ALARM;
-    if (!hasAlarm) {
-      let best = -1;
-      for (const [status, count] of tally) {
-        if (count > best) { best = count; winner = status; }
-      }
+  for (let i = 0; i < slots; i += 1) {
+    if (tally[i].size === 0) continue;
+    if (tally[i].has(TimelineState.ALARM)) {
+      out[i] = RIBBON_CHAR[TimelineState.ALARM];
+      continue;
     }
-    out[slot] = RIBBON_CHAR[winner];
+    let winner = null;
+    let best = -1;
+    for (const [state, ms] of tally[i]) {
+      if (ms > best) { best = ms; winner = state; }
+    }
+    out[i] = RIBBON_CHAR[winner] ?? '-';
   }
   return out.join('');
 }
 
-/** Sparkline icin ~15 dakikalik pencere (1 Hz varsayimiyla). */
-const HISTORY_CAP = 900;
-/** Bu sureden uzun sessiz kalan tezgah "baglanti yok" sayilir. */
-const STALE_AFTER_MS = 10_000;
-
 /**
- * Bellek ici durum deposu. Iskelet asamasinda kalicilik yok - Bolum 10'daki
- * zaman serisi veritabani (TimescaleDB/InfluxDB) bunun yerine gececek.
+ * Durum deposu. Canli veri bellekte (hizli, her SSE karesi icin DB'ye gitmez),
+ * gecmis ve raporlar SQLite'ta (sunucu yeniden baslayinca kaybolmaz).
  */
 export class TelemetryStore {
-  constructor() {
+  /** @param {string} dbFile */
+  constructor(dbFile = 'data/telemetry.db') {
+    this.db = new TelemetryDb(dbFile);
     /** @type {Map<string, any>} */
     this.machines = new Map();
     this.startedAt = Date.now();
     this.messageCount = 0;
     this.rejectedCount = 0;
+    /** @type {Set<string>} Durum eslemesinde taninmayan ham degerler. */
+    this.unknownRawStatus = new Set();
 
-    // Envanterdeki tezgahlar, henuz veri gelmese de dashboard'da gorunur.
     for (const info of loadInventory()) {
       this.machines.set(info.id, this.#blank(info));
     }
+
+    // Onceki calismadan yarim kalan araliklari kapat; sunucu kapaliyken veri de
+    // gelmedigi icin o sure NO_DATA'dir ve ilk ornekte oyle yazilacak.
+    this.db.closeDanglingSpans(this.startedAt);
+  }
+
+  /**
+   * Ayarlar ekranindan yapilandirma degistiginde cagrilir - sunucuyu yeniden
+   * baslatmaya gerek kalmaz. Var olan tezgahlarin gecmisi korunur.
+   *
+   * Envanterden cikarilan bir tezgahin verisi varsa listeden silinmez,
+   * `removed` isaretiyle kalir: kayit altina alinmis gecmis erisilemez hale
+   * gelmemeli.
+   */
+  reloadInventory() {
+    const seen = new Set();
+    for (const info of loadInventory()) {
+      seen.add(info.id);
+      const entry = this.machines.get(info.id);
+      if (entry) entry.info = info;
+      else this.machines.set(info.id, this.#blank(info));
+    }
+    for (const [id, entry] of this.machines) {
+      if (seen.has(id)) continue;
+      if (entry.latest == null) this.machines.delete(id);
+      else entry.info = { ...entry.info, removed: true };
+    }
+    return this.machines.size;
   }
 
   #blank(info) {
     return {
       info,
       latest: null,
+      /** @type {{ts:number,status:string,spindleRpm:number|null,feedRate:number|null,partCount:number|null}[]} */
       history: [],
       lastSeenAt: null,
       statusSince: null,
-      /** Her durumda gecirilen toplam sure (ms). */
-      statusMs: {
-        [MachineStatus.RUNNING]: 0,
-        [MachineStatus.IDLE]: 0,
-        [MachineStatus.ALARM]: 0,
-        [MachineStatus.OFF]: 0,
-      },
+      /** @type {number|null} acik durum araliginin id'si */
+      spanId: null,
+      /** @type {string|null} acik araligin durumu (NO_DATA olabilir) */
+      spanState: null,
+      firstSeenAt: null,
     };
+  }
+
+  /**
+   * Acik araligi kapatip yenisini acar. Ayni durum tekrar gelirse hicbir sey
+   * yapmaz - aralik sayisi durum degisimi sayisina esit kalir.
+   */
+  #setState(entry, state, at, reason = null) {
+    if (entry.spanState === state) return;
+    if (entry.spanId != null) this.db.closeSpan(entry.spanId, at);
+    entry.spanId = this.db.beginSpan(entry.info.id, state, at, reason);
+    entry.spanState = state;
+    entry.statusSince = at;
   }
 
   /** @param {object} msg parseTelemetry'den gecmis normalize mesaj */
   ingest(msg) {
     let entry = this.machines.get(msg.machineId);
     if (!entry) {
-      // Envanterde olmayan bir tezgah veri gonderdi - yine de kabul et.
+      // Envanterde olmayan bir tezgah veri gonderdi - yine de kabul et, ama
+      // dashboard'da "kayitsiz" olarak isaretlensin.
       entry = this.#blank({
         id: msg.machineId,
         name: msg.machineId,
         vendor: 'Bilinmiyor',
         controller: '—',
-        year: null,
         source: msg.source,
         reports: [],
         unregistered: true,
@@ -105,21 +158,35 @@ export class TelemetryStore {
     const now = Date.now();
     const prev = entry.latest;
 
-    if (prev && entry.lastSeenAt) {
-      const delta = Math.min(now - entry.lastSeenAt, STALE_AFTER_MS);
-      entry.statusMs[prev.status] = (entry.statusMs[prev.status] ?? 0) + delta;
+    // Sessizlik esigi asilmissa, suskunlugun basladigi andan itibaren bir
+    // NO_DATA araligi yaz; ardindan yeni durum araligi acilir.
+    if (entry.lastSeenAt != null && now - entry.lastSeenAt > GAP_THRESHOLD_MS) {
+      this.#setState(entry, TimelineState.NO_DATA, entry.lastSeenAt);
     }
-    if (!prev || prev.status !== msg.status) {
-      entry.statusSince = now;
-    }
+    this.#setState(entry, msg.status, now, msg.downtimeReason);
+
+    // Durum degisimi, alarm ve parca artisi kaybedilemez; gerisi seyreltilir.
+    const force =
+      prev == null ||
+      prev.status !== msg.status ||
+      (msg.alarms?.length ?? 0) !== (prev.alarms?.length ?? 0) ||
+      msg.partCount !== prev.partCount;
+    this.db.recordSample(msg, { force });
+
+    // Durum eslemesi henuz dogrulanmamis ham degerleri topla (RUNNING metni
+    // gercek tezgahta hala bilinmiyor - bkz. SYNTEC-REMOTEAPI.md).
+    const raw = msg.controller?.rawStatus;
+    if (raw) this.unknownRawStatus.add(`${msg.status}<-${raw}`);
 
     entry.latest = msg;
     entry.lastSeenAt = now;
+    entry.firstSeenAt ??= now;
     entry.history.push({
-      ts: msg.ts,
+      ts: Date.parse(msg.ts),
       status: msg.status,
       spindleRpm: msg.spindleRpm,
       feedRate: msg.feedRate,
+      partCount: msg.partCount,
     });
     if (entry.history.length > HISTORY_CAP) entry.history.shift();
 
@@ -127,52 +194,82 @@ export class TelemetryStore {
     return entry;
   }
 
-  /** Tezgahin gozlem suresi icindeki calisma orani (tam OEE degil). */
-  #runRatio(entry) {
-    const ms = entry.statusMs;
-    const observed = ms[MachineStatus.RUNNING] + ms[MachineStatus.IDLE] + ms[MachineStatus.ALARM];
-    if (observed < 1000) return null;
-    return ms[MachineStatus.RUNNING] / observed;
+  /**
+   * Sessiz kalan tezgahlari NO_DATA'ya gecirir. Veri geri gelmesini beklemeden
+   * bosluk aninda gorunsun diye periyodik olarak cagrilir.
+   */
+  sweep(now = Date.now()) {
+    for (const entry of this.machines.values()) {
+      if (entry.lastSeenAt == null) continue;
+      if (now - entry.lastSeenAt > GAP_THRESHOLD_MS) {
+        this.#setState(entry, TimelineState.NO_DATA, entry.lastSeenAt);
+      }
+    }
   }
 
   #view(entry, now) {
-    const stale = entry.lastSeenAt === null || now - entry.lastSeenAt > STALE_AFTER_MS;
+    const connected =
+      entry.lastSeenAt != null && now - entry.lastSeenAt <= GAP_THRESHOLD_MS;
+
+    const shiftFrom = now - SHIFT_WINDOW_MS;
+    const summary = this.db.summary(entry.info.id, shiftFrom, now);
+    const liveFrom = now - LIVE_WINDOW_MS;
+
     return {
       ...entry.info,
       machineId: entry.info.id,
-      connected: !stale,
+      connected,
+      /** Zaman serisinde gosterilen durum: baglanti yoksa NO_DATA. */
+      state: connected ? entry.latest.status : TimelineState.NO_DATA,
       lastSeenAt: entry.lastSeenAt,
       statusSince: entry.statusSince,
-      statusDurationSec: entry.statusSince ? Math.round((now - entry.statusSince) / 1000) : null,
-      runRatio: this.#runRatio(entry),
-      ribbon: buildRibbon(entry.history),
+      statusDurationSec: entry.statusSince
+        ? Math.round((now - entry.statusSince) / 1000)
+        : null,
+      shift: summary,
+      runRatio: summary.runRatio,
+      ribbon: buildRibbon(this.db.spans(entry.info.id, liveFrom, now), liveFrom, now),
       telemetry: entry.latest,
     };
   }
 
   snapshot() {
     const now = Date.now();
+    this.sweep(now);
     const machines = [...this.machines.values()].map((e) => this.#view(e, now));
 
-    const counts = { RUNNING: 0, IDLE: 0, ALARM: 0, OFF: 0, OFFLINE: 0 };
-    for (const m of machines) {
-      if (!m.connected) counts.OFFLINE += 1;
-      else counts[m.telemetry.status] += 1;
-    }
+    const counts = { RUNNING: 0, IDLE: 0, ALARM: 0, OFF: 0, NO_DATA: 0 };
+    for (const m of machines) counts[m.state] += 1;
 
     return {
       serverTime: now,
       uptimeSec: Math.round((now - this.startedAt) / 1000),
       messageCount: this.messageCount,
       rejectedCount: this.rejectedCount,
+      liveWindowMs: LIVE_WINDOW_MS,
+      shiftWindowMs: SHIFT_WINDOW_MS,
+      gapThresholdMs: GAP_THRESHOLD_MS,
       counts,
       machines,
     };
   }
 
-  history(machineId) {
+  /** Bellek ici canli pencere - detay grafikleri bunu kullanir. */
+  liveHistory(machineId) {
     const entry = this.machines.get(machineId);
     if (!entry) return null;
     return { machineId, samples: entry.history };
+  }
+
+  has(machineId) {
+    return this.machines.has(machineId);
+  }
+
+  close() {
+    const now = Date.now();
+    for (const entry of this.machines.values()) {
+      if (entry.spanId != null) this.db.closeSpan(entry.spanId, now);
+    }
+    this.db.close();
   }
 }

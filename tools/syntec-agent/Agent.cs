@@ -21,6 +21,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Syntec.Telemetri;
 
@@ -49,9 +50,14 @@ static class Agent
         public DateTime SonBasari;
         public string SonHata;
         public long Okunan;
+        /// Tezgah yapilandirmadan cikarildi - kendi dongusu kapansin.
+        public volatile bool Dur;
     }
 
     static readonly List<Tezgah> Tezgahlar = new List<Tezgah>();
+    static readonly object TezgahKilit = new object();
+    /// Tezgah listesi backend'den geliyorsa adresi; yerel dosyadan geliyorsa null.
+    static string ListeUrl;
 
     static int Main(string[] argv)
     {
@@ -89,14 +95,9 @@ static class Agent
             Calisiyor = false;
         };
 
-        foreach (Tezgah t in Tezgahlar)
-        {
-            Tezgah yerel = t;
-            var th = new Thread(delegate() { TezgahDongusu(yerel); });
-            th.IsBackground = true;
-            th.Name = "oku-" + t.Id;
-            th.Start();
-        }
+        Tezgah[] ilk;
+        lock (TezgahKilit) ilk = Tezgahlar.ToArray();
+        foreach (Tezgah t in ilk) IsParcacigiBaslat(t);
 
         var gonderici = new Thread(GondericiDongusu);
         gonderici.IsBackground = true;
@@ -112,7 +113,14 @@ static class Agent
         return 0;
     }
 
-    /// Tezgah listesi: --machines dosyasi ya da tek tezgah icin --host/--machine-id.
+    /// Tezgah listesi, su siraya gore:
+    ///   1. --host         tek tezgah (teshis icin)
+    ///   2. machines.txt   yerel dosya (backend'e ulasilamayan kurulumlar)
+    ///   3. backend        VARSAYILAN - ayarlar ekraninin yazdigi liste
+    ///
+    /// Varsayilanin backend olmasinin sebebi: tezgah tanimlarinin TEK gercek
+    /// kaynagi config/machines.json olmali. Ajan kendi kopyasini tutarsa
+    /// arayuzden tezgah eklendiginde ajan haberdar olmaz, ikisi ayrisir.
     static bool MakineleriYukle(string dosya, Dictionary<string, string> arg)
     {
         string tekHost = Get(arg, "host", null);
@@ -137,14 +145,25 @@ static class Agent
         }
         else
         {
-            Console.WriteLine("[ajan] tezgah listesi yok.");
-            Console.WriteLine("       --host 192.168.1.101 --machine-id CNC-01");
-            Console.WriteLine("       ya da " + dosya + " dosyasi olustur:");
-            Console.WriteLine();
-            Console.WriteLine("           CNC-01=192.168.1.101");
-            Console.WriteLine("           CNC-02=192.168.1.102");
-            Console.WriteLine();
-            return false;
+            ListeUrl = ListeAdresi(IngestUrl);
+            Console.WriteLine("[ajan] tezgah listesi backend'den aliniyor:");
+            Console.WriteLine("       " + ListeUrl);
+
+            List<string[]> liste = ListeyiCek();
+            if (liste == null)
+            {
+                Console.WriteLine("[ajan] backend'e ulasilamadi. Once backend'i baslat,");
+                Console.WriteLine("       ya da --host ile tek tezgah ver, ya da " + dosya + " olustur.");
+                return false;
+            }
+            foreach (string[] p in liste) Ekle(p[0], p[1]);
+
+            if (Tezgahlar.Count == 0)
+            {
+                Console.WriteLine("[ajan] backend'de IP'si tanimli tezgah yok.");
+                Console.WriteLine("       Dashboard > Ayarlar ekranindan tezgahlara IP gir.");
+                return false;
+            }
         }
 
         if (Tezgahlar.Count == 0)
@@ -159,13 +178,102 @@ static class Agent
         return true;
     }
 
-    static void Ekle(string id, string host)
+    /// http://pc:3000/api/ingest  ->  http://pc:3000/api/agent/machines?driver=...
+    static string ListeAdresi(string ingest)
+    {
+        int i = ingest.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
+        string kok = i > 0 ? ingest.Substring(0, i) : ingest.TrimEnd('/');
+        return kok + "/api/agent/machines?driver=syntec-remoteapi";
+    }
+
+    /// @returns id/ip ciftleri; backend'e ulasilamazsa null (bos liste DEGIL -
+    /// ikisi ayirt edilmezse gecici bir kesintide tum tezgahlar kapatilirdi).
+    static List<string[]> ListeyiCek()
+    {
+        string govde;
+        try
+        {
+            var req = (HttpWebRequest)WebRequest.Create(ListeUrl);
+            req.Timeout = 10000;
+            using (var yanit = (HttpWebResponse)req.GetResponse())
+            using (var okuyucu = new StreamReader(yanit.GetResponseStream(), Encoding.UTF8))
+                govde = okuyucu.ReadToEnd();
+        }
+        catch { return null; }
+
+        var liste = new List<string[]>();
+        foreach (Match blok in Regex.Matches(govde, @"\{[^{}]*\}"))
+        {
+            string id = Alan(blok.Value, "id");
+            string ip = Alan(blok.Value, "ip");
+            if (id != null && ip != null) liste.Add(new[] { id, ip });
+        }
+        return liste;
+    }
+
+    static string Alan(string json, string ad)
+    {
+        Match m = Regex.Match(json, "\"" + ad + "\"\\s*:\\s*\"([^\"]*)\"");
+        return m.Success && m.Groups[1].Value.Length > 0 ? m.Groups[1].Value : null;
+    }
+
+    static Tezgah Ekle(string id, string host)
     {
         var t = new Tezgah();
         t.Id = id;
         t.Host = host;
         t.Okuyucu = new SyntecReader(host, id);
-        Tezgahlar.Add(t);
+        lock (TezgahKilit) Tezgahlar.Add(t);
+        return t;
+    }
+
+    /// Yapilandirma degistiginde ajani yeniden baslatmaya gerek kalmasin diye
+    /// listeyi periyodik karsilastirir: yeni tezgaha is parcacigi acar,
+    /// cikarilani durdurur.
+    static void ListeyiEsitle()
+    {
+        if (ListeUrl == null) return;
+        List<string[]> liste = ListeyiCek();
+        if (liste == null) return; // backend gecici olarak yok - dokunma
+
+        var gelen = new Dictionary<string, string>();
+        foreach (string[] p in liste) gelen[p[0]] = p[1];
+
+        lock (TezgahKilit)
+        {
+            foreach (Tezgah t in Tezgahlar)
+            {
+                if (t.Dur) continue; // zaten kapaniyor, karsilastirmaya girmesin
+                string ip;
+                if (!gelen.TryGetValue(t.Id, out ip))
+                {
+                    t.Dur = true;
+                    Console.WriteLine("[ajan] " + t.Id + " yapilandirmadan cikarildi, okuma durduruluyor");
+                }
+                else if (ip != t.Host)
+                {
+                    // IP degisti: eskiyi durdur, `gelen`de kaldigi icin yenisi acilacak.
+                    t.Dur = true;
+                    Console.WriteLine("[ajan] " + t.Id + " IP degisti: " + t.Host + " -> " + ip);
+                }
+                else gelen.Remove(t.Id); // degismemis
+            }
+        }
+
+        foreach (var kv in gelen)
+        {
+            Console.WriteLine("[ajan] yeni tezgah: " + kv.Key + " (" + kv.Value + ")");
+            IsParcacigiBaslat(Ekle(kv.Key, kv.Value));
+        }
+    }
+
+    static void IsParcacigiBaslat(Tezgah t)
+    {
+        Tezgah yerel = t;
+        var th = new Thread(delegate() { TezgahDongusu(yerel); });
+        th.IsBackground = true;
+        th.Name = "oku-" + t.Id;
+        th.Start();
     }
 
     /// Tek tezgahin okuma dongusu - kendi is parcaciginda.
@@ -181,7 +289,7 @@ static class Agent
 
         bool kimlikYazildi = false;
 
-        while (Calisiyor)
+        while (Calisiyor && !t.Dur)
         {
             if (!t.Bagli)
             {
@@ -234,6 +342,8 @@ static class Agent
 
             Bekle(AralikMs);
         }
+
+        if (t.Dur) Console.WriteLine("[" + t.Id + "] okuma durduruldu");
     }
 
     static void Kuyrukla(string json)
@@ -324,9 +434,20 @@ static class Agent
     static void DurumDongusu()
     {
         DateTime sonrakiOzet = DateTime.Now.AddMinutes(1);
+        DateTime sonrakiEsitleme = DateTime.Now.AddSeconds(60);
         while (Calisiyor)
         {
             Bekle(500);
+
+            // Ayarlar ekranindan tezgah eklenir/cikarilirsa ajan yeniden
+            // baslatilmadan yakalasin.
+            if (DateTime.Now >= sonrakiEsitleme)
+            {
+                sonrakiEsitleme = DateTime.Now.AddSeconds(60);
+                try { ListeyiEsitle(); }
+                catch (Exception ex) { Console.WriteLine("[ajan] liste esitlenemedi: " + ex.Message); }
+            }
+
             if (DateTime.Now < sonrakiOzet) continue;
             sonrakiOzet = DateTime.Now.AddMinutes(1);
 
@@ -341,8 +462,11 @@ static class Agent
             if (ToplamDusen > 0) sb.Append(" DUSEN=").Append(ToplamDusen);
             Console.WriteLine(sb.ToString());
 
-            foreach (Tezgah t in Tezgahlar)
+            Tezgah[] anlik;
+            lock (TezgahKilit) anlik = Tezgahlar.ToArray();
+            foreach (Tezgah t in anlik)
             {
+                if (t.Dur) continue;
                 if (!t.Bagli)
                     Console.WriteLine("        " + t.Id + " KOPUK" +
                                       (t.SonHata == null ? "" : " (" + t.SonHata + ")"));
@@ -374,8 +498,12 @@ static class Agent
     {
         Console.WriteLine("Syntec Edge Agent - tezgahlari surekli okur, backend'e JSON gonderir.");
         Console.WriteLine();
-        Console.WriteLine("  --machines <dosya>   tezgah listesi (varsayilan machines.txt)");
-        Console.WriteLine("                       her satir:  CNC-01=192.168.1.101");
+        Console.WriteLine("  (varsayilan)         tezgah listesini BACKEND'den alir - ayarlar");
+        Console.WriteLine("                       ekraninda IP'si tanimli tezgahlar. Liste dakikada");
+        Console.WriteLine("                       bir tazelenir; ekleme/cikarma icin yeniden baslatma");
+        Console.WriteLine("                       gerekmez.");
+        Console.WriteLine("  --machines <dosya>   backend yerine yerel dosya (varsayilan machines.txt");
+        Console.WriteLine("                       varsa kullanilir); her satir:  CNC-01=192.168.1.101");
         Console.WriteLine("  --host <ip>          tek tezgah icin (listeyi gecersiz kilar)");
         Console.WriteLine("  --machine-id <id>    --host ile birlikte (varsayilan CNC-01)");
         Console.WriteLine("  --ingest <url>       backend adresi");

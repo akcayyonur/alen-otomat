@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseTelemetry } from '../shared/schema.js';
 import { loadDrivers } from '../shared/drivers.js';
-import { loadConfig, validateMachines, saveMachines } from '../shared/inventory.js';
+import { loadInventory, loadConfig, validateMachines, saveMachines } from '../shared/inventory.js';
 import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -306,6 +306,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && pathname === '/api/drivers') {
       return sendJson(res, 200, { drivers: loadDrivers() });
+    }
+    // Edge Agent'in okuyacagi tezgah listesi. Ajan kendi dosyasini tutmaz;
+    // tek gercek kaynak ayarlar ekraninin yazdigi config/machines.json.
+    if (req.method === 'GET' && pathname === '/api/agent/machines') {
+      const driver = url.searchParams.get('driver');
+      const machines = loadInventory()
+        .filter((m) => m.ip && (driver == null || m.driverId === driver))
+        .map((m) => ({
+          id: m.id,
+          ip: m.ip,
+          port: m.port ?? null,
+          driverId: m.driverId,
+        }));
+      return sendJson(res, 200, { machines });
     }
     if (req.method === 'GET' && pathname === '/api/config') {
       const cfg = loadConfig();

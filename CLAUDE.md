@@ -164,13 +164,29 @@ REM Windows'ta, DLL klasöründen
 syntec-agent.exe --ingest http://OFIS-PC:3000/api/ingest --interval 1000
 ```
 
-`machines.txt`:
-```
-CNC-01=192.168.1.101
-CNC-02=192.168.1.102
+**Ajan tezgah listesini backend'den alır** (`GET /api/agent/machines`) ve
+dakikada bir tazeler. Tek gerçek kaynak ayarlar ekranının yazdığı
+`config/machines.json`; ajan kendi kopyasını tutmaz. Tezgah eklendiğinde ya da
+IP değiştiğinde ajan kendiliğinden yakalar, yeniden başlatma gerekmez.
+
+Geçersiz kılmak gerekirse:
+- tek tezgah: `--host 192.168.1.101 --machine-id CNC-01`
+- yerel dosya: ajanın yanında `machines.txt` (`CNC-01=192.168.1.101`)
+
+### İzleme PC'sine kurulum
+
+`kurulum/` klasörü tek seferlik kurulum yapar: ön koşulları denetler, ajanı
+Syntec `Bin` klasörüne x86 derler, güvenlik duvarını açar, backend ve ajanı
+açılışta başlayacak şekilde kaydeder.
+
+```powershell
+# YONETICI PowerShell
+cd kurulum
+.\kurulum.ps1 -SyntecBin "C:\...\DiskC\OpenCNC\Bin"
 ```
 
-Tek tezgah için: `--host 192.168.1.101 --machine-id CNC-01`
+Ayrıntı ve sorun giderme: `kurulum/KURULUM.md`.
+**Not:** betik Windows'ta henüz çalıştırılmadı, yalnızca elle gözden geçirildi.
 
 ### Derleme (Windows)
 ```bat
@@ -223,6 +239,7 @@ ayrışamaz.
 | `tools/syntec-agent/SyntecReader.cs` | **Okuma + durum eşlemesi (tek kaynak).** |
 | `tools/syntec-agent/Agent.cs` | Sürekli çalışan servis: tezgah başına iş parçacığı, yeniden bağlanma, tamponlama. |
 | `tools/syntec-probe/` | Tek seferlik saha teşhis aracı. |
+| `kurulum/` | İzleme PC'si kurulum betiği (`kurulum.ps1`) ve belgesi. |
 | `ornek-veri/` | **Gerçek tezgah yakalaması** — referans gerçek. |
 | `SYNTEC-REMOTEAPI.md` | Protokol notları, saha bulguları. |
 | `MAKINE-BASINDA.md` | Makine başında izlenecek adımlar. |
@@ -238,6 +255,7 @@ ayrışamaz.
 | `GET /api/machines/:id/history?window=30m` | Seyreltilmiş zaman serisi. |
 | `GET /api/machines/:id/export.csv?window=24h` | Türkçe Excel CSV (BOM + `sep=;` + ondalık virgül). |
 | `GET /api/health` | Durum + **`statusMapping`**: hangi ham değer hangi duruma eşlendi. |
+| `GET /api/agent/machines` | **Ajanın okuduğu tezgah listesi** — IP'si tanımlı olanlar. Ajan bunu dakikada bir çeker. |
 | `GET /api/drivers` · `GET /api/config` · `PUT /api/config/machines` | Sürücüler ve yapılandırma. |
 
 `window`: `30m` · `8h` · `24h` · `7d`. Ya da `from`/`to` (epoch ms veya ISO).
@@ -246,13 +264,13 @@ ayrışamaz.
 
 ## 10. Sıradaki işler
 
+- [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — hiç denenmedi.
 - [ ] **Gerçek tezgahta ajanı çalıştır** — şimdiye kadar yalnızca sahte DLL ile
       uçtan uca test edildi; gerçek donanımda yalnızca probe çalıştı.
 - [ ] **Boşta/alarm ham değerlerini gerçek tezgahtan yakala** — `/api/health`
       → `statusMapping` listesine bak, tanınmayan değer çıkıyor mu.
 - [ ] 7 tezgaha statik IP + `Start server while boot` (tek ziyarette, bkz. §5).
 - [ ] CNC-03…07 kimlik bilgileri (seri no, üretim yılı) — panel başında toplanacak.
-- [ ] Ajanı Windows servisi / zamanlanmış görev yap (açılışta başlasın).
 - [ ] **Kimlik doğrulama yok.** Ayarlar ekranı ofis ağındaki herkese açık.
       Ofis ağı dışına açılacaksa önce bu çözülmeli; geçici olarak
       `CONFIG_READONLY=1` yazımı kapatır.

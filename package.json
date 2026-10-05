@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "CNC Telemetri Platformu - simulator + backend + canli dashboard iskeleti (CNC-TLM-001)",
-  "engines": { "node": ">=20" },
+  "description": "CNC Telemetri Platformu - Edge Agent + backend + canli dashboard (CNC-TLM-001)",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node backend/server.js",
     "sim": "node simulator/index.js",

@@ -1,3 +1,6 @@
+// ILK import olmali: store.js -> db.js -> node:sqlite zinciri baslamadan
+// Node surumunu kontrol edip okunur bir hata verir.
+import './preflight.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

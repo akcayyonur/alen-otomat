@@ -80,9 +80,18 @@ export class TelemetryStore {
       this.machines.set(info.id, this.#blank(info));
     }
 
-    // Onceki calismadan yarim kalan araliklari kapat; sunucu kapaliyken veri de
-    // gelmedigi icin o sure NO_DATA'dir ve ilk ornekte oyle yazilacak.
-    this.db.closeDanglingSpans(this.startedAt);
+    // Sunucu (ve ayni PC'deki ajan) kapaliyken veri toplanamadi: o sure
+    // NO_DATA'dir. Ani kapanista (elektrik kesintisi) acik kalan aralik
+    // yeniden baslama aniyla DEGIL, tezgahin son kaydedilen ornegiyle biter;
+    // yoksa kapali kalinan sure son duruma (RUNNING olabilir) yazilirdi.
+    // Bosluk burada acik birakilir, ilk ornek gelince #setState kapatir.
+    const resumed = this.db.resumeTimelines(this.machines.keys(), this.startedAt);
+    for (const [machineId, span] of resumed) {
+      const entry = this.machines.get(machineId);
+      entry.spanId = span.id;
+      entry.spanState = TimelineState.NO_DATA;
+      entry.statusSince = span.startedAt;
+    }
   }
 
   /**

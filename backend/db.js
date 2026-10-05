@@ -183,25 +183,93 @@ export class TelemetryDb {
   }
 
   /**
-   * Sunucu kapanip acildiginda yarim kalmis araliklari kapatir. Acik birakilan
-   * aralik, sunucunun ayakta oldugu anlamina gelir - kapaliyken veri de
-   * gelmedigi icin gerisi NO_DATA'dir.
+   * Sunucu yeniden baslarken zaman cizelgesini toparlar: sunucu (ve onunla ayni
+   * PC'deki ajan) kapaliyken gecen sure NO_DATA olarak isaretlenir.
+   *
+   * Iki kapanis bicimi ayni sonuca varir:
+   *  - DUZGUN kapanis: son aralik kapanista (store.close) kapatilmistir.
+   *  - ANI kapanis (elektrik kesintisi, cokme, guc dugmesi): son aralik ACIK
+   *    kalmistir ve gercek bitisi bilinmez.
+   *
+   * Acik araligi yeniden baslama aniyla kapatmak, PC'nin kapali kaldigi TUM
+   * sureyi son duruma yazar (RUNNING ise calisma orani sisirilir, "veri kaybi
+   * calisma oranini etkilemez" kurali bozulur). Bu yuzden bitis olarak
+   * tezgahin KAYDEDILEN son ornegi alinir; o yoksa araligin basi. Oradan simdiye
+   * kadar olan sure NO_DATA'dir ve ilk ornek gelince store tarafindan kapatilir.
+   *
+   * Izlenmeyen (envanterde olmayan) tezgahlarda yalnizca acik aralik kapatilir,
+   * NO_DATA acilmaz: artik veri gelmeyecek bir tezgah icin sonsuza kadar acik
+   * bir bosluk birakilmaz.
+   *
+   * @param {Iterable<string>} watched izlenen (envanterdeki) tezgah kimlikleri
+   * @param {number} at yeniden baslama ani (epoch ms)
+   * @returns {Map<string, {id: number, startedAt: number}>} tezgah -> HALA ACIK
+   *   olan NO_DATA araligi (en fazla bir tane)
    */
-  closeDanglingSpans(at) {
-    const open = this.db
-      .prepare('SELECT id, machine_id, started_at FROM spans WHERE ended_at IS NULL')
-      .all();
-    for (const row of open) {
-      this.closeSpanStmt.run(Math.max(Number(row.started_at), at), row.id);
+  resumeTimelines(watched, at) {
+    const watchedSet = new Set(watched);
+    const resumed = new Map();
+
+    // Normalde tezgah basina tek acik aralik olur (#setState once kapatir, sonra
+    // acar); sonuncu disinda acik kalan varsa bir sonrakinin basinda bitir.
+    this.db
+      .prepare(
+        `UPDATE spans
+            SET ended_at = (SELECT MIN(s2.started_at) FROM spans s2
+                             WHERE s2.machine_id = spans.machine_id AND s2.id > spans.id)
+          WHERE ended_at IS NULL
+            AND id NOT IN (SELECT MAX(id) FROM spans GROUP BY machine_id)`,
+      )
+      .run();
+
+    const lastSample = this.db.prepare('SELECT MAX(ts) AS ts FROM samples WHERE machine_id = ?');
+    const reopenStmt = this.db.prepare('UPDATE spans SET ended_at = NULL WHERE id = ?');
+
+    for (const last of this.lastSpanPerMachine()) {
+      const watching = watchedSet.has(last.machineId);
+      const startedAt = Number(last.startedAt);
+      const isGap = last.state === TimelineState.NO_DATA;
+
+      if (last.endedAt == null) {
+        // ANI kapanis: aralik acik kalmis.
+        if (watching && isGap) {
+          // Bosluk zaten suruyor; ikinci bir NO_DATA acip ikiye bolme.
+          resumed.set(last.machineId, { id: Number(last.id), startedAt });
+          continue;
+        }
+        const sampleTs = lastSample.get(last.machineId).ts;
+        const lastKnown = sampleTs == null ? startedAt : Number(sampleTs);
+        // Alt sinir: aralik basi. Ust sinir: yeniden baslama ani (saat sapmasi).
+        const endedAt = Math.min(Math.max(startedAt, lastKnown), Math.max(startedAt, at));
+        this.closeSpanStmt.run(endedAt, last.id);
+        if (watching) {
+          resumed.set(last.machineId, {
+            id: this.beginSpan(last.machineId, TimelineState.NO_DATA, endedAt),
+            startedAt: endedAt,
+          });
+        }
+      } else if (watching) {
+        // DUZGUN kapanis: kapanista kapatilmis; ondan sonrasi bosluk.
+        const endedAt = Number(last.endedAt);
+        if (isGap) {
+          reopenStmt.run(last.id);
+          resumed.set(last.machineId, { id: Number(last.id), startedAt });
+        } else {
+          resumed.set(last.machineId, {
+            id: this.beginSpan(last.machineId, TimelineState.NO_DATA, endedAt),
+            startedAt: endedAt,
+          });
+        }
+      }
     }
-    return open.length;
+    return resumed;
   }
 
-  /** @returns {{machineId: string, state: string, startedAt: number}[]} */
+  /** @returns {{id: number, machineId: string, state: string, startedAt: number, endedAt: number|null}[]} */
   lastSpanPerMachine() {
     return this.db
       .prepare(
-        `SELECT machine_id AS machineId, state, started_at AS startedAt, ended_at AS endedAt
+        `SELECT id, machine_id AS machineId, state, started_at AS startedAt, ended_at AS endedAt
            FROM spans
           WHERE id IN (SELECT MAX(id) FROM spans GROUP BY machine_id)`,
       )

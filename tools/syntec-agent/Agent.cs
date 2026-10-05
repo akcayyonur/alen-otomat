@@ -58,6 +58,9 @@ static class Agent
     static readonly object TezgahKilit = new object();
     /// Tezgah listesi backend'den geliyorsa adresi; yerel dosyadan geliyorsa null.
     static string ListeUrl;
+    /// Son liste istegi basarili oldu mu (bos liste de basaridir). Basarisizken
+    /// liste sik denenir; her denemede ayni uyariyi tekrar basmamak icin de kullanilir.
+    static volatile bool ListeSonBasarili;
 
     static int Main(string[] argv)
     {
@@ -81,12 +84,8 @@ static class Agent
         Console.WriteLine("aralik    : " + AralikMs + " ms");
         Console.WriteLine();
 
-        if (!MakineleriYukle(makineDosyasi, arg))
-        {
-            return 1;
-        }
-
-        // Ctrl+C: tamponu bosalt, sonra cik.
+        // Ctrl+C: tamponu bosalt, sonra cik. Tezgah listesini beklerken de
+        // calismali, bu yuzden MakineleriYukle'den ONCE kurulur.
         Console.CancelKeyPress += delegate(object s, ConsoleCancelEventArgs e)
         {
             e.Cancel = true;
@@ -94,6 +93,11 @@ static class Agent
             Console.WriteLine("[ajan] kapaniyor, tampon bosaltiliyor...");
             Calisiyor = false;
         };
+
+        if (!MakineleriYukle(makineDosyasi, arg))
+        {
+            return 1;
+        }
 
         Tezgah[] ilk;
         lock (TezgahKilit) ilk = Tezgahlar.ToArray();
@@ -149,31 +153,42 @@ static class Agent
             Console.WriteLine("[ajan] tezgah listesi backend'den aliniyor:");
             Console.WriteLine("       " + ListeUrl);
 
+            // Bu bir SERVIS: bilgisayar acilisinda backend'den ONCE baslayabilir,
+            // ya da henuz hicbir tezgaha IP girilmemis olabilir. Ikisinde de
+            // CIKMAYIZ - cikarsak bir daha kimse baslatmaz ve veri hic akmaz.
+            // Liste ListeyiEsitle ile (hazir olana kadar sik, sonra dakikada bir)
+            // yeniden denenir ve tezgahlar o zaman baslar.
             List<string[]> liste = ListeyiCek();
+            ListeSonBasarili = liste != null;
             if (liste == null)
             {
-                Console.WriteLine("[ajan] backend'e ulasilamadi. Once backend'i baslat,");
-                Console.WriteLine("       ya da --host ile tek tezgah ver, ya da " + dosya + " olustur.");
-                return false;
+                Console.WriteLine("[ajan] backend henuz hazir degil, bekleniyor. Hazir olunca");
+                Console.WriteLine("       tezgahlar kendiliginden baslayacak.");
             }
-            foreach (string[] p in liste) Ekle(p[0], p[1]);
-
-            if (Tezgahlar.Count == 0)
+            else if (liste.Count == 0)
             {
-                Console.WriteLine("[ajan] backend'de IP'si tanimli tezgah yok.");
-                Console.WriteLine("       Dashboard > Ayarlar ekranindan tezgahlara IP gir.");
-                return false;
+                Console.WriteLine("[ajan] backend'de IP'si tanimli tezgah yok. Dashboard > Ayarlar");
+                Console.WriteLine("       ekranindan IP girince ajan kendiliginden alir.");
+            }
+            else
+            {
+                foreach (string[] p in liste) Ekle(p[0], p[1]);
             }
         }
 
-        if (Tezgahlar.Count == 0)
+        // Backend modunda bos liste hata degil (beklenir). Digerlerinde, hic
+        // tezgah yoksa yapilacak bir sey yok.
+        if (Tezgahlar.Count == 0 && ListeUrl == null)
         {
             Console.WriteLine("[ajan] gecerli tezgah bulunamadi.");
             return false;
         }
 
-        Console.WriteLine("[ajan] " + Tezgahlar.Count + " tezgah:");
-        foreach (Tezgah t in Tezgahlar) Console.WriteLine("        " + t.Id.PadRight(10) + t.Host);
+        if (Tezgahlar.Count > 0)
+        {
+            Console.WriteLine("[ajan] " + Tezgahlar.Count + " tezgah:");
+            foreach (Tezgah t in Tezgahlar) Console.WriteLine("        " + t.Id.PadRight(10) + t.Host);
+        }
         Console.WriteLine();
         return true;
     }
@@ -234,7 +249,16 @@ static class Agent
     {
         if (ListeUrl == null) return;
         List<string[]> liste = ListeyiCek();
-        if (liste == null) return; // backend gecici olarak yok - dokunma
+        if (liste == null)
+        {
+            // Backend gecici olarak yok - mevcut tezgahlara dokunma. Ayni uyariyi
+            // her denemede basma, yalnizca durum degisince.
+            if (ListeSonBasarili) Console.WriteLine("[ajan] backend'e ulasilamiyor, bekleniyor");
+            ListeSonBasarili = false;
+            return;
+        }
+        if (!ListeSonBasarili) Console.WriteLine("[ajan] backend'e ulasildi");
+        ListeSonBasarili = true;
 
         var gelen = new Dictionary<string, string>();
         foreach (string[] p in liste) gelen[p[0]] = p[1];
@@ -430,11 +454,21 @@ static class Agent
         }
     }
 
+    /// Tezgah listesini ne siklikla tazeleyecegiz: liste hazir ve en az bir tezgah
+    /// varken dakikada bir; backend yokken ya da liste BOSKEN sik (5 sn). Boylece
+    /// acilista backend gec kalsa da ilk veri bir dakika gecikmez.
+    static int EsitlemeAraligiSn()
+    {
+        int sayi;
+        lock (TezgahKilit) sayi = Tezgahlar.Count;
+        return (ListeUrl != null && (!ListeSonBasarili || sayi == 0)) ? 5 : 60;
+    }
+
     /// Dakikada bir ozet satiri - servis olarak calisirken log dosyasina duser.
     static void DurumDongusu()
     {
         DateTime sonrakiOzet = DateTime.Now.AddMinutes(1);
-        DateTime sonrakiEsitleme = DateTime.Now.AddSeconds(60);
+        DateTime sonrakiEsitleme = DateTime.Now.AddSeconds(EsitlemeAraligiSn());
         while (Calisiyor)
         {
             Bekle(500);
@@ -443,7 +477,7 @@ static class Agent
             // baslatilmadan yakalasin.
             if (DateTime.Now >= sonrakiEsitleme)
             {
-                sonrakiEsitleme = DateTime.Now.AddSeconds(60);
+                sonrakiEsitleme = DateTime.Now.AddSeconds(EsitlemeAraligiSn());
                 try { ListeyiEsitle(); }
                 catch (Exception ex) { Console.WriteLine("[ajan] liste esitlenemedi: " + ex.Message); }
             }
@@ -501,7 +535,8 @@ static class Agent
         Console.WriteLine("  (varsayilan)         tezgah listesini BACKEND'den alir - ayarlar");
         Console.WriteLine("                       ekraninda IP'si tanimli tezgahlar. Liste dakikada");
         Console.WriteLine("                       bir tazelenir; ekleme/cikarma icin yeniden baslatma");
-        Console.WriteLine("                       gerekmez.");
+        Console.WriteLine("                       gerekmez. Backend henuz hazir degilse CIKMAZ,");
+        Console.WriteLine("                       hazir olana kadar bekler (acilista servis olarak).");
         Console.WriteLine("  --machines <dosya>   backend yerine yerel dosya (varsayilan machines.txt");
         Console.WriteLine("                       varsa kullanilir); her satir:  CNC-01=192.168.1.101");
         Console.WriteLine("  --host <ip>          tek tezgah icin (listeyi gecersiz kilar)");

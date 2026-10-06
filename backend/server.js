@@ -1,6 +1,8 @@
 // ILK import olmali: store.js -> db.js -> node:sqlite zinciri baslamadan
 // Node surumunu kontrol edip okunur bir hata verir.
 import './preflight.js';
+// `--log <dosya>` varsa console ciktisini dosyaya da yazar (servis olarak).
+import './logger.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

@@ -1,4 +1,4 @@
-// Test icin sahte Syntec.RemoteCNC. Gercek DLL'in imzalarini birebir taklit eder
+﻿// Test icin sahte Syntec.RemoteCNC. Gercek DLL'in imzalarini birebir taklit eder
 // (yansima ciktisindan alindi) ve calisan bir tezgahi simule eder.
 using System;
 
@@ -8,6 +8,12 @@ namespace Syntec.Remote
     {
         readonly string host;
         int tik;
+        // Saha hatalarini taklit etmek icin (ortam degiskeniyle):
+        //   MOCK_HANG_AFTER=n   READ_status n. cagridan sonra SONSUZA dek takilir
+        //   MOCK_EMPTY_STATUS=1 fonksiyonlar "basarili" doner ama Status bos (yarim baglanti)
+        static readonly int HangAfter = ParseInt(Environment.GetEnvironmentVariable("MOCK_HANG_AFTER"));
+        static readonly bool EmptyStatus = Environment.GetEnvironmentVariable("MOCK_EMPTY_STATUS") == "1";
+        static int ParseInt(string s) { int n; return int.TryParse(s, out n) ? n : 0; }
 
         public SyntecRemoteCNC(string ip) { host = ip; }
         public SyntecRemoteCNC(string ip, int port) { host = ip; }
@@ -40,6 +46,8 @@ namespace Syntec.Remote
             if (tik <= 3) { status = "RUN"; alarm = "****"; emg = "****"; }
             else if (tik == 4) { status = "RUN"; alarm = "ALARM"; emg = "****"; }
             else { status = "WHATEVER"; alarm = "****"; emg = "****"; }
+            if (EmptyStatus) { mainProg = ""; curProg = ""; curSeq = 0; mode = ""; status = ""; alarm = ""; emg = ""; }
+            if (HangAfter > 0 && tik > HangAfter) System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
             return 0;
         }
 
@@ -81,3 +89,4 @@ namespace Syntec.Remote
         }
     }
 }
+

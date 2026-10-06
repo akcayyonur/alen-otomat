@@ -13,9 +13,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Syntec.Telemetri
@@ -46,6 +49,54 @@ namespace Syntec.Telemetri
         {
             Host = host;
             MakineId = makineId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr LoadLibraryEx(string dosya, IntPtr hFile, uint bayraklar);
+        const uint LOAD_WITH_ALTERED_SEARCH_PATH = 0x8;
+
+        /// Syntec'in native DLL'i (OCApi.dll) bu bilgisayarda yuklenebiliyor mu.
+        /// Yuklenemiyorsa NEDENI anlatan bir mesaj doner, yukleniyorsa null.
+        ///
+        /// Neden ayri bir denetim: eksik bir calisma zamani (ornegin Visual C++
+        /// 2005) yuzunden DLL yuklenemediginde Syntec'in kutuphanesi hata FIRLATMAZ,
+        /// yalnizca isConnected() false doner - ajan sebepsiz "KOPUK" der ve saatlerce
+        /// ag/guvenlik duvari aranir (sahada yasandi, hata 0x800736B1).
+        ///
+        /// Syntec tiplerine dokunmadan ONCE cagrilmali: bir .NET tipinin statik
+        /// baslaticisi (OcApiTCP) bir kez cokerse surec yeniden baslayana kadar
+        /// bir daha calismaz; calisma zamani sonradan kurulsa bile.
+        public static string NativeKontrol(string dllYolu)
+        {
+            string dizin = Path.GetDirectoryName(Path.GetFullPath(dllYolu));
+            string ocapi = Path.Combine(dizin, "OCApi.dll");
+            // Bu paket degil (ornegin test sahtesi): denetlenecek native DLL yok.
+            if (!File.Exists(ocapi)) return null;
+
+            // Basarili yuklemeyi serbest BIRAKMIYORUZ: Syntec kutuphanesi ayni DLL'i
+            // zaten yukleyecek, ayni modulu yeniden kullanir.
+            if (LoadLibraryEx(ocapi, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH) != IntPtr.Zero)
+                return null;
+
+            int kod = Marshal.GetLastWin32Error();
+            switch (kod)
+            {
+                case 14001: // ERROR_SXS_CANT_GEN_ACTCTX (0x800736B1): eksik yan yana (SxS) bagimlilik
+                    return "Syntec DLL'i (OCApi.dll) yuklenemedi: bu bilgisayarda Microsoft Visual C++ " +
+                           "2005 SP1 (x86) calisma zamani yok (hata 14001, yan yana yapilandirma). " +
+                           "Kur: vcredist_x86.exe - https://www.microsoft.com/en-us/download/details.aspx?id=26347 " +
+                           "- kurulduktan sonra ajan gorevini yeniden baslat.";
+                case 193: // ERROR_BAD_EXE_FORMAT
+                    return "OCApi.dll 32-bit, ama ajan 32-bit degil calisiyor (hata 193). " +
+                           "Ajan /platform:x86 ile derlenmeli.";
+                case 126: // ERROR_MOD_NOT_FOUND
+                case 127: // ERROR_PROC_NOT_FOUND
+                    return "OCApi.dll'in bagimli oldugu bir dosya bulunamadi (hata " + kod + "). " +
+                           "Syntec Bin klasoru eksiksiz mi?";
+                default:
+                    return "Syntec DLL'i (OCApi.dll) yuklenemedi (hata " + kod + "): " +
+                           new Win32Exception(kod).Message;
+            }
         }
 
         /// DLL'i yukler ve kontrolcu nesnesini olusturur. Hata mesaji doner (null = basarili).
@@ -83,17 +134,38 @@ namespace Syntec.Telemetri
             catch { return false; }
         }
 
-        /// Baglanti koptuysa nesneyi atip yeniden kurar.
-        public string YenidenBaglan(string dllYolu)
+        /// Oturumu DUZGUN kapatir: once Close(), sonra Dispose(). Ikisi de yoksa/hata verirse sessiz.
+        ///
+        /// Bunu yapmadan nesneyi birakmak, torna tarafinda oturumu acik birakir: Syntec
+        /// kutuphanesi (SyntecRemoteCNC IDisposable) kapanisi yalnizca cop toplayicinin
+        /// Finalize'ina birakir. Her yeniden baglanmada bir oturum sizarsa, tornanin API
+        /// sunucusu zamanla tikanabilir. (Eskiden burada "DisConnect"/"Disconnect" aranirdi;
+        /// bu adda bir metot YOK, kapatma hic yapilmiyordu.)
+        ///
+        /// Cagri takili olabilir (sunucu cevap vermiyorsa Close da bekler): cagiran, bunu
+        /// zaman asimli bir is parcaciginda calistirmali (bkz. Agent.KapatArkaPlanda).
+        public void Kapat()
         {
+            object cnc = _cnc;
+            if (cnc == null) return;
             try
             {
-                if (_cnc != null)
-                {
-                    MethodInfo kapat = _type.GetMethod("DisConnect") ?? _type.GetMethod("Disconnect");
-                    if (kapat != null) kapat.Invoke(_cnc, null);
-                }
+                MethodInfo kapat = _type.GetMethod("Close", Type.EmptyTypes);
+                if (kapat != null) kapat.Invoke(cnc, null);
             }
+            catch { }
+            try
+            {
+                IDisposable d = cnc as IDisposable;
+                if (d != null) d.Dispose();
+            }
+            catch { }
+        }
+
+        /// Baglanti koptuysa ESKI OTURUMU KAPATIP yeniden kurar.
+        public string YenidenBaglan(string dllYolu)
+        {
+            try { Kapat(); }
             catch { /* kapatirken hata onemli degil, zaten yeniden kuruyoruz */ }
 
             _cnc = null;
@@ -223,6 +295,19 @@ namespace Syntec.Telemetri
             string e = Convert.ToString(Al(d, "EMG")).Trim().ToUpperInvariant();
 
             if (e == "EMG" || a == "ALARM") return "ALARM";
+
+            // "NOTREADY" icinde "READY" gectigi icin asagidaki IDLE eslemesine
+            // dusmesin: "hazir degil" bostalik demek degil. Gozlendigi tek yer
+            // 192.168.88.99'dur ve orada tezgah uretim yaparken donuyordu (sunucu
+            // cekirdekle yarim eslesmis) - yani guvenilir bir durum bilgisi degil.
+            // Tanimsiz sayilir: loga ve controller.rawStatus'a dusur, IDLE'a
+            // sessizce esleme.
+            if (s.Replace("_", "").Replace(" ", "").StartsWith("NOT"))
+            {
+                BilinmeyenDurum.Add(s);
+                return "IDLE";
+            }
+
             if (s.Contains("RUN") || s.Contains("START") || s.Contains("BUSY") || s.Contains("CYCLE"))
                 return "RUNNING";
             if (s.Contains("READY") || s.Contains("STOP") || s.Contains("PAUSE") ||

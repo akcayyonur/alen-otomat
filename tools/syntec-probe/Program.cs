@@ -31,6 +31,42 @@ static class Probe
 
     static int Main(string[] argv)
     {
+        int kod = 1;
+        try { kod = Calistir(argv); }
+        catch (Exception ex) { Console.WriteLine("[probe] HATA: " + ex); }
+        OturumuKapatVeCik(kod);
+        return kod;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern bool TerminateProcess(IntPtr surec, uint cikisKodu);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+
+    /// Oturumu DUZGUN kapatir (zaman asimli: Close takilabilir), sonra sureci HEMEN sonlandirir.
+    /// Syntec kutuphanesi normal cikista kilitlenebiliyor (saglikli tornada bile 60 sn'lik toplamayi
+    /// bitirdikten sonra 5 dk "calisiyor" kaldi, Ctrl+C ile olmedi); kapatilmayan oturum ise
+    /// tornanin 4 oturumluk yuvalarindan birini isgal eder.
+    static void OturumuKapatVeCik(int kod)
+    {
+        object cnc = Cnc;
+        if (cnc != null && CncType != null)
+        {
+            Thread k = new Thread(delegate()
+            {
+                try { var m = CncType.GetMethod("Close", Type.EmptyTypes); if (m != null) m.Invoke(cnc, null); } catch { }
+                try { IDisposable d = cnc as IDisposable; if (d != null) d.Dispose(); } catch { }
+            });
+            k.IsBackground = true;
+            k.Start();
+            k.Join(3000);
+        }
+        try { Console.Out.Flush(); } catch { }
+        TerminateProcess(GetCurrentProcess(), (uint)kod);
+    }
+
+    static int Calistir(string[] argv)
+    {
         var arg = Args(argv);
         string host = Get(arg, "host", "127.0.0.1");
         int saniye = int.Parse(Get(arg, "seconds", "60"));

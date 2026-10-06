@@ -20,10 +20,87 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Syntec.Telemetri;
+
+// Surum bilgisi: dosyanin ozelliklerinde yayinci/urun/aciklama gorunsun.
+[assembly: AssemblyTitle("CNC Telemetri Edge Agent")]
+[assembly: AssemblyDescription("Syntec kontrolcusunden uretim verisi okuyup CNC Telemetri backend'ine gonderir")]
+[assembly: AssemblyCompany("alen-otomat")]
+[assembly: AssemblyProduct("CNC Telemetri")]
+[assembly: AssemblyVersion("0.1.5.0")]
+[assembly: AssemblyFileVersion("0.1.5.0")]
+
+/// Console.Out'u hem konsola hem dosyaya yazar (--log).
+///
+/// Servis olarak acilista cikti bir dosyaya gitmeli. Bunu `cmd /c "ajan >> log
+/// 2>&1"` sarmalayicisiyla yapmak Gorev Zamanlayici'ya fazladan bir kabuk
+/// katmani ekliyordu ve guvenlik yazilimlari bu zinciri (gorev -> cmd ->
+/// program, URL'li arguman, dosyaya yonlendirme) supheli bulabiliyor. Gunlugu
+/// programin kendisi yazinca gorev dogrudan programi calistirir.
+///
+/// Dosya 5 MB'i asinca .1'e tasinir (eskisi silinir): servis aylarca acik
+/// kalinca disk dolmasin.
+class DosyaYazici : TextWriter
+{
+    const long Sinir = 5 * 1024 * 1024;
+
+    readonly TextWriter _konsol;
+    readonly string _yol;
+    readonly object _kilit = new object();
+    long _boyut;
+
+    public DosyaYazici(TextWriter konsol, string yol)
+    {
+        _konsol = konsol;
+        _yol = Path.GetFullPath(yol);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_yol));
+            if (File.Exists(_yol)) _boyut = new FileInfo(_yol).Length;
+        }
+        catch { /* yazamazsak konsola yazmaya devam ederiz */ }
+    }
+
+    public override Encoding Encoding { get { return Encoding.UTF8; } }
+
+    public override void Write(char value) { Yaz(value.ToString()); }
+    public override void Write(string value) { Yaz(value); }
+    public override void Write(char[] buffer, int index, int count) { Yaz(new string(buffer, index, count)); }
+    public override void WriteLine(string value) { Yaz(value + Environment.NewLine); }
+
+    void Yaz(string metin)
+    {
+        if (string.IsNullOrEmpty(metin)) return;
+        // Servis olarak calisirken konsol olmayabilir: orada hata dosyayi etkilemesin.
+        try { _konsol.Write(metin); } catch { }
+        lock (_kilit)
+        {
+            try
+            {
+                if (_boyut > Sinir) Dondur();
+                File.AppendAllText(_yol, metin, Encoding.UTF8);
+                _boyut += metin.Length;
+            }
+            catch { /* disk dolu / kilitli: veri akisini durdurma */ }
+        }
+    }
+
+    void Dondur()
+    {
+        try
+        {
+            string eski = _yol + ".1";
+            if (File.Exists(eski)) File.Delete(eski);
+            File.Move(_yol, eski);
+        }
+        catch { }
+        _boyut = 0;
+    }
+}
 
 static class Agent
 {
@@ -52,7 +129,80 @@ static class Agent
         public long Okunan;
         /// Tezgah yapilandirmadan cikarildi - kendi dongusu kapansin.
         public volatile bool Dur;
+        /// Kac okuma cevap vermeden takildi. Tek bir basarili okumada SIFIRLANMAZ: "birkac
+        /// okuma sonra takil" dongusu surekli tekrarlanirsa sayac sinira varmali. Tezgah 5 dk
+        /// kesintisiz saglikli okuyunca sifirlanir.
+        public int TakiliSayisi;
+        public DateTime SonTakilma;
+        /// Okuma "basarili" dondu ama icerik gecersiz (ornegin Status bos); null = sorun yok.
+        public volatile string YanitSorunu;
+        /// Art arda kac kez yeniden baglanildi (geri cekilme icin); basarili baglantida sifirlanir.
+        public int YenidenSayisi;
     }
+
+    /// Oturumu arka planda, ZAMAN ASIMIYLA kapatir. Sunucu cevap vermiyorsa Close() de
+    /// bekleyebilir; dongumuz onunla takilmasin. Takilirsa is parcacigi terk edilir.
+    ///
+    /// NEDEN SART: Syntec kutuphanesi oturumu yalnizca Close()/Dispose() ile kapatir; nesneyi
+    /// birakmak tornada oturumu ACIK birakir. Her yeniden baglanmada bir oturum sizarsa
+    /// tornanin API sunucusu zamanla tikanir (probe tek oturum acar, bu yuzden buna takilmaz).
+    static void KapatArkaPlanda(SyntecReader r, int ms)
+    {
+        if (r == null) return;
+        Thread k = new Thread(delegate() { try { r.Kapat(); } catch { } });
+        k.IsBackground = true;
+        k.Name = "kapat";
+        k.Start();
+        if (!k.Join(ms))
+            Console.WriteLine("[ajan] eski oturum " + (ms / 1000) + " sn icinde kapanmadi, birakildi");
+    }
+
+    /// Yeniden baglanma bekleme suresi: her basarisizlikta ikiye katlanir (10 -> 20 -> 40 -> 60 sn).
+    /// Sik denemek hem tornaya yuk bindirir hem de oturum sizdirir.
+    static int GeriCekilmeMs(int deneme)
+    {
+        int tavan = Math.Max(60000, YenidenDenemeMs);
+        int ms = YenidenDenemeMs;
+        for (int i = 1; i < deneme && ms < tavan; i++) ms *= 2;
+        return Math.Min(ms, tavan);
+    }
+
+    /// Kapanirken TUM oturumlari duzgun kapatir; torna tarafinda acik oturum kalmasin.
+    static void KapatHepsi()
+    {
+        Tezgah[] hepsi;
+        lock (TezgahKilit) hepsi = Tezgahlar.ToArray();
+        List<Thread> isler = new List<Thread>();
+        foreach (Tezgah t in hepsi)
+        {
+            if (t.Dur) continue; // kendi dongusu zaten kapatti
+            SyntecReader r = t.Okuyucu;
+            Thread k = new Thread(delegate() { try { r.Kapat(); } catch { } });
+            k.IsBackground = true;
+            k.Start();
+            isler.Add(k);
+        }
+        DateTime son = DateTime.Now.AddSeconds(4);
+        foreach (Thread k in isler)
+        {
+            int kalan = (int)(son - DateTime.Now).TotalMilliseconds;
+            if (kalan <= 0 || !k.Join(kalan)) break;
+        }
+    }
+
+    /// Bir Syntec okumasi bu sureden uzun surerse TAKILDI sayilir. Cagrilar native koda
+    /// iner ve cevap hic gelmezse sonsuza dek bekleyebilir; zaman asimi olmazsa ajan
+    /// "bagli" gorunur ama hicbir sey okumaz ve hata da yazmaz (sahada yasandi: tornanin
+    /// PC'ye geri baglantisi kurulamayinca ilk birkac okumadan sonra cagri takildi).
+    static int OkumaZamanAsimiMs = 15000;
+    /// Takilan cagrinin is parcacigi oldurulemez, terk edilir. Bir tezgahta bu kadar takilma
+    /// olursa yenisini acmayiz: sizinti birikmesin.
+    ///
+    /// SAYI 3 OLMALI (5 degil): torna API sunucusu ayni anda EN FAZLA 4 OTURUM tasir (simulatorde
+    /// olculdu; her oturum 5566/5568/5570/5572'ye birer baglanti = 4 TCP). Takilan oturum
+    /// kapanmazsa yuvasini isgal eder; 3'ten sonra yenisini acmak son yuvayi da yer ve sunucuyu
+    /// BASKA istemcilere (probe, ikinci ajan) de kapatir.
+    const int MaksTakili = 3;
 
     static readonly List<Tezgah> Tezgahlar = new List<Tezgah>();
     static readonly object TezgahKilit = new object();
@@ -72,10 +222,36 @@ static class Agent
             return 0;
         }
 
+        // --log: cikti dosyaya da yazilir (servis olarak calisirken kabuk
+        // yonlendirmesi yerine). Baslik satirlari dahil her sey loglansin diye
+        // ilk yazimdan once kurulur.
+        string logYolu = Get(arg, "log", null);
+        if (logYolu != null) Console.SetOut(new DosyaYazici(Console.Out, logYolu));
+
+        // Beklenmeyen bir cokus sessizce kaybolmasin: gorevde konsol yok, iz kalmaz.
+        AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
+        {
+            Console.WriteLine("[ajan] KRITIK HATA: " + e.ExceptionObject);
+        };
+
         IngestUrl = Get(arg, "ingest", "http://127.0.0.1:3000/api/ingest");
         DllYolu = Get(arg, "dll", "Syntec.RemoteCNC.Win32.dll");
         AralikMs = int.Parse(Get(arg, "interval", "1000"));
         YenidenDenemeMs = int.Parse(Get(arg, "retry", "10000"));
+        OkumaZamanAsimiMs = int.Parse(Get(arg, "read-timeout", "15000"));
+        // Test icin: N saniye sonra kendiliginden duzgun kapan (Ctrl+C ile ayni yol).
+        int sure = int.Parse(Get(arg, "duration", "0"));
+        if (sure > 0)
+        {
+            Thread sayac = new Thread(delegate()
+            {
+                Thread.Sleep(sure * 1000);
+                Console.WriteLine("[ajan] --duration doldu, kapaniyor");
+                Calisiyor = false;
+            });
+            sayac.IsBackground = true;
+            sayac.Start();
+        }
         string makineDosyasi = Get(arg, "machines", "machines.txt");
 
         Console.WriteLine("=== Syntec Edge Agent ===");
@@ -110,11 +286,31 @@ static class Agent
 
         DurumDongusu();
 
+        // Kapanirken once tum Syntec oturumlarini duzgun kapat: Ctrl+C / gorev durdurma
+        // tornada "olu" (acik ama sahipsiz) oturum birakmasin.
+        KapatHepsi();
+
         // Kapanirken kalan tamponu gondermeyi dene.
         Gonder();
         Console.WriteLine("[ajan] okunan " + ToplamOkunan + ", gonderilen " + ToplamGonderilen +
                           ", dusen " + ToplamDusen);
+        SertCikis(0);
         return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern bool TerminateProcess(IntPtr surec, uint cikisKodu);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+
+    /// Sureci HEMEN sonlandirir. Syntec kutuphanesi normal cikista (finalizer / native
+    /// temizlik) saatlerce kilitlenebiliyor: probe, saglikli tornada bile islemini bitirip
+    /// 5 dk "calisiyor" kaldi ve Ctrl+C ile olmedi. Her sey (oturumlar, tampon, log) zaten
+    /// kapatildiktan sonra cagrilir; geriye beklenecek bir sey yok.
+    static void SertCikis(int kod)
+    {
+        try { Console.Out.Flush(); } catch { }
+        TerminateProcess(GetCurrentProcess(), (uint)kod);
     }
 
     /// Tezgah listesi, su siraya gore:
@@ -303,6 +499,24 @@ static class Agent
     /// Tek tezgahin okuma dongusu - kendi is parcaciginda.
     static void TezgahDongusu(Tezgah t)
     {
+        // Syntec'in native DLL'i yuklenebiliyor mu? Yuklenemiyorsa (eksik Visual C++
+        // calisma zamani gibi) Syntec kutuphanesi sessizce "baglanti yok" der ve
+        // ajan nedensiz KOPUK gorunur. Burada nedeni acikca yaziyoruz ve DLL
+        // yuklenebilene kadar bekliyoruz; Syntec tiplerine bu sirada DOKUNMUYORUZ
+        // (statik baslaticilari bir kez cokerse surec yeniden baslayana kadar duzelmez).
+        string onHata;
+        while (Calisiyor && !t.Dur && (onHata = SyntecReader.NativeKontrol(DllYolu)) != null)
+        {
+            if (onHata != t.SonHata)
+            {
+                t.SonHata = onHata;
+                Console.WriteLine("[" + t.Id + "] " + onHata);
+            }
+            Bekle(15000);
+        }
+        if (!Calisiyor || t.Dur) return;
+        t.SonHata = null;
+
         string hata = t.Okuyucu.Baglan(DllYolu);
         if (hata != null)
         {
@@ -320,6 +534,7 @@ static class Agent
                 if (t.Okuyucu.BaglantiVar())
                 {
                     t.Bagli = true;
+                    t.YenidenSayisi = 0;
                     t.SonHata = null;
                     Console.WriteLine("[" + t.Id + "] baglandi (" + t.Host + ")");
                     if (!kimlikYazildi)
@@ -331,43 +546,119 @@ static class Agent
                 }
                 else
                 {
-                    string h = t.Okuyucu.YenidenBaglan(DllYolu);
+                    // Once ESKI oturumu duzgun kapat (yoksa tornada acik kalir), sonra yenisini
+                    // ac. Bekleme her basarisizlikta uzar: surekli ve sik denemek tornaya yuk
+                    // bindirir ve oturum sizdirir.
+                    KapatArkaPlanda(t.Okuyucu, 3000);
+                    t.Okuyucu = new SyntecReader(t.Host, t.Id);
+                    string h = t.Okuyucu.Baglan(DllYolu);
                     if (h != null && h != t.SonHata)
                     {
                         t.SonHata = h;
                         Console.WriteLine("[" + t.Id + "] baglanamadi: " + h);
                     }
-                    Bekle(YenidenDenemeMs);
+                    t.YenidenSayisi++;
+                    Bekle(GeriCekilmeMs(t.YenidenSayisi));
                     continue;
                 }
             }
 
-            try
+            // Okuma ayri bir is parcaciginda, zaman asimiyla: takilirsa biz de takilmayiz.
+            Dictionary<string, object> d = null;
+            Exception okumaHatasi = null;
+            SyntecReader okuyucu = t.Okuyucu;
+            Thread isci = new Thread(delegate()
             {
-                Dictionary<string, object> d = t.Okuyucu.Oku();
-                if (d.Count == 0)
+                try { d = okuyucu.Oku(); }
+                catch (Exception ex) { okumaHatasi = ex; }
+            });
+            isci.IsBackground = true;
+            isci.Name = "cagri-" + t.Id;
+            isci.Start();
+
+            if (!isci.Join(OkumaZamanAsimiMs))
+            {
+                // Takildi. Is parcacigi (native cagri icinde) oldurulemez; terk edip yeni bir
+                // okuyucu nesnesiyle yeniden deneriz. Eski nesneye DOKUNMUYORUZ (Disconnect de
+                // takilabilir).
+                t.Bagli = false;
+                t.TakiliSayisi++;
+                t.SonTakilma = DateTime.Now;
+                string takildi = "okuma " + (OkumaZamanAsimiMs / 1000) + " sn'dir yanit vermiyor (Syntec cagrisi takildi)";
+                t.SonHata = takildi;
+                Console.WriteLine("[" + t.Id + "] " + takildi + " [" + t.TakiliSayisi + "/" + MaksTakili + "]");
+
+                if (t.TakiliSayisi >= MaksTakili)
                 {
-                    // Hicbir fonksiyon donmedi - baglanti kopmus say.
-                    t.Bagli = false;
-                    Console.WriteLine("[" + t.Id + "] yanit yok, yeniden baglanilacak");
-                    continue;
+                    // PARK: bu tezgah icin artik cagri acmiyoruz. Her denemede terk edilen bir
+                    // is parcacigi kaliyor; surekli denersek gunler icinde binlercesi birikir.
+                    // Ozet satiri KOPUK + bu mesaji gostermeye devam eder.
+                    t.SonHata = takildi + "; PARK EDILDI, duzelince ajan gorevini yeniden baslatin";
+                    Console.WriteLine("[" + t.Id + "] " + MaksTakili + " kez ust uste takildi: yeni okuma acilmiyor. " +
+                                      "Torna PC'ye geri baglanamiyor olabilir (birden fazla ag karti / guvenlik duvari " +
+                                      "5568-5570). Duzelince ajan gorevini yeniden baslatin.");
+                    while (Calisiyor && !t.Dur) Bekle(1000);
+                    return;
                 }
 
+                // Takilan oturumu kapatmayi DENE (zaman asimli): terk etmek tornada acik birakir.
+                KapatArkaPlanda(okuyucu, 3000);
+                t.Okuyucu = new SyntecReader(t.Host, t.Id);
+                string yh = t.Okuyucu.Baglan(DllYolu);
+                if (yh != null) { Console.WriteLine("[" + t.Id + "] " + yh); return; }
+                Bekle(GeriCekilmeMs(t.TakiliSayisi));
+                continue;
+            }
+
+            if (okumaHatasi != null)
+            {
+                t.Bagli = false;
+                Console.WriteLine("[" + t.Id + "] okuma hatasi: " + SyntecReader.Kok(okumaHatasi).Message);
+            }
+            else if (d == null || d.Count == 0)
+            {
+                // Hicbir fonksiyon donmedi - baglanti kopmus say.
+                t.Bagli = false;
+                Console.WriteLine("[" + t.Id + "] yanit yok, yeniden baglanilacak");
+                continue;
+            }
+            else if (string.IsNullOrEmpty(Convert.ToString(SyntecReader.Al(d, "Status"))))
+            {
+                // Fonksiyonlar "basarili" dondu ama Status bos: gercek veri gelmiyor (yarim
+                // kurulmus baglanti). Bunu IDLE diye YAYMAYIZ - sahte "Bosta" yanlis rapor demek.
+                const string sorun = "tezgah bos yanit veriyor (Status bos): baglanti yarim kurulmus olabilir " +
+                                     "(torna PC'ye geri baglanamiyor mu? ag karti / guvenlik duvari 5568-5570)";
+                if (t.YanitSorunu != sorun)
+                {
+                    t.YanitSorunu = sorun;
+                    Console.WriteLine("[" + t.Id + "] " + sorun);
+                }
+            }
+            else
+            {
+                if (t.YanitSorunu != null)
+                {
+                    t.YanitSorunu = null;
+                    Console.WriteLine("[" + t.Id + "] gecerli yanit geliyor");
+                }
+                if (t.TakiliSayisi > 0 && (DateTime.Now - t.SonTakilma).TotalMinutes >= 5)
+                    t.TakiliSayisi = 0;
+                t.SonHata = null;
                 Kuyrukla(t.Okuyucu.TelemetriJson(d));
                 t.Okunan++;
                 t.SonBasari = DateTime.Now;
                 Interlocked.Increment(ref ToplamOkunan);
             }
-            catch (Exception ex)
-            {
-                t.Bagli = false;
-                Console.WriteLine("[" + t.Id + "] okuma hatasi: " + SyntecReader.Kok(ex).Message);
-            }
 
             Bekle(AralikMs);
         }
 
-        if (t.Dur) Console.WriteLine("[" + t.Id + "] okuma durduruldu");
+        if (t.Dur)
+        {
+            // Tezgah yapilandirmadan cikarildi: oturumunu duzgun kapat.
+            KapatArkaPlanda(t.Okuyucu, 3000);
+            Console.WriteLine("[" + t.Id + "] okuma durduruldu");
+        }
     }
 
     static void Kuyrukla(string json)
@@ -504,6 +795,9 @@ static class Agent
                 if (!t.Bagli)
                     Console.WriteLine("        " + t.Id + " KOPUK" +
                                       (t.SonHata == null ? "" : " (" + t.SonHata + ")"));
+                // Bagli gorunuyor ama gelen yanit gecersiz: ozet bunu da gostersin.
+                else if (t.YanitSorunu != null)
+                    Console.WriteLine("        " + t.Id + " VERI YOK: " + t.YanitSorunu);
                 // Durum eslemesinde taninmayan deger ciktiysa duyur: RUNNING
                 // karsiligini sahadan ogrenmek icin bu uyari onemli.
                 if (t.Okuyucu.BilinmeyenDurum.Count > 0)
@@ -541,9 +835,12 @@ static class Agent
         Console.WriteLine("                       varsa kullanilir); her satir:  CNC-01=192.168.1.101");
         Console.WriteLine("  --host <ip>          tek tezgah icin (listeyi gecersiz kilar)");
         Console.WriteLine("  --machine-id <id>    --host ile birlikte (varsayilan CNC-01)");
-        Console.WriteLine("  --ingest <url>       backend adresi");
+        Console.WriteLine("  --ingest <url>       backend adresi (varsayilan http://127.0.0.1:3000/api/ingest)");
+        Console.WriteLine("  --log <dosya>        ciktiyi dosyaya da yazar (5 MB'ta doner)");
         Console.WriteLine("  --interval <ms>      okuma araligi (varsayilan 1000)");
         Console.WriteLine("  --retry <ms>         yeniden baglanma araligi (varsayilan 10000)");
+        Console.WriteLine("  --read-timeout <ms>  bir okuma bu sureden uzun surerse takildi sayilir (varsayilan 15000)");
+        Console.WriteLine("  --duration <sn>      test icin: N saniye sonra duzgun kapanir");
         Console.WriteLine("  --dll <dosya>        Syntec.RemoteCNC.Win32.dll");
         Console.WriteLine();
         Console.WriteLine("Bu program Syntec dll'lerinin bulundugu klasorden calistirilmali.");

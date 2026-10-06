@@ -65,7 +65,13 @@
     {
       "id": "CNC-07",
       "name": "ARIX Torna 7",
-      "ip": "192.168.1.107",
+      "ip": "192.168.88.99",
+      "identified": false
+    },
+    {
+      "id": "CNC-08",
+      "name": "ARIX Torna 8",
+      "ip": "192.168.88.98",
       "identified": false
     }
   ],

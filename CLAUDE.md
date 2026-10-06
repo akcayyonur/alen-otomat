@@ -81,6 +81,86 @@ sayılmaz.
 - Gerçek tezgahta **boşta/alarm** durumunda ne döndüğü (yakalama hep RUNNING'di).
 - `OFF` durumunun nasıl görüneceği (muhtemelen bağlantı kopar → `NO_DATA`).
 
+### 🔑 Syntec API sunucusunun oturum kuralları (simülatörde ÖLÇÜLDÜ, 2026-10-06)
+
+- **Bir sunucu AYNI ANDA EN FAZLA 4 OTURUM taşır.** Her oturum 5566/5568/5570/5572'ye
+  **birer TCP bağlantısı** açar (= 4 bağlantı; portlar bu yüzden 4). 4 oturum açıkken 5.
+  oturum (ister aynı süreçten ister başka süreçten) **bağlanamaz**. Torna başına 1 ajan
+  oturumu yeterli → 7 tornayı tek süreçte yönetmek sorun değil (her torna ayrı sunucu).
+- Süreç ani öldürülünce (TCP kapanınca) sunucu oturumu serbest bırakır (8 süreç denendi).
+  **Kablo oturum açıkken çekilirse FIN gitmez** → torna oturumu "açık" sanıyor olabilir
+  (`TimeOut=0`); yuvalar dolarsa yeni oturumlar hizmet almaz. **Oturum açıkken kablo çekme.**
+- `SyntecRemoteCNC` **IDisposable**: oturum yalnızca `Close()`/`Dispose()` ile kapanır.
+  Eski `YenidenBaglan` var olmayan `DisConnect` arıyordu → **eski oturum hiç kapanmıyor,
+  her yeniden bağlanmada bir yuva sızıyordu** (4'te sunucu kapanır). Düzeltildi:
+  `SyntecReader.Kapat()` + `Agent.KapatArkaPlanda` (zaman aşımlı), yeniden bağlanma
+  geri çekilmeli (10→20→40→60 sn), kapanışta `KapatHepsi`.
+- `Close()` bazen **takılıyor** (bir süreçte global kilit tutar, sonraki nesneler de bekler)
+  ve süreç **çıkışta kilitleniyor** (probe sağlıklı tornada bile 5 dk "çalışıyor" kaldı,
+  Ctrl+C ölmedi) → ajan/probe işini bitirince `TerminateProcess` ile çıkar (`SertCikis`).
+- Takılan okumadan sonra yeni oturum açmak yuva yer: `MaksTakili = 3` (4 değil).
+- **Aynı torna için aynı anda birden fazla istemci (ajan + probe + ...) açma**: yuva yer.
+
+### ✅ İkinci gerçek tezgahta doğrulandı — 2026-10-06, 192.168.88.98
+
+Aynı PC, kablo, DLL'ler ve probe ile **60 sn'de 52 örnek, hiç takılma**: ort. 1,16 sn
+aralık, `Status=START`/`Mode=AUTO`→`RUNNING`, 2000 rpm, parça 1402→1405 (toplam 18042→
+18045), `CycleTime` 21→26→1. Yani kod/DLL/PC/kablo/ağ sağlam; aşağıdaki sorun **yalnızca
+ilk tornaya (M9L4379, .99) özgü**.
+
+### ✅ Ajan + backend + dashboard uçtan uca — 2026-10-06, 192.168.88.98 (CNC-08, seri M4L0007)
+
+Fabrika numarası **8** (envanterde `CNC-08`). Paketlenmiş ajan 0.1.5 (`--host 192.168.88.98
+--machine-id CNC-08`, 4 dk): kimlik alanları tam (11B, NcSurum 10.116.54.19, 6 eksen),
+tornaya **tam 4 TCP (1 oturum)**, ~1,2 sn/okuma, 198 okuma = 198 gönderim, 0 düşen,
+`--duration` sonunda çıkış kodu 0 ve bağlantılar düzgün kapandı. Dashboard: `RUNNING`,
+mil/ilerleme/parça/süre alanları doğru, `START`→`RUNNING` eşlemesi `/api/health`'te.
+Ajan durunca zaman şeridi `NO_DATA` (OFF değil) oldu. Backend 40 sn kapatılıp açılınca
+ajan çökmedi, tamponladı ve tamponu geri yükledi.
+
+**Bilinen eksik:** backend olay zamanını mesajın `ts`'inden değil geliş anından alır
+(`store.js ingest`); tampon geri yüklense bile o aralık zaman şeridinde `NO_DATA` kalır
+ve kapsama düşer (örnekler kayıtlı ama durum aralığı geç kalır).
+
+### ⚠️ ÇÖZÜLMEMİŞ — ilk tornada (M9L4379, 192.168.88.99) oturum takılıyor (2026-10-06)
+
+Aynı tornada (192.168.88.99, 10.116.54S) **18 Eylül'de 104 örnek alınmıştı; 6 Ekim'de
+hem probe hem ajan 3–6 çağrıdan sonra takılıyor**:
+- Bağlantı kuruluyor (`isConnected` true), ama kontrolcü çekirdeğinden gelen kimlik
+  alanları **boş** (`CncType`, `NcSurum`, `EksenSayisi`; bazen `SeriesNo` da). İlk
+  çağrılar yarım/varsayılan değer dönüyor, sonra bir çağrı **sonsuza dek bekliyor**
+  (hangi fonksiyon olduğu fark etmiyor; fonksiyonlar tek tek ayrı oturumda 60–200 ms).
+- **Elenenler (kanıtlı):** kod (18 Eylül'de çalışan probe aynı sonucu veriyor), PC
+  (iki ayrı PC'de aynı), **simülatör** (aynı probe PC Simulator'a karşı 40 sn / 39 örnek
+  sorunsuz, kimlik tam), Visual C++ (yüklü), ağ (ping, 1472 B DF, tam dubleks, 4 port
+  açık), **güvenlik duvarı (tamamen kapalıyken de takıldı)**, eski oturumlar (torna
+  yeniden başlatıldı), `SYSTEM` hesabı (yönetici kullanıcıyla da takıldı). Ajanın
+  dinleme soketi yok → "geri kanal 5568/5570" teorisi zayıf.
+- **Ek bulgu:** torna **üretim yaparken** (parça sayacı artıyor: 808 → 863) API
+  `Status=NOTREADY`, `Mode=NULL` döndürüyor, ActSpindle/ActFeed 0, kimlik boş; sayaçlar
+  (parça, güç süresi) gerçek. Yani sunucu çekirdekle **yarım eşleşmiş**. Ayrıca probe
+  `Ctrl+C` ile ölmüyor (native iş parçacıkları ağ beklemesinde kilitli): `Stop-Process -Force`.
+  **Not:** `SyntecReader.DurumEsle` `Contains("READY")` ile baktığı için `NOTREADY`
+  `IDLE`'a sessizce eşleniyordu; düzeltildi (`NOT…` ile başlayan değer tanımsız sayılır:
+  `BilinmeyenDurum`'a yazılır, loga ve `controller.rawStatus`'a düşer, durum yine IDLE).
+  Henüz yeni pakete girmedi.
+- **Elenen hipotezler (ek):** "sunucu açılışta başlıyor" (18 Eylül'de de `Start server
+  while boot` açıktı), "torna boşta" (üretim yapıyor: HMI `Auto`+`Busy`, iki kanalda da
+  program çalışıyor), "torna hazır değil", **"HMI ayar sayfasındayken API veri vermiyor"**
+  (ana ekrana (F1 Coord.) geçince de aynı: örnek yok, `SeriesNo` bile boş).
+- **Gidiş kötüleşiyor** (denemeler arttıkça): 6 → 2 → 1 → 0 örnek, sonra kimlik
+  aşamasında takılma, sonra `SeriesNo` boş. Torna yeniden başlatıldıktan sonraki İLK oturum
+  da 1 örnekle takıldı, yani yalnızca "bizim oturumlarımız sunucuyu bozuyor" değil. Her
+  başarısız deneme tornayı daha fazla yoruyor olabilir: gereksiz yere tekrarlama.
+- **Torna ekranındaki `Dipole Log` boş (beyaz)** — oradan kanıt alınamıyor. Tornanın
+  FTP'si (21, anonim) açık AMA kökü yalnızca `DiskA\OpenCNC\NcFiles` (NC program
+  klasörleri); `DiskC`/`DiskA` geçişi reddediliyor → sunucu günlüğü FTP'den okunamaz.
+- **Kablo elendi:** 3000 ardışık 1400 B ping 2999 cevap, ort. 0,58 ms, kart hata sayaçları 0.
+- **Sıradaki:** tornanın günlüklerini FTP'den okumak; ARIX/Syntec'e rapor (simülatör
+  tamam, torna 10.116.54S bağlanıyor ama yarım veri + takılma).
+- Teşhis araçları: `syntec-probe` (kontrol), ajanın `--log`'u. Ajan artık takılan çağrıyı
+  zaman aşımıyla yakalar ve `Status` boşsa sahte IDLE yaymaz (0.1.5'te paketlenecek).
+
 **Kural:** Tanınmayan ham değer **sessizce eşlenmez**. `SyntecReader.DurumEsle`
 onu `BilinmeyenDurum`'a yazar, ajan loga basar, ham değer her mesajda
 `controller.rawStatus` olarak taşınır ve dashboard'da "Kontrolcüden gelen ham
@@ -131,6 +211,16 @@ build.bat "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin"
 4. **PC'de birden fazla ağ kartı varsa**, tezgaha bakan kartın önceliği
    yükseltilmeli (§2.2), yoksa bağlantı kurulamaz.
 5. **PowerShell'de `.\` gerekir:** `.\syntec-agent.exe` (çıplak isim çalışmaz).
+6. **Hedef PC'de Visual C++ 2005 SP1 (x86) çalışma zamanı kurulu olmalı.**
+   `OCApi.dll`, `OCUser.dll`, `OCKrnl.dll` (manifest: `Microsoft.VC80.CRT/MFC`
+   8.0.50727.762) buna bağlı. Yoksa DLL yüklenmez (**`0x800736B1`**, "yan yana
+   yapılandırma doğru olmadığından başlatılamadı"), Syntec kütüphanesi **hata
+   fırlatmaz**, yalnızca `isConnected()` false döner → ajan sebepsiz `KOPUK` der.
+   Kablo/IP/port doğru olduğu hâlde veri gelmiyorsa ilk bakılacak yerlerden biri.
+   (Geliştirme PC'sinde başka bir yazılım kurduğu için gözden kaçmıştı; fabrika
+   PC'sinde yaşandı, 2026-10-06.) Ajan artık `SyntecReader.NativeKontrol` ile bunu
+   önceden denetleyip nedenini loga yazar; **Setup eksikse kendisi kurar**
+   (`installer/prereq/`). Elle: Microsoft İndirme Merkezi id 26347, `vcredist_x86.exe`.
 
 ## 5. Kontrolcü tarafı — her tezgahta bir kez
 
@@ -218,6 +308,17 @@ cd installer
   başlatır (gerektiğinde UAC ile; görevler SYSTEM'de), hazır olunca dashboard'u
   açar. İkisi de çalışıyorsa pencere/UAC olmadan doğrudan dashboard. Simgesi
   `make-icon.ps1` ile çizilir. Bayraklar: `--sessiz`, `--denetle`, `--port N`.
+- **Defender uyarısı (2026-10-06):** kurulu PC'de `Trojan:Win32/Dexphot.CB`
+  ("Ciddi, Etkin") çıktı; işaretlenen öğe dosya değil, görevin komut satırıydı:
+  `cmd.exe /c "ajan --ingest http://127.0.0.1:3000/api/ingest >> ajan.log 2>&1"`.
+  Dexphot gerçek bir kötü amaçlı yazılım ailesi ve zamanlanmış görev + meşru Windows
+  süreçleriyle kalıcılık kuruyor; Defender davranışa dayalı tespit yapıyor. Hangi
+  özelliğin tetiklediği **kesin bilinmiyor** (yanlış pozitif olduğu kanıtlanmadı).
+  Şekli ortadan kaldırmak için (0.1.3): görevler artık `cmd /c … >> log` olmadan
+  **programı doğrudan** çalıştırır (`--log` bayrağı: ajan ve backend günlüğü kendisi
+  yazar, 5/10 MB'ta döner), komut satırında URL yok, exe'lerde yayıncı/sürüm bilgisi
+  var. **Hâlâ imzasız** — asıl çözüm gerçek bir kod imzalama sertifikası (ücretli).
+  0.1.3 de işaretlenirse sıradaki adım: görevleri Windows Hizmeti'ne taşımak.
 - Güncellemede `config/machines.json` **ezilmez** (ayarlar ekranının yazdığı liste),
   `data/` ve `logs/` kaldırmada silinmez.
 - **Denenmedi:** Setup.exe'nin yükseltilmiş (UAC) kurulumu — görevler, güvenlik

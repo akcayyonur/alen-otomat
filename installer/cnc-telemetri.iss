@@ -69,6 +69,9 @@ Source: "{#Payload}\agent\*"; DestDir: "{app}\agent"; Flags: ignoreversion recur
 Source: "{#Payload}\package.json"; DestDir: "{app}"; Flags: ignoreversion
 ; Masaustu uygulamasi: acinca backend + ajani ayaga kaldirir, dashboard'u acar.
 Source: "{#Payload}\CNC Telemetri.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Onkosul: Visual C++ 2005 SP1 (x86) calisma zamani (Microsoft imzali, degistirilmemis).
+; Syntec'in native DLL'leri buna bagimli. Gecici klasore acilir, eksikse kurulur, silinir.
+Source: "{#Payload}\prereq\vcredist_x86.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 ; Surucu kaydi kod tarafindan yonetilir - her surumde guncellenir.
 Source: "{#Payload}\config\drivers.json"; DestDir: "{app}\config"; Flags: ignoreversion
 ; Tezgah listesi ise KULLANICININ: ayarlar ekrani buraya yazar. Guncelleme ve
@@ -106,6 +109,20 @@ begin
     ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Kod);
 end;
 
+{ Syntec'in native DLL'leri (OCApi.dll, OCUser.dll, OCKrnl.dll) Visual C++ 2005 SP1
+  (x86) calisma zamanina bagimli. Bilgisayarda yoksa DLL yuklenmez (hata 0x800736B1) ve
+  ajan tornaya baglanamaz; sahada fabrika PC'sinde yasandi.
+  Kurulu mu: bu calisma zamaninin MFC bileseni WinSxS\Fusion altinda x86_microsoft.vc80.mfc_*
+  klasoru olarak durur. Windows kendisi MFC 2005 ile gelmez, yani bu klasor varsa paket
+  kuruludur. Yanlis "yok" sonucu zararsiz: paket yeniden kurulur. }
+function VcCalismaZamaniVarMi(): Boolean;
+var
+  Bul: TFindRec;
+begin
+  Result := FindFirst(ExpandConstant('{win}\WinSxS\Fusion\x86_microsoft.vc80.mfc_*'), Bul);
+  if Result then FindClose(Bul);
+end;
+
 { Eski kurulum calisiyorsa node.exe ve ajan dosyalari kilitlidir; uzerine
   yazmadan once durdur. Ilk kurulumda betik yoktur, atlanir. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -125,6 +142,20 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    { Hizmetleri baslatmadan ONCE: ajan acilir acilmaz Syntec DLL'lerini yukler. }
+    if not VcCalismaZamaniVarMi() then
+    begin
+      WizardForm.StatusLabel.Caption := 'Visual C++ 2005 çalışma zamanı kuruluyor...';
+      WizardForm.FileNameLabel.Caption := '';
+      { 0 tamam, 3010 tamam (yeniden baslatma onerir), 1638 daha yeni/ayni surum kurulu. }
+      if (not Exec(ExpandConstant('{tmp}\vcredist_x86.exe'), '/q', '', SW_HIDE, ewWaitUntilTerminated, Kod))
+         or ((Kod <> 0) and (Kod <> 3010) and (Kod <> 1638)) then
+        MsgBox('Visual C++ 2005 SP1 (x86) çalışma zamanı kurulamadı (kod ' + IntToStr(Kod) + ').' + #13#10 + #13#10 +
+          'Syntec DLL''leri bu bileşen olmadan yüklenemez, tezgahlardan veri gelmez.' + #13#10 +
+          'Elle kurun: vcredist_x86.exe (Microsoft İndirme Merkezi, id 26347).',
+          mbError, MB_OK);
+    end;
+
     WizardForm.StatusLabel.Caption := 'Hizmetler kuruluyor ve başlatılıyor...';
     WizardForm.FileNameLabel.Caption := '';
 

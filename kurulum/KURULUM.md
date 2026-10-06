@@ -77,6 +77,13 @@ Görevler Görev Zamanlayıcı'da **CNC Telemetri** adıyla görünür.
 3. Güvenlik duvarı: 5568/5570 gelen bağlantıya açık mı — kontrolcü PC'ye
    **geri bağlantı açıyor**, bu kapalıysa hiç bağlanmaz
 
+**Ajan `KOPUK` diyor, hata yok; ping ve `5566` portu tamam**
+Ajan logunda (`logs\ajan.log`) `Syntec DLL'i (OCApi.dll) yuklenemedi ... hata 14001`
+yazıyorsa: bilgisayarda **Visual C++ 2005 SP1 (x86)** çalışma zamanı yok
+(`0x800736B1`, "yan yana yapılandırma"). Syntec'in native DLL'leri buna bağlı.
+Kurulum (Setup.exe) bunu kendisi kurar; elle kurmak için Microsoft İndirme Merkezi
+id 26347, `vcredist_x86.exe`, sonra ajan görevini yeniden başlatın.
+
 **`BadImageFormatException`**
 Ajan 64-bit derlenmiş. Betik `/platform:x86` kullanıyor; elle derlediysen onu ekle.
 

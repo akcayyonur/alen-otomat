@@ -102,6 +102,27 @@ Tamam "Inno Setup: $iscc"
 $surum = (Get-Content (Join-Path $Kok 'package.json') -Raw | ConvertFrom-Json).version
 Tamam "surum: $surum"
 
+# --- Visual C++ 2005 SP1 (x86) calisma zamani ---
+# Syntec'in native DLL'leri (OCApi.dll vb.) buna bagimli; yoksa DLL yuklenmez
+# (0x800736B1) ve ajan tornaya baglanamaz. Setup eksikse sessizce kurar. Dosya
+# depoda yok (*.exe ignore'da); bkz. installer\prereq\README.md.
+$VcRedist = Join-Path $PSScriptRoot 'prereq\vcredist_x86.exe'
+$VcRedistSha256 = '8648C5FC29C44B9112FE52F9A33F80E7FC42D10F3B5B42B2121542A13E44ADFD'
+if (-not (Test-Path $VcRedist)) {
+    Vazgec ("vcredist_x86.exe yok: $VcRedist`n" +
+            "  Microsoft'tan indirin ve oraya koyun (adres ve dogrulama: installer\prereq\README.md):`n" +
+            "  https://www.microsoft.com/en-us/download/details.aspx?id=26347")
+}
+$vcHash = (Get-FileHash $VcRedist -Algorithm SHA256).Hash
+if ($vcHash -ne $VcRedistSha256) {
+    Vazgec "vcredist_x86.exe beklenen dosya degil (SHA256 $vcHash). Imzasini dogrulayip prereq\README.md'deki degeri guncelleyin."
+}
+$vcImza = Get-AuthenticodeSignature $VcRedist
+if ($vcImza.Status -ne 'Valid' -or $vcImza.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation') {
+    Vazgec "vcredist_x86.exe Microsoft imzali degil (durum: $($vcImza.Status))."
+}
+Tamam 'Visual C++ 2005 SP1 (x86): SHA256 dogru, Microsoft imzasi gecerli'
+
 # ------------------------------------------------------------ paketi topla
 
 Adim 'Paket hazirlaniyor'
@@ -127,6 +148,11 @@ Copy-Item (Join-Path $Kok 'kurulum\KURULUM.md')   (Join-Path $Payload 'kurulum')
 Copy-Item (Join-Path $Kok 'package.json') $Payload
 Tamam 'proje kodu'
 
+# Visual C++ 2005 SP1 (x86): Setup eksikse kurar, sonra siler.
+New-Item -ItemType Directory -Force -Path (Join-Path $Payload 'prereq') | Out-Null
+Copy-Item $VcRedist (Join-Path $Payload 'prereq')
+Tamam 'Visual C++ 2005 SP1 (x86) onkosulu'
+
 # Gomulu Node.
 $rt = Join-Path $Payload 'runtime'
 New-Item -ItemType Directory -Force -Path $rt | Out-Null
@@ -143,7 +169,10 @@ Tamam "gomulu Node v$nodeSurum"
 # bozulur (bkz. CLAUDE.md). Bizim urettigimiz yakalama dosyalari haric.
 $ajanDizin = Join-Path $Payload 'agent'
 New-Item -ItemType Directory -Force -Path $ajanDizin | Out-Null
-$haric = { param($f) $f.Name -like 'syntec-*.exe' -or $f.Extension -in '.jsonl', '.csv' -or $f.Name -eq 'machines.txt' }
+# Bizim yakalama dosyalarimiz VE Syntec sunucusunun (OCAPIServer, PC simulatoru ile
+# calistirilinca) Bin'e yazdigi calisma artiklari (DipoleSettings.xml, ServLOG*.txt):
+# bunlar paketin parcasi degil, hedef PC'ye gitmemeli.
+$haric = { param($f) $f.Name -like 'syntec-*.exe' -or $f.Extension -in '.jsonl', '.csv' -or $f.Name -eq 'machines.txt' -or $f.Name -eq 'DipoleSettings.xml' -or $f.Name -like 'ServLOG*.txt' }
 
 Get-ChildItem $SyntecBin -File | Where-Object { -not (& $haric $_) } |
     Copy-Item -Destination $ajanDizin
@@ -228,14 +257,17 @@ if (-not $TestAtla) {
     # Ajan: DLL'leri yanindaki klasorden gercekten yukleyebiliyor mu. Ulasilamaz
     # bir adrese baglanmaya calistirip ilk saniyelerin ciktisina bakiyoruz;
     # yukleme hatasi (BadImageFormat, eksik native DLL) hemen yazilir.
+    # Ciktiyi --log ile alip kontrol ediyoruz: gorevlerin kullanacagi yol bu
+    # (kabuk yonlendirmesi yok), yani gunluk ozelligi de ayni anda sinanir.
     $log = Join-Path $env:TEMP 'cnc-duman-ajan.txt'
-    Remove-Item $log -Force -ErrorAction SilentlyContinue
-    $ajan = Start-Process $ajanExe -ArgumentList '--host', '127.0.0.1', '--machine-id', 'DUMAN' `
-        -WorkingDirectory $ajanDizin -PassThru -WindowStyle Hidden -RedirectStandardOutput $log
+    Remove-Item "$log*" -Force -ErrorAction SilentlyContinue
+    $ajan = Start-Process $ajanExe -ArgumentList '--host', '127.0.0.1', '--machine-id', 'DUMAN', '--log', "`"$log`"" `
+        -WorkingDirectory $ajanDizin -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 6
     if (-not $ajan.HasExited) { Stop-Process -Id $ajan.Id -Force }
     $metin = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
-    Remove-Item $log -Force -ErrorAction SilentlyContinue
+    Remove-Item "$log*" -Force -ErrorAction SilentlyContinue
+    if (-not $metin) { Vazgec 'ajan --log ile gunluk dosyasi yazmadi' }
 
     if ($metin -match 'DLL yuklenemedi|nesne olusturulamadi|tipi bulunamadi|BadImageFormat') {
         Hata 'Syntec DLL yuklenemedi:'

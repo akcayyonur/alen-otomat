@@ -31,8 +31,17 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
+
+// Surum bilgisi: dosyanin ozelliklerinde yayinci/urun/aciklama gorunsun.
+[assembly: AssemblyTitle("CNC Telemetri")]
+[assembly: AssemblyDescription("CNC Telemetri hizmetlerini baslatir ve dashboard'u acar")]
+[assembly: AssemblyCompany("alen-otomat")]
+[assembly: AssemblyProduct("CNC Telemetri")]
+[assembly: AssemblyVersion("0.1.5.0")]
+[assembly: AssemblyFileVersion("0.1.5.0")]
 
 static class Baslatici
 {

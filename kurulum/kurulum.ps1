@@ -258,21 +258,18 @@ if ($AgaAc) {
 
 Baslik 'Acilista baslatma'
 
-function GorevKur($ad, $program, $argumanlar, $calismaDizini, $log, $gecikmeSn = 0) {
+function GorevKur($ad, $program, $argumanlar, $calismaDizini, $gecikmeSn = 0) {
     if (Get-ScheduledTask -TaskName $ad -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $ad -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $ad -Confirm:$false
     }
 
-    # cmd /c ile sariyoruz: zamanlanmis gorevin konsolu yok, cikti log dosyasina
-    # yonlendirilmeli - yoksa bir sorun ciktiginda hicbir iz kalmaz.
-    #
-    # DIS TIRNAK sart: `cmd /c "..."` biciminde, icerideki yollar da tirnakliyken
-    # cmd ilk ve son tirnagi soyup geri kalani komut olarak alir. Dis tirnak
-    # olmazsa bosluklu yollarda (Program Files gibi) sessizce bozulur.
-    $komut = "`"`"$program`" $argumanlar >> `"$log`" 2>&1`""
-    $eylem = New-ScheduledTaskAction -Execute 'cmd.exe' `
-        -Argument "/c $komut" -WorkingDirectory $calismaDizini
+    # Program DOGRUDAN calistirilir. Eskiden `cmd /c "... >> log 2>&1"` ile
+    # sariyorduk; Defender bu zinciri (gorev -> cmd -> program, URL'li arguman,
+    # dosyaya yonlendirme) Trojan:Win32/Dexphot olarak isaretledi. Gunlugu artik
+    # programlar kendisi yazar (--log), gorev sade kalir.
+    $eylem = New-ScheduledTaskAction -Execute $program -Argument $argumanlar `
+        -WorkingDirectory $calismaDizini
 
     $tetik = New-ScheduledTaskTrigger -AtStartup
     # Acilista iki gorev ayni anda tetiklenir; ajanin backend'den once kalkmamasi
@@ -291,13 +288,16 @@ function GorevKur($ad, $program, $argumanlar, $calismaDizini, $log, $gecikmeSn =
 }
 
 $backendLog = Join-Path $LogDizin 'backend.log'
-GorevKur $BackendGorev $nodeYol 'backend\server.js' $ProjeKok $backendLog
+GorevKur $BackendGorev $nodeYol ('backend\server.js --log "{0}"' -f $backendLog) $ProjeKok
 
 if ($ajanExe) {
     $ajanLog = Join-Path $LogDizin 'ajan.log'
     # Tezgah listesi backend'den gelir; ajanin yaninda liste dosyasi tutulmaz.
-    $ajanArg = "--ingest http://127.0.0.1:$Port/api/ingest"
-    GorevKur $AjanGorev $ajanExe $ajanArg $ajanCalismaDizini $ajanLog 30
+    # --ingest yalnizca varsayilan olmayan portta verilir: komut satirinda URL
+    # yoksa hem sadelesir hem de supheli gorunmez (varsayilan zaten 127.0.0.1:3000).
+    $ajanArg = '--log "{0}"' -f $ajanLog
+    if ($Port -ne 3000) { $ajanArg = "--ingest http://127.0.0.1:$Port/api/ingest $ajanArg" }
+    GorevKur $AjanGorev $ajanExe $ajanArg $ajanCalismaDizini 30
 }
 
 # -------------------------------------------------------------- calistirma

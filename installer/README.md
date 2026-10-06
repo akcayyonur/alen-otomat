@@ -12,7 +12,10 @@ cd installer
 
 Çıktı: `installer\output\CNC-Telemetri-Kurulum-<sürüm>.exe` (~24 MB).
 
-Gereken: Inno Setup 6 (`winget install JRSoftware.InnoSetup`), Node 22.5+ x64.
+Gereken: Inno Setup 6 (`winget install JRSoftware.InnoSetup`), Node 22.5+ x64 ve
+**`installer\prereq\vcredist_x86.exe`** (Microsoft'tan; Syntec DLL'lerinin bağlı olduğu
+Visual C++ 2005 SP1 çalışma zamanı, bkz. [`prereq/README.md`](prereq/README.md)). Betik
+dosyanın SHA256'sını ve Microsoft imzasını denetler, yoksa durur.
 `-SyntecBin` verilmezse `CNC_SYNTEC_BIN` ortam değişkenine, o da yoksa
 İndirilenler klasörüne bakılır.
 
@@ -30,7 +33,9 @@ yüklediğini doğrular. Bunlardan biri tutmazsa Setup.exe üretilmez.
 3. İleri → klasör (varsayılan `C:\CNC-Telemetri`) → ağ erişimi/kısayol seçenekleri →
    Kur.
 
-Kurulum: dosyaları yerleştirir, güvenlik duvarında **TCP 5568/5570**'i (kontrolcünün
+Kurulum: dosyaları yerleştirir, **Visual C++ 2005 SP1 (x86) çalışma zamanı yoksa kurar**
+(Syntec DLL'leri buna bağlı; Microsoft imzalı paket Setup'ın içinde), güvenlik duvarında
+**TCP 5568/5570**'i (kontrolcünün
 geri bağlantısı) açar, backend ve ajanı **Windows açılışında başlayacak** görevler
 olarak kaydeder, ikisini başlatır. Dashboard: `http://localhost:3000`.
 
@@ -58,6 +63,27 @@ açılır, dashboard `http://<bu-pc-ip>:3000` ile başka bilgisayardan görülü
   ekranının yazdığı tezgah listesi), `data\` ve `logs\` da korunur.
 - Kaldırma: Ayarlar → Uygulamalar → CNC Telemetri. Görevleri ve güvenlik duvarı
   kurallarını siler; **veritabanı, loglar ve tezgah listesi kalır**.
+
+## Windows Defender / antivirüs uyarısı
+
+Paket **imzasız** ve kalıcı bir arka plan servisi kuruyor (açılışta `SYSTEM` olarak
+çalışan görevler, güvenlik duvarı kuralı). Güvenlik yazılımları bunu şüpheli bulabilir;
+kurulu bir PC'de `Trojan:Win32/Dexphot.CB` çıkmıştı (2026-10-06).
+
+- **0.1.3'ten itibaren** görevler `cmd.exe /c … >> log` sarmalayıcısı olmadan programı
+  doğrudan çalıştırır ve komut satırında URL yoktur; günlüğü programlar kendisi yazar
+  (`--log`). İşaretlenen şeklin buydu. Bu bir **azaltma**, garanti değil.
+- Uyarı çıkarsa **önce "Kaldır"a basmayın** (ajanı karantinaya alır). Dosyaların bizim
+  ürettiğimiz dosyalar olduğunu doğrulayın:
+  `Get-FileHash "C:\CNC-Telemetri\agent\syntec-agent.exe"` ve karşılaştırın.
+  "Ayrıntıları göster" listesindeki etkilenen öğeleri not edin.
+- **"Cihazda izin ver" yerine dar bir dışlama** (yalnızca `C:\CNC-Telemetri`) tercih
+  edin: "izin ver" o tehdit adını tüm cihazda kabul eder. İkisi de güvenlik ayarı
+  değişikliğidir, karar sizindir.
+- Microsoft'a yanlış pozitif bildirimi: yalnızca bizim exe'lerimizi
+  (`syntec-agent.exe`, `CNC Telemetri.exe`) yükleyin; Syntec DLL'lerini ve Setup'ı değil.
+- Kalıcı çözüm: gerçek bir **kod imzalama sertifikası** (OV/EV) ile exe'leri ve
+  Setup'ı imzalamak. Ücretli, burada yok.
 
 ## Dikkat
 

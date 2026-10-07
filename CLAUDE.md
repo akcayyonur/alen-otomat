@@ -99,7 +99,80 @@ sayılmaz.
   ve süreç **çıkışta kilitleniyor** (probe sağlıklı tornada bile 5 dk "çalışıyor" kaldı,
   Ctrl+C ölmedi) → ajan/probe işini bitirince `TerminateProcess` ile çıkar (`SertCikis`).
 - Takılan okumadan sonra yeni oturum açmak yuva yer: `MaksTakili = 3` (4 değil).
-- **Aynı torna için aynı anda birden fazla istemci (ajan + probe + ...) açma**: yuva yer.
+- **Aynı torna için aynı anda en çok 2 istemci: telemetri ajanı + (varsa) aktarım servisi.** Her süreç
+  kendi oturumunu (4 TCP) açar. Ajan + probe/test aracı gibi başka istemcileri aynı anda açma: yuva yer.
+  Aktarım servisi oturumu yalnızca iş sırasında açar, zaman aşımlı kapatır ve sert çıkar.
+
+### 📁 NC program aktarımı (SDK) — PC Simulator'da ÖLÇÜLDÜ, 2026-10-07
+
+Henüz gerçek tornada denenmedi. Ortam: PC Simulator'ı **kısa yoldan** çalıştır (`C:\Users\akcay\simtest`);
+`OCAPIServer`/`CncMon32` uzun yolda (scratchpad) `MSVCR80.dll` içinde `0xC000000D` ile çöker.
+
+- `READ_nc_mem_list(out string[][])`: yalnız **kök** dizin. Satır = `[ad, boyut, zaman, FILE|DIRECTORY]`.
+  Klasörler satır olarak görünür ama **içi listelenemez**. `READ_nc_freespace(out long)` bayt cinsinden.
+- `UPLOAD_nc_mem(yerelYol)` = **PC→tezgah**. Dosya her zaman `NcFiles` **köküne**, yerel dosya adıyla düşer;
+  **klasör korunmaz** (yerel `ZZMUSTERI\ZZT002` → kökte `ZZT002`). **Aynı ad varsa SESSİZCE EZER**
+  (rc=0, hata=0). Klasör yolu verilirse yerel kütüphane **çöker**, tezgahta değişiklik olmaz.
+  Tamamlanma: `isFileUploadDone`, `FileUploadErrorCode`, ilerleme (`Current/Total`).
+- `DOWNLOAD_nc_mem(ad, yerelKlasör\)` = **tezgah→PC**. Hedef **klasör olmalı ve `\` ile bitmeli**; dosya
+  yolu verilirse süreç **çöker** (MSVCR80 `0xC000000D`). Alt klasördeki dosya okunamıyor: `ZZMUSTERI\ZZT009`
+  çöker, `\ZZMUSTERI\ZZT009` / `/…` / `NcFiles\…` hata `-16` (olmayan dosyayla aynı).
+- **Gidiş-dönüş bayt bayt eşit** (122 bayt, aynı SHA-256; CRLF, satır sonu boşlukları ve sondaki boş
+  satırlar korunuyor).
+- `DEL_nc_mem(ad)`: kök dosyayı siler; **olmayan dosyada da `rc=0`** (varlık dönüş kodundan anlaşılmaz).
+- Ad kuralları: `ZZ-T-003` (harf+tire), yalnız rakam, boşluklu, 41 karakter kabul edildi (simülatör NTFS;
+  Windows CE daha kısıtlı olabilir, gerçek tornada denenmeli).
+- **Herkese açık API (`SyntecRemoteCNC`) tek başına yetmez** (klasör yok, kök dizin). **AMA** aynı DLL'in
+  içinde, klasörleri destekleyen **gizli** işlevler var; `SyntecRemoteCNC` onları gizli `m_RemoteObj`
+  (`Syntec.Remote.SyntecRemoteObj`, `internal`) alanında tutuyor ve `Syntec.OpenCNC.OcApiTCP` içindeki
+  tutamaçlı `MultiTCP…` işlevleri aynı oturumun `m_TCPClientLink` tutamacıyla çağrılabiliyor
+  (yansıma, ek oturum açmaz). Simülatörde **uçtan uca çalıştı** (hepsi 2026-10-07):
+  - `RemoteObj.GetCncDirFilesInfo(dir, out string[][])`: **klasör içini listeler** (`""`=kök,
+    `"MUSTERI_A"`=müşteri klasörü; olmayan klasörde `-1` → klasör varlığı da buradan anlaşılır).
+    `NcGetDirs("NcFiles")` kök yolunu verir (simülatörde `…\Bin\..\NcFiles`).
+  - **Yazma = köke yükle → doğrula → klasöre taşı:** `UPLOAD_nc_mem` (kök) → `DOWNLOAD_nc_mem` (kökten
+    geri oku, SHA-256 kıyas) → `OcApiTCP.MultiTCPFileMove(link, kaynak, hedef, ref int ok, ref ErrorCode)`
+    (`NcDir\ad` → `NcDir\MUSTERI\ad`). Taşıma **hedefte aynı ad varsa REDDEDER** (`IsSuccess=0`, ezmez).
+    Taşıma aynı zamanda yeniden adlandırır: önce **benzersiz geçici adla** yükleyip doğrulayıp
+    sonra nihai ada taşımak, kökte ad çakışmasını ve "yarım dosya nihai adla görünür" sorununu çözer.
+  - **Klasörden okuma = tezgahta köke geçici kopya → indir → geçici kopyayı sil:** `MultiTCPFileCopy`,
+    `DOWNLOAD_nc_mem`, `MultiTCPFileDelete`. (`DownloadNCFile("KLASOR\ad", …)` doğrudan **çöker**.)
+  - `MultiTCPFileNew(yol)` boş **dosya** yaratır, klasör YARATMAZ → **yeni müşteri klasörü SDK ile
+    açılamaz** (panelden ya da FTP ile açılmalı). `FileUpload`'a klasörlü hedef verilirse `-16`.
+  - Tutamaçsız `OcApiTCP.TCPFileExists/TCPDirExists/TCPFileMove` oturuma bağlı değil, hep `False`.
+  - Mekanizma (IL'den): `UploadNCFile` yalnızca `Path.GetFileName(kaynak)` kullanır (klasör bu yüzden
+    düşer), dosyayı sunucunun `…\ServerTmp\Tmp\NcFiles\` dizinine yollar, sonra `MultiTCPInstall(link,
+    TModifyMethods)` sunucuya "bayrağa göre kur" der. **`TModifyMethods` bayrakları: `NCFILE=32` ama
+    `SOFTWARE`, `PLC`, `PARAMETER`, `SYSDATA`, `MACRO`, `REGISTRY`… da var: yalnızca `NCFILE`; ASLA
+    başkası.** `UploadNCFile`/`DelCncFile` kendi içinde `Status=="START"` + `CurProg` koruması taşır,
+    `MultiTCPFileMove/Copy/Delete` taşımaz: çalışan/seçili programa dokunmama kuralı bize ait.
+  - **Hepsi yansımayla gizli üyelere dayanır** (DLL sürümü 10.116.56.17'ye bağlı; DLL'leri biz
+    paketlediğimiz için sabit). **Gerçek torna 8'de (192.168.88.98, 10.116.54S) salt okunur
+    `GetCncDirFilesInfo` ÇALIŞTI** (2026-10-07, 6 sn, takılma yok, işlem sonunda açık bağlantı 0):
+    `NcGetDirs("NcFiles")` = `\DiskA\OpenCNC\NcFiles`; kökte 10 müşteri klasörü + 7 dosya
+    (`MDIBlock` sistem/MDI tamponu, kökte `O9001` 244 bayt ortak alt program, 5 müşterisiz program).
+    Müşteri adları ve klasör başına sayılar **bu belgeye yazılmadı (depo herkese açık)**.
+    Program adı kalıpları: `SR001-018`, `NI002-001`, `O0179`, `140100187`, `MUSTERI-001` (en çok ~2,3 KB).
+    **`rc=-1` ÇÖZÜLDÜ (klasörler boş DEĞİL):** `-1` dönen 5 klasörün 4'ü 44-98 dosya, biri >100 dosya
+    içeriyor; küçük klasörler (1-9 dosya) sorunsuz listelendi. Sebep sınıflandırması:
+    - **Bozuk zaman damgası:** bu klasörlerdeki dosyaların `ftLastWriteTime` değeri çoğunlukla
+      geçersiz/anlamsız (yıl 3125…9279; bir klasörde 44/44, bir başkasında 87/88 geçersiz). Gizli sarmalayıcı
+      `SyntecRemoteObj.GetCncDirFilesInfo` `DateTime.FromFileTimeUtc`'de patlayıp **`-1`** döndürüyor.
+      Çözüm: sarmalayıcıyı atla, **`CKrnlAPI.MultiTCPNcGetDirFilesInfo(link, nLength, yol)`**'u doğrudan
+      çağır (`yol = NcGetDirs("NcFiles") + "\" + klasör`) ve `TMyFileInfo` alanlarını (`cFileName`,
+      `nFileSizeLow/High`, `dwFileAttributes` 0x10=klasör, `FileDescription`) kendin çöz. **Gerçek
+      tornada dosya zamanına GÜVENME**, yalnız ad/boyut/içerik SHA'sı.
+    - `nLength` bir **üst sınırdır** (kesilir, hata vermez): 5 istenince 5 kayıt döner. Wrapper 800 verir.
+    - **Yanıt boyutu sınırı (~64 KB, ≈100-120 kayıt):** en büyük klasörde `nLength=100` geldi, `200` **`null`**
+      döndü ve ardından oturumdaki sonraki çağrılar da anında `null` (oturum bozuluyor → kapatıp yeniden
+      aç). İsim-yalnız `MultiTCPNcGetDirFiles` çıktıyı **1024 karakterde keser**. Dizin yoluna joker
+      (`KLASOR\1*`) **işe yaramıyor**. Yani **~100'den büyük klasör API ile tam listelenemiyor**; büyük
+      klasörler için FTP `NLST/LIST` (kök=`NcFiles`) gerekecek (henüz torna 8'de denenmedi).
+    Yazma/taşıma/kopyalama gerçek tornada HENÜZ denenmedi.
+  - Yerel kütüphane yanlış argümanda **try/catch'in yakalayamadığı şekilde süreci düşürür**
+    (`MSVCR80 0xC000000D`): aktarım ayrı süreçte çalışmalı, yalnızca burada doğrulanan çağrı biçimleri
+    kullanılmalı. Aktarım kodunda `WRITE_nc_main`, `RemoteProgExecute`, `UPLOAD_software/plc_file/
+    param_file`, `WRITE_macro_*`, `FileUpload` (gizli) ve `MultiTCPInstall` ASLA geçmemeli.
 
 ### ✅ İkinci gerçek tezgahta doğrulandı — 2026-10-06, 192.168.88.98
 

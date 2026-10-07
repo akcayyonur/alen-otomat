@@ -46,6 +46,15 @@ değişmez. Bu, gereksinim belgesi Bölüm 02/05'in gereği.
 `supported` / `experimental` / `planned` olarak tutar. Ayarlar ekranı `planned`
 olanı **seçtirmez** — ajanı yazılmamış bir protokol için müşteriye söz verilmez.
 
+**Program kütüphanesi ve tezgaha aktarım (yazma yolu):** telemetri yolundan (ajan →
+ingest → dashboard, tek yönlü, salt okunur) **tamamen ayrı** bir yol: `backend/programs/`,
+`/api/library/*`, `/api/transfers/*`, `/api/machines/:id/programs*`, ayrı veritabanı
+(`data/library.db`). Telemetri kodu bu modülü import etmez. Taşıma **FTP**'dir
+(Syntec SDK'nın dosya yolu klasöre yazamıyor, bkz. §3); backend tezgahın Windows CE FTP
+sunucusuna doğrudan bağlanır, Syntec DLL'i gerekmez. Gereksinim belgesindeki "salt okunur
+sınır" bu özellik için **bilinçli olarak** gevşetildi (fabrika sahibi kararı, 2026-10-07).
+Ayrıntı ve güvenlik kuralları: §6 "Program kütüphanesi ve aktarım".
+
 ---
 
 ## 3. Doğrulanmış olanlar (ve olmayanlar)
@@ -350,6 +359,7 @@ npm run dev     # backend + simülatör birlikte
 npm start       # yalnız backend  → http://localhost:3000
 npm run sim     # yalnız simülatör
 npm run demo    # backend + data/gercek.db'deki GERÇEK kaydı canlı gibi oynatır (demo için)
+npm run demo:programlar  # program kütüphanesi demosu: sahte tornalar (FTP :2121/:2122), gerçek tornaya dokunmaz
 npm test        # backend testleri (node:test, bağımlılık yok)
 ```
 
@@ -451,6 +461,63 @@ hangi fonksiyonun çalıştığını raporla). Bağlantı sorununu teşhis etmek
 Ajanla **aynı** `SyntecReader.cs`'i derler, böylece durum eşlemesi ikisinde
 ayrışamaz.
 
+### Program kütüphanesi ve aktarım (`backend/programs/`)
+
+**Ne yapar:** programcının hazırladığı NC dosyası arayüze sürüklenip bırakılır, kütüphanede
+(müşteri klasörü + ad kimliğiyle, sürümlü, SHA-256'lı) saklanır; tezgahın müşteri klasörüne
+gönderilir; hangi program hangi tezgahta ve hangi sürümde görünür (matris ve tezgah detayı).
+**İçerik yorumlanmaz**, dosya aynen taşınır. Gönderilen program tezgahta **aktif olmaz**
+(panelden seçilmesi gerekir).
+
+**Ekranlar:** sol menü "Program kütüphanesi" (`#/programlar`, `#/programlar/<id>`): yükleme,
+program × tezgah matrisi (✓ güncel, ▼ eski, ≠ farklı, ? doğrulanmadı, — yok, · taranmadı),
+sürümler/önizleme/indirme, gönderme geçmişi. Tezgah detayında "Programlar" paneli: tara,
+klasörlere göre liste, "Kütüphaneye al", "Program gönder…". Gönderme penceresi:
+program/sürüm/hedef klasör → **ön kontrol** → (uyarılar için onay) → **tezgah kimliğini yazarak
+onay** → sonuç ve adım adım kayıt.
+
+**Dosyalar:** `ftp-client.js` (`node:net`, sıfır bağımlılık; yalnızca gereken FTP komutları;
+komut enjeksiyonu/yol gezinmesi reddedilir) · `list-parse.js` (DOS ve UNIX LIST) ·
+`library-db.js` (SQLite) · `library.js` (doğrulama, karşılaştırma, matris) ·
+`machine-files.js` (**tüm güvenlik denetimi burada**: tarama, içeri alma, ön kontrol, gönderme)
+· `routes.js` (HTTP) · `test/mock-ftp.js` (Windows CE FTP'yi taklit eden **sahte sunucu**;
+gerçek torna 8'in 2026-10-07 protokol diyaloğundan) · `test/harness.js`.
+
+**Gönderme kuralları (kodda zorlanır, testleri `transfer.test.js`):**
+1. Dosya **gönderilir, asla çalıştırılmaz/seçilmez**.
+2. Hedefte aynı ad varsa **ÜZERİNE YAZILMAZ** (büyük/küçük harf duyarsız: CE öyle). Üzerine yazma
+   modu **yok** (`overwriteEnabled: false`); gerçek tornada `RNTO`/`DELE` ezme semantiği ölçülmeden
+   açılmamalı.
+3. Tezgahta **çalışan/seçili programın adıyla** gönderilmez. Canlı veri yoksa (ajan kapalı)
+   çalışan program bilinmez → kullanıcı açıkça onaylamadan gönderilmez (`unknown-state`).
+   Kök dizine (müşterisiz, ortak alan) gönderme de ayrıca onay ister (`root-target`).
+4. Önce **geçici adla** (`ZZUP` + 6 rakam) yüklenir → boyut ve **geri okunup SHA-256** doğrulanır →
+   `RNFR/RNTO` ile nihai ada çevrilir → yine doğrulanır. Yarım dosya nihai adla görünmez.
+5. Doğrulama tutmazsa kendi oluşturduğumuz dosya silinir; **başkasının dosyasına dokunulmaz**
+   (`DELE` yalnızca `ZZUP…` geçici adı ve SHA'sı tutmayan kendi nihai dosyamız için; testle denetlenir).
+6. **Onay metni = tezgah kimliği** (`CNC-08`); sunucu da denetler. Genel "onaylıyorum" kabul edilmez.
+7. Her gönderme (reddedilenler dahil) `transfers` tablosuna yazılır: kim (`by` + istemci IP), ne zaman,
+   hangi program/sürüm/tezgah/klasör, SHA, adımlar, sonuç.
+8. Bir tezgaha aynı anda **tek işlem** (tarama/gönderme/içeri alma); ikincisi `409`.
+9. Yeni **müşteri klasörü açılmaz** (`MKD` kullanılmıyor): klasör tezgahta olmalı (panelden açılır).
+10. Kütüphaneye ad: `[A-Za-z0-9_.-]{1,40}`, `ZZUP`/`ZZRB` ile başlamaz; dosya ≤ 1 MB, metin (NUL yok).
+
+**Ayarlar / ortam değişkenleri:** `TRANSFER_DISABLED=1` gönderme tamamen kapanır (kütüphane,
+tarama, ön kontrol çalışır) · `LIBRARY_DB_FILE` (varsayılan `data/library.db`; telemetri DB'sinden
+**ayrı**, budanmaz, **ayrıca yedeklenmeli**) · `MACHINES_FILE` (envanter dosyasını değiştirir:
+demo/test) · tezgah başına isteğe bağlı `ftpPort` (envanter) · sürücü kaydında `fileTransfer`
+(`config/drivers.json`: protokol, port, kullanıcı, kök).
+
+**KİMLİK DOĞRULAMA YOK** (karar: şimdilik ofis ağındaki herkes kullanabilir). Koruma: tezgah
+kimliğini yazma + denetim kaydı + `TRANSFER_DISABLED`. Ağdan dışarı açılacaksa önce giriş sistemi.
+
+**Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
+`RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
+gönderme öncesi ve adlandırmadan hemen önce `LIST` ile ikinci çakışma denetimi var, yine de
+milisaniyelik yarış penceresi kalır) · `DELE` (silme) · `MKD` · bu özelliğin **arayüzü** hiç
+gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de elle doğrulandı) ·
+çok büyük klasörlerde (>200) tarama süresi.
+
 ---
 
 ## 7. Kod kuralları
@@ -486,6 +553,8 @@ ayrışamaz.
 | `dashboard/charts.js` | SVG çizgi grafiği (imleç + balon), durum şeridi. |
 | `dashboard/format.js` | Alan tanımları ve etiketler — **arayüzün tek kaynağı**. |
 | `dashboard/config-view.js` | Ayarlar ekranı. |
+| `dashboard/library-view.js` | Program kütüphanesi ekranı, tezgah detayındaki "Programlar" paneli ve gönderme penceresi. |
+| `backend/programs/` | Program kütüphanesi + FTP ile tezgaha aktarım (yazma yolu; telemetriden ayrı). Bkz. §6. |
 | `tools/syntec-agent/SyntecReader.cs` | **Okuma + durum eşlemesi (tek kaynak).** |
 | `tools/syntec-agent/Agent.cs` | Sürekli çalışan servis: tezgah başına iş parçacığı, yeniden bağlanma, tamponlama. |
 | `tools/syntec-probe/` | Tek seferlik saha teşhis aracı. |
@@ -508,6 +577,12 @@ ayrışamaz.
 | `GET /api/health` | Durum + **`statusMapping`**: hangi ham değer hangi duruma eşlendi. |
 | `GET /api/agent/machines` | **Ajanın okuduğu tezgah listesi** — IP'si tanımlı olanlar. Ajan bunu dakikada bir çeker. |
 | `GET /api/drivers` · `GET /api/config` · `PUT /api/config/machines` | Sürücüler ve yapılandırma. |
+| `GET /api/library/config` · `/customers` · `/matrix` | Özellik durumu (`transferEnabled`…), müşteri klasörleri, program × tezgah matrisi. |
+| `GET/POST /api/library/programs` | Liste (`?customer=&q=`); yükleme: gövde = ham dosya, `?customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik). |
+| `GET /api/library/programs/:id` · `/versions/:no[?download=1]` | Sürümler · önizleme (JSON) ya da ham indirme. |
+| `GET /api/machines/:id/programs` | Son taramanın envanteri + kütüphaneye göre durum. |
+| `POST /api/machines/:id/programs/scan` · `/import` | Tezgahı FTP ile tara (yalnız okuma) · tezgahtaki programı kütüphaneye al. |
+| `POST /api/transfers/precheck` · `POST /api/transfers` · `GET /api/transfers` | Ön kontrol (yazmaz) · gönder (`confirm` = tezgah kimliği, `acks`) · denetim kaydı. Hata kodları: 400 doğrulama, 403 kapalı, 404, 409 meşgul, 413 büyük, 422 desteklenmiyor, 502 tezgah/FTP. |
 
 `window`: `30m` · `8h` · `24h` · `7d`. Ya da `from`/`to` (epoch ms veya ISO).
 
@@ -525,9 +600,17 @@ ayrışamaz.
       → `statusMapping` listesine bak, tanınmayan değer çıkıyor mu.
 - [ ] 7 tezgaha statik IP + `Start server while boot` (tek ziyarette, bkz. §5).
 - [ ] CNC-03…07 kimlik bilgileri (seri no, üretim yılı) — panel başında toplanacak.
-- [ ] **Kimlik doğrulama yok.** Ayarlar ekranı ofis ağındaki herkese açık.
-      Ofis ağı dışına açılacaksa önce bu çözülmeli; geçici olarak
-      `CONFIG_READONLY=1` yazımı kapatır.
+- [ ] **Kimlik doğrulama yok.** Ayarlar ekranı ve **program gönderme** ofis ağındaki herkese
+      açık. Ofis ağı dışına açılacaksa önce bu çözülmeli; geçici olarak `CONFIG_READONLY=1`
+      yapılandırma yazımını, `TRANSFER_DISABLED=1` program göndermeyi kapatır.
+- [ ] **Program aktarımının ilk gerçek tornada denemesi** (§6 "doğrulanmayanlar"): önce
+      "Tezgahtaki programları tara" (salt okunur), sonra yeni bir test adıyla tek program; `library.db`
+      yedeği; Setup.exe ile kurulu PC'de FTP erişimi (güvenlik duvarı çıkış kuralı yeterli).
+- [ ] Üzerine yazma (yeni sürümü aynı adla gönderme): `RNTO`/`DELE` ezme semantiği gerçek
+      tornada ölçüldükten sonra, mevcut içeriği önce kütüphaneye yedekleyerek.
+- [ ] Yeni müşteri klasörü açma (`MKD`) ve program silme: gerçek tornada denenmedi.
+- [ ] Backend, olay zamanını mesajın `ts`'inden değil geliş anından alır (`store.js ingest`):
+      ajan tamponu geri yükleyince kesinti aralığı `NO_DATA` kalır.
 
 ---
 

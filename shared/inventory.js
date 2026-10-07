@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDrivers, getDriver, FALLBACK_DRIVER } from './drivers.js';
 
@@ -14,7 +15,14 @@ import { loadDrivers, getDriver, FALLBACK_DRIVER } from './drivers.js';
  * kendi `reports` listesini yazarak ezebilir.
  */
 const CONFIG_URL = new URL('../config/machines.json', import.meta.url);
-const CONFIG_PATH = fileURLToPath(CONFIG_URL);
+/**
+ * `MACHINES_FILE` ortam degiskeni baska bir envanter dosyasi gosterir (demo ve
+ * testler icin: gercek config/machines.json'a dokunmadan). Ayarlar ekrani da
+ * ayni dosyaya yazar.
+ */
+const CONFIG_PATH = process.env.MACHINES_FILE
+  ? resolve(process.env.MACHINES_FILE)
+  : fileURLToPath(CONFIG_URL);
 
 /** `_` ile baslayan alanlar dosya ici aciklamalar - koda tasinmaz. */
 function stripNotes(obj) {
@@ -115,12 +123,22 @@ export function validateMachines(input) {
       }
     }
 
+    // Dosya aktarimi (FTP) portu: bos = surucunun varsayilani (21). Ileri duzey ayar.
+    let ftpPort = null;
+    if (raw.ftpPort != null && raw.ftpPort !== '') {
+      ftpPort = Number(raw.ftpPort);
+      if (!Number.isInteger(ftpPort) || ftpPort < 1 || ftpPort > 65535) {
+        errors.push(`${where}: FTP portu gecersiz "${raw.ftpPort}"`);
+      }
+    }
+
     machines.push({
       id,
       name,
       ...(driverId === null ? {} : { driverId }),
       ip,
       ...(port === null ? {} : { port }),
+      ...(ftpPort === null ? {} : { ftpPort }),
       identified: raw.identified === true,
       ...(raw.cncSerial ? { cncSerial: String(raw.cncSerial) } : {}),
       ...(raw.machineSerial ? { machineSerial: String(raw.machineSerial) } : {}),

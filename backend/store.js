@@ -263,6 +263,24 @@ export class TelemetryStore {
     };
   }
 
+  /**
+   * Hafif canli gorunum: program gonderme guvenlik denetimi icin (snapshot()
+   * butun filonun ozetini hesaplar, burada gereksiz). `connected` false ise
+   * calisan program BILINMEZ; cagiran bunu "yok" saymamali.
+   */
+  liveInfo(machineId, now = Date.now()) {
+    const entry = this.machines.get(machineId);
+    if (!entry) return null;
+    const connected = entry.lastSeenAt != null && now - entry.lastSeenAt <= GAP_THRESHOLD_MS;
+    return {
+      connected,
+      state: connected ? entry.latest?.status ?? null : TimelineState.NO_DATA,
+      program: connected ? entry.latest?.program ?? null : null,
+      mainProgram: connected ? entry.latest?.mainProgram ?? null : null,
+      lastSeenAt: entry.lastSeenAt,
+    };
+  }
+
   /** Bellek ici canli pencere - detay grafikleri bunu kullanir. */
   liveHistory(machineId) {
     const entry = this.machines.get(machineId);

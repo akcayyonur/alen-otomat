@@ -141,6 +141,9 @@ foreach ($sil in 'data', 'logs') {
 }
 # Testler gelistirme icindir (npm test); uretim paketine girmez.
 Get-ChildItem (Join-Path $Payload 'backend') -Recurse -Filter '*.test.js' | Remove-Item -Force
+# Test yardimcilari (sahte FTP sunucusu, kurulum) da gelistirme icindir.
+$testYard = Join-Path $Payload 'backend\programs\test'
+if (Test-Path $testYard) { Remove-Item $testYard -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload 'kurulum') | Out-Null
 Copy-Item (Join-Path $Kok 'kurulum\kurulum.ps1') (Join-Path $Payload 'kurulum')
 Copy-Item (Join-Path $Kok 'kurulum\KURULUM.md')   (Join-Path $Payload 'kurulum')
@@ -219,7 +222,8 @@ if (-not $TestAtla) {
     # veritabani - gercek kurulumun ya da gelistirme verisinin yerine gecmesin.
     $port = 39000 + (Get-Random -Maximum 900)
     $db = Join-Path $env:TEMP "cnc-duman-$port.db"
-    $env:PORT = "$port"; $env:HOST = '127.0.0.1'; $env:DB_FILE = $db
+    $kutuphaneDb = Join-Path $env:TEMP "cnc-duman-$port-kutuphane.db"
+    $env:PORT = "$port"; $env:HOST = '127.0.0.1'; $env:DB_FILE = $db; $env:LIBRARY_DB_FILE = $kutuphaneDb
     $sunucu = $null
     try {
         $sunucu = Start-Process (Join-Path $rt 'node.exe') -ArgumentList 'backend\server.js' `
@@ -239,14 +243,21 @@ if (-not $TestAtla) {
         $liste = Invoke-RestMethod "http://127.0.0.1:$port/api/agent/machines" -TimeoutSec 5
         Tamam "ajan listesi uc noktasi cevap veriyor ($(@($liste.machines).Count) tezgah)"
 
+        # Program kutuphanesi: modul paketten yukleniyor mu, ayri veritabani acildi mi.
+        $kut = Invoke-RestMethod "http://127.0.0.1:$port/api/library/config" -TimeoutSec 5
+        if ($kut.authRequired -ne $false -or $null -eq $kut.stats) { Vazgec 'program kutuphanesi uc noktasi beklenmedik cevap verdi' }
+        Tamam "program kutuphanesi uc noktasi cevap veriyor (gonderme $(if ($kut.transferEnabled) { 'acik' } else { 'kapali' }))"
+        $kutJs = Invoke-WebRequest "http://127.0.0.1:$port/library-view.js" -UseBasicParsing -TimeoutSec 5
+        if ($kutJs.StatusCode -ne 200) { Vazgec 'kutuphane arayuz dosyasi servis edilmedi' }
+
         # Masaustu uygulamasi: --denetle yalniz bakar, hicbir gorev baslatmaz.
         $u = Start-Process $baslatici -ArgumentList '--denetle', '--port', "$port" -Wait -PassThru -WindowStyle Hidden
         if ($u.ExitCode -ne 0) { Vazgec 'masaustu uygulamasi calisan backend''i goremedi' }
         Tamam 'masaustu uygulamasi acik backend''i taniyor'
     } finally {
         if ($sunucu -and -not $sunucu.HasExited) { Stop-Process -Id $sunucu.Id -Force }
-        Remove-Item "$db*" -Force -ErrorAction SilentlyContinue
-        Remove-Item Env:PORT, Env:HOST, Env:DB_FILE -ErrorAction SilentlyContinue
+        Remove-Item "$db*", "$kutuphaneDb*" -Force -ErrorAction SilentlyContinue
+        Remove-Item Env:PORT, Env:HOST, Env:DB_FILE, Env:LIBRARY_DB_FILE -ErrorAction SilentlyContinue
     }
 
     # Backend kapandi: ayni denetim simdi "yok" demeli.

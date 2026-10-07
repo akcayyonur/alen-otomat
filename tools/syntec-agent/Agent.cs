@@ -31,8 +31,8 @@ using Syntec.Telemetri;
 [assembly: AssemblyDescription("Syntec kontrolcusunden uretim verisi okuyup CNC Telemetri backend'ine gonderir")]
 [assembly: AssemblyCompany("alen-otomat")]
 [assembly: AssemblyProduct("CNC Telemetri")]
-[assembly: AssemblyVersion("0.1.6.0")]
-[assembly: AssemblyFileVersion("0.1.6.0")]
+[assembly: AssemblyVersion("0.2.0.0")]
+[assembly: AssemblyFileVersion("0.2.0.0")]
 
 /// Console.Out'u hem konsola hem dosyaya yazar (--log).
 ///

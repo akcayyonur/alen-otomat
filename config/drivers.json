@@ -16,6 +16,17 @@
         5572
       ],
       "defaultPort": 5566,
+      "fileTransfer": {
+        "protocol": "ftp",
+        "port": 21,
+        "user": "anonymous",
+        "password": "cnc-telemetri@local",
+        "root": "NcFiles",
+        "status": "experimental",
+        "verifiedOn": "2026-10-07",
+        "verifiedAgainst": "Gerçek tezgah (192.168.88.98, Windows CE 7.0 FTP sunucusu), tezgah üretim yaparken: anonim giriş, LIST, STOR, RETR, RNFR/RNTO. DENENMEDİ gerçek tezgahta: MKD, DELE, RNTO ile aynı adın üzerine yazma.",
+        "notes": "Syntec RemoteAPI'nin UPLOAD_nc_mem işlevi müşteri klasörüne yazamıyor ve üretim sırasında aktarımı başlatmıyor; bu yüzden program aktarımı FTP ile yapılır (kök dizin NcFiles). FTP kontrolcünün kendi korumalarını atlar: güvenlik denetimi backend/programs/machine-files.js içindedir."
+      },
       "agent": "tools/syntec-agent",
       "verifiedOn": "2026-09-18",
       "verifiedOn_detay": "GERÇEK TEZGAH: 192.168.88.99 üzerinde 16:35-16:37 arası 104 örnek alındı, tezgah KESERKEN. Status=START (104/104) → RUNNING eşlemesi doğrulandı. Parça sayacı 1298→1303 (2 dakikada 5 parça), ömür boyu 11400→11405, PowerOn/Kesme/Çalışma sayaçları saniyede 1 arttı. Program: 140100187. PC SIMULATOR: tezgah boştayken Status=READY → IDLE eşlemesi doğrulandı. READ_nc_current_block her ikisinde de -18 (desteklenmiyor).",

@@ -1,9 +1,11 @@
 /**
  * CNC Telemetri - dashboard uygulamasi.
  *
- * Iki gorunum, kalici bir tezgah secici:
+ * Gorunumler, kalici bir tezgah secici:
  *   #/filo             filo geneli (KPI + kartlar)
  *   #/tezgah/CNC-01    tek tezgah ayrintisi
+ *   #/programlar       program kutuphanesi   (#/programlar/12: program ayrintisi)
+ *   #/ayarlar          tezgah ve surucu ayarlari
  *
  * Canli degerler SSE ile saniyede bir gelir ve YALNIZCA metin dugumleri
  * yamanir - grafikler ve seritler kendi yavas donguleriyle yenilenir, boylece
@@ -11,6 +13,7 @@
  */
 import { lineChart, timeline, ribbonHtml } from './charts.js';
 import { renderConfig, resetConfigView } from './config-view.js';
+import { renderLibrary, resetLibraryView, renderMachinePrograms } from './library-view.js';
 import {
   STATES, stateOf, num, pct, dur, clock, dateTime, ago,
   FIELD_GROUPS, escapeHtml,
@@ -34,8 +37,9 @@ const HISTORY_REFRESH_MS = 10_000;
 
 const state = {
   /** @type {object|null} */ snapshot: null,
-  /** @type {'fleet'|'machine'|'config'} */ view: 'fleet',
+  /** @type {'fleet'|'machine'|'config'|'library'} */ view: 'fleet',
   /** @type {string|null} */ selected: null,
+  /** @type {number|null} kutuphane ekraninda secili program */ programId: null,
   window: '30m',
   tableView: false,
   /** Secili tezgah icin son cekilen gecmis. */
@@ -51,9 +55,14 @@ const refs = {};
 function readRoute() {
   const hash = location.hash.replace(/^#/, '');
   const m = /^\/tezgah\/(.+)$/.exec(hash);
+  const lm = /^\/programlar(?:\/(\d+))?$/.exec(hash);
   if (m) {
     state.view = 'machine';
     state.selected = decodeURIComponent(m[1]);
+  } else if (lm) {
+    state.view = 'library';
+    state.selected = null;
+    state.programId = lm[1] ? Number(lm[1]) : null;
   } else if (hash === '/ayarlar') {
     state.view = 'config';
     state.selected = null;
@@ -113,6 +122,7 @@ function renderSidebar() {
   }
 
   refs.fleetBtn.classList.toggle('is-active', state.view === 'fleet');
+  refs.libraryBtn.classList.toggle('is-active', state.view === 'library');
   refs.configBtn.classList.toggle('is-active', state.view === 'config');
 }
 
@@ -260,6 +270,9 @@ function detailShell(m) {
     '<div data-role="downtimes"></div>' +
     '</section>' +
 
+    // Program kutuphanesi ile karsilastirma ve tezgaha program gonderme.
+    '<section class="dt-block" data-role="programs"></section>' +
+
     '<section class="dt-block">' +
     '<h3>Kontrolcüden gelen ham değerler</h3>' +
     '<p class="hint">Normalize edilmeyen alanlar. <code>rawStatus</code> önemli: durum eşlemesini ' +
@@ -272,6 +285,7 @@ function detailShell(m) {
 function renderDetailStatic(m) {
   refs.detail.innerHTML = detailShell(m);
   state.detailFor = m.machineId;
+  renderMachinePrograms(refs.detail.querySelector('[data-role="programs"]'), m);
 
   // Alan gruplari - yapi bir kez kurulur, degerler sonra yamanir.
   refs.detail.querySelector('[data-role="live"]').innerHTML = FIELD_GROUPS.map((g) =>
@@ -523,9 +537,12 @@ function render() {
   refs.fleetView.hidden = view !== 'fleet';
   refs.detail.hidden = view !== 'machine';
   refs.configView.hidden = view !== 'config';
+  refs.libraryView.hidden = view !== 'library';
 
   refs.title.textContent =
-    view === 'machine' ? m.name : view === 'config' ? 'Ayarlar' : 'Filo Genel Bakış';
+    view === 'machine' ? m.name
+      : view === 'config' ? 'Ayarlar'
+        : view === 'library' ? 'Program Kütüphanesi' : 'Filo Genel Bakış';
 
   if (view === 'machine') {
     if (state.detailFor !== m.machineId) {
@@ -534,6 +551,18 @@ function render() {
       refreshHistory();
     }
     patchDetail(m);
+  } else if (view === 'library') {
+    // Kutuphane kendi verisini ceker; yalnizca rota degisince (ya da ekrana ilk
+    // girildiginde) cizilir, SSE karelerinde dokunulmaz.
+    const key = `${state.programId}`;
+    if (state.prevView !== 'library') {
+      resetLibraryView(); // girerken taze veri
+      delete refs.libraryView.dataset.key;
+    }
+    if (refs.libraryView.dataset.key !== key) {
+      refs.libraryView.dataset.key = key;
+      renderLibrary(refs.libraryView, state.programId);
+    }
   } else if (view === 'config') {
     // Ayarlar ekrani kendi verisini ceker; her SSE karesinde yeniden cizilmez.
     if (!refs.configView.dataset.ready) {
@@ -551,6 +580,8 @@ function render() {
     }
     renderFleet();
   }
+
+  state.prevView = view;
 
   refs.foot.textContent =
     `${num(snap.messageCount)} mesaj · ${num(snap.rejectedCount)} reddedildi · ` +
@@ -614,6 +645,8 @@ function init() {
   refs.fleetBtn = $('#fleet-btn');
   refs.configBtn = $('#config-btn');
   refs.configView = $('#config-view');
+  refs.libraryBtn = $('#library-btn');
+  refs.libraryView = $('#library-view');
   refs.sidebar = $('#sidebar');
   refs.kpis = $('#kpis');
   refs.fleetGrid = $('#fleet-grid');
@@ -627,6 +660,7 @@ function init() {
 
   refs.fleetBtn.addEventListener('click', () => go(null));
   refs.configBtn.addEventListener('click', () => { location.hash = '#/ayarlar'; });
+  refs.libraryBtn.addEventListener('click', () => { location.hash = '#/programlar'; });
   addEventListener('hashchange', () => { readRoute(); render(); });
 
   initTheme();

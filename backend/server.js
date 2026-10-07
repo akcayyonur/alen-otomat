@@ -10,10 +10,20 @@ import { parseTelemetry } from '../shared/schema.js';
 import { loadDrivers } from '../shared/drivers.js';
 import { loadInventory, loadConfig, validateMachines, saveMachines } from '../shared/inventory.js';
 import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
+import { Library } from './programs/library.js';
+import { MachineFiles } from './programs/machine-files.js';
+import { createProgramRoutes } from './programs/routes.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const DB_FILE = process.env.DB_FILE ?? 'data/telemetry.db';
+/** Program kutuphanesi: telemetri veritabanindan AYRI dosya (budanmaz, ayri yedeklenir). */
+const LIBRARY_DB_FILE = process.env.LIBRARY_DB_FILE ?? 'data/library.db';
+/**
+ * Tezgaha program GONDERMEYI tamamen kapatir (kutuphane, tarama ve on kontrol
+ * calisir). Kimlik dogrulama henuz yok; ozelligi kullanmayacaksaniz 1 yapin.
+ */
+const TRANSFER_DISABLED = process.env.TRANSFER_DISABLED === '1';
 /**
  * Ayarlar ekranindan yapilandirma yazimi. Kimlik dogrulama HENUZ YOK - ofis
  * agindaki herkes tezgah tanimlarini degistirebilir. Dashboard ofis LAN'i
@@ -25,6 +35,19 @@ const BROADCAST_MS = 1000;
 const MAX_BODY_BYTES = 1_000_000;
 
 const store = new TelemetryStore(DB_FILE);
+
+// Program kutuphanesi ve tezgaha aktarim: telemetri yolundan AYRI (backend/programs/).
+// Telemetri kodu bu modulleri kullanmaz; yazma yolu yalnizca /api/library, /api/transfers
+// ve /api/machines/:id/programs altindadir.
+const library = new Library(LIBRARY_DB_FILE);
+const machineFiles = new MachineFiles({
+  library,
+  getMachine: (id) => loadInventory().find((m) => m.id === id) ?? null,
+  liveInfo: (id) => store.liveInfo(id),
+  flags: { transferDisabled: TRANSFER_DISABLED },
+});
+const programRoutes = createProgramRoutes({ library, files: machineFiles, listMachines: () => loadInventory() });
+
 /** @type {Set<import('node:http').ServerResponse>} */
 const clients = new Set();
 
@@ -34,6 +57,7 @@ const STATIC_FILES = {
   '/app.js': ['../dashboard/app.js', 'text/javascript; charset=utf-8'],
   '/charts.js': ['../dashboard/charts.js', 'text/javascript; charset=utf-8'],
   '/config-view.js': ['../dashboard/config-view.js', 'text/javascript; charset=utf-8'],
+  '/library-view.js': ['../dashboard/library-view.js', 'text/javascript; charset=utf-8'],
   '/format.js': ['../dashboard/format.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['../dashboard/styles.css', 'text/css; charset=utf-8'],
 };
@@ -301,6 +325,9 @@ const server = http.createServer(async (req, res) => {
   const { pathname } = url;
 
   try {
+    // Program kutuphanesi / aktarim uclari (kendi hata yanitlarini verir).
+    if (await programRoutes(req, res, url)) return;
+
     if (req.method === 'POST' && pathname === '/api/ingest') return await handleIngest(req, res);
     if (req.method === 'GET' && pathname === '/api/stream') return handleStream(req, res);
     if (req.method === 'GET' && pathname === '/api/machines') {
@@ -367,6 +394,10 @@ server.listen(PORT, HOST, () => {
   console.log(`[backend] ingest     -> POST http://localhost:${PORT}/api/ingest`);
   console.log(`[backend] canli akis -> GET  http://localhost:${PORT}/api/stream`);
   console.log(`[backend] veritabani -> ${DB_FILE}`);
+  console.log(
+    `[backend] kutuphane  -> ${LIBRARY_DB_FILE}` +
+      (TRANSFER_DISABLED ? '  (tezgaha GONDERME KAPALI: TRANSFER_DISABLED=1)' : ''),
+  );
 });
 
 /** Kapanirken acik araliklari kapat ve tamponu bosalt - veri kaybolmasin. */
@@ -374,6 +405,7 @@ function shutdown() {
   server.close();
   for (const res of clients) res.end();
   store.close();
+  library.close();
   process.exit(0);
 }
 process.on('SIGINT', shutdown);

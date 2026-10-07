@@ -86,7 +86,7 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 
 /* ---------- duzen ---------- */
 .layout{display:grid;grid-template-columns:252px minmax(0,1fr);gap:18px;align-items:start;}
-@media (max-width:900px){ .layout{grid-template-columns:1fr;} }
+@media (max-width:900px){ .layout{grid-template-columns:minmax(0,1fr);} }
 
 /* ---------- tezgah secici ---------- */
 .sidebar{
@@ -382,4 +382,105 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 .footnote{
   margin-top:22px;padding-top:12px;border-top:1px solid var(--line);
   font-size:11.5px;color:var(--ink-faint);font-family:var(--mono);
+}
+
+/* ---------- program kutuphanesi ---------- */
+.mi-library{border-top:1px solid var(--line);margin-top:8px;padding-top:10px;}
+.mi-library + .mi-config{border-top:none;margin-top:0;padding-top:8px;}
+
+/* Durum rozeti: renk + ikon + etiket birlikte (renk tek basina anlam tasimaz) */
+.chip{
+  display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
+  padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:600;
+  border:1px solid var(--line-strong);color:var(--ink-soft);background:var(--surface-2);
+}
+.chip-ok{border-color:var(--st-run);color:var(--st-run-text);background:rgba(12,163,12,.09);}
+.chip-warn{border-color:var(--st-idle);color:var(--st-idle-text);background:rgba(250,178,25,.13);}
+.chip-bad{border-color:var(--st-alarm);color:var(--st-alarm-text);background:rgba(208,59,59,.1);}
+.chip-info{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);}
+.chip-none{color:var(--ink-faint);}
+
+.legend-chips{display:flex;flex-wrap:wrap;gap:8px 10px;list-style:none;margin:10px 0 0;padding:0;}
+
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+.btn-primary:hover{color:#fff;filter:brightness(1.08);}
+.icon-btn-sm{padding:2px 8px;font-size:11.5px;}
+.nowrap{white-space:nowrap;}
+.sub{margin:14px 0 6px;font-family:var(--font-cond);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--accent);font-weight:600;}
+
+/* alanlar */
+.fld{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-soft);min-width:0;}
+.fld input,.fld select,.fld-sm,.fld-inline input{
+  width:100%;min-width:0;padding:5px 8px;font:inherit;font-size:13px;
+  border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--ink);
+}
+.fld-sm{width:auto;}
+.fld-inline{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-soft);}
+.fld-inline input{width:150px;}
+.fld-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px 14px;margin:12px 0;}
+.fld input:focus-visible,.fld select:focus-visible,.fld-sm:focus-visible{border-color:var(--accent);}
+.tbl-lib td,.tbl-lib th{vertical-align:middle;}
+
+/* surukle-birak */
+.dropzone{
+  border:2px dashed var(--line-strong);border-radius:11px;padding:20px 16px;text-align:center;
+  background:var(--surface-2);cursor:pointer;
+}
+.dropzone p{margin:.2em 0;}
+.dropzone:hover,.dropzone.is-over,.dropzone:focus-visible{border-color:var(--accent);background:var(--accent-soft);}
+#library-view [data-role="pending"]{margin-top:12px;}
+
+/* liste + matris */
+.is-click{cursor:pointer;}
+.tbl tbody tr.is-selected{background:var(--accent-soft);}
+.mx-h{text-align:center;vertical-align:bottom;min-width:96px;}
+.mx-h small{display:block;font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:none;letter-spacing:0;font-weight:400;}
+.tbl-lib td:nth-child(n+6){text-align:center;}
+.mx-list{display:flex;flex-wrap:wrap;gap:7px 12px;align-items:center;margin:6px 0 8px;}
+.mx-item{display:inline-flex;align-items:center;gap:7px;padding:3px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);}
+.code-view{
+  margin:6px 0 0;max-height:340px;overflow:auto;padding:10px 12px;border-radius:8px;
+  border:1px solid var(--line);background:var(--surface-2);font-family:var(--mono);font-size:12px;
+  line-height:1.5;white-space:pre;tab-size:4;
+}
+details.grp{border:1px solid var(--line);border-radius:9px;margin:6px 0;background:var(--surface);}
+details.grp>summary{cursor:pointer;padding:8px 11px;font-size:13px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;}
+details.grp[open]>summary{border-bottom:1px solid var(--line);}
+.grp-body{padding:4px 8px 8px;max-height:420px;overflow:auto;}
+
+/* gonderme penceresi */
+dialog.modal{
+  width:min(820px,94vw);max-height:92vh;padding:0;border:1px solid var(--line-strong);
+  border-radius:12px;background:var(--surface);color:var(--ink);box-shadow:0 12px 40px rgba(0,0,0,.35);
+}
+dialog.modal::backdrop{background:rgba(10,14,16,.55);}
+.modal-inner{display:flex;flex-direction:column;max-height:92vh;}
+.modal-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);}
+.modal-head h3{font-size:1.1rem;margin-top:2px;}
+.modal-body{padding:14px 18px 18px;overflow:auto;display:flex;flex-direction:column;gap:10px;}
+
+.checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}
+.check{display:flex;gap:10px;align-items:flex-start;padding:8px 11px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);}
+.check p{margin:2px 0 0;font-size:12px;color:var(--ink-soft);}
+.check-ic{flex:0 0 18px;text-align:center;font-weight:700;}
+.check-ok{border-left:3px solid var(--st-run);}   .check-ok .check-ic{color:var(--st-run-text);}
+.check-info{border-left:3px solid var(--accent);} .check-info .check-ic{color:var(--accent);}
+.check-warn{border-left:3px solid var(--st-idle);} .check-warn .check-ic{color:var(--st-idle-text);}
+.check-block{border-left:3px solid var(--st-alarm);background:rgba(208,59,59,.07);} .check-block .check-ic{color:var(--st-alarm-text);}
+.check .chk{white-space:normal;margin-top:6px;font-size:12px;color:var(--ink);}
+.confirm-box{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--accent);border-radius:10px;background:var(--accent-soft);}
+.result{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:10px;border:1px solid var(--line);}
+.result p{margin:3px 0 0;font-size:12.5px;}
+.result-ic{font-size:20px;font-weight:700;line-height:1.2;}
+.result-ok{border-color:var(--st-run);background:rgba(12,163,12,.08);} .result-ok .result-ic{color:var(--st-run-text);}
+.result-bad{border-color:var(--st-alarm);background:rgba(208,59,59,.08);} .result-bad .result-ic{color:var(--st-alarm-text);}
+.result-warn{border-color:var(--st-idle);background:rgba(250,178,25,.12);} .result-warn .result-ic{color:var(--st-idle-text);}
+.chip-wrap{white-space:normal;max-width:260px;}
+.tbl-pending td{vertical-align:top;}
+.tbl-pending input{min-width:92px;}
+@media (max-width:640px){
+  .fld-grid{grid-template-columns:1fr;}
+  dialog.modal{width:98vw;}
+  .modal-body,.modal-head{padding-left:12px;padding-right:12px;}
 }

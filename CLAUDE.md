@@ -168,7 +168,38 @@ Henüz gerçek tornada denenmedi. Ortam: PC Simulator'ı **kısa yoldan** çalı
       aç). İsim-yalnız `MultiTCPNcGetDirFiles` çıktıyı **1024 karakterde keser**. Dizin yoluna joker
       (`KLASOR\1*`) **işe yaramıyor**. Yani **~100'den büyük klasör API ile tam listelenemiyor**; büyük
       klasörler için FTP `NLST/LIST` (kök=`NcFiles`) gerekecek (henüz torna 8'de denenmedi).
-    Yazma/taşıma/kopyalama gerçek tornada HENÜZ denenmedi.
+    **İlk gerçek yazma denemesi (torna 8, ÜRETİM SIRASINDA, kullanıcı izniyle, 2026-10-07, 2 deneme):
+    BAŞARISIZ, tornada değişiklik YOK.** Tüm ön kontroller geçti (durum `START`/`AUTO`, alarm yok, boş
+    yer 3,7 MB, hedef klasör var, ad çakışması yok). `UPLOAD_nc_mem` `rc=0` döndü ama aktarım hiç
+    başlamadı (`isFileUploadDone=False`, ilerleme `0/0`); kütüphane ilk 4 bağlantıdan sonra
+    **5572'ye (FileTransfer) ~1-2 sn'de bir yeni TCP bağlantısı açıp bırakıyor** (45 sn'de ~35 kez):
+    torna bağlantıyı kabul ediyor ama aktarım başlamıyor. Kalıntı yok (salt okunur kök listesiyle
+    doğrulandı). Sebep bilinmiyor: (1) sunucu üretim sırasında (`START`) dosya aktarımını reddediyor
+    olabilir, (2) tornada hazırlık dizini `\DiskC\ServerTmp\Tmp\NcFiles` olmayabilir, (3) başka.
+    **Boştayken (`READY/STOP`) henüz denenmedi**, bu iki ihtimali ayırır. `UploadNCFile`'ın kendi
+    koruması yalnızca "START iken ÇALIŞAN programın adıyla yükleme"yi reddeder (`return 17`), başka
+    adla yüklemeyi engellemez (IL'den). Gerçek tornada `DEL_nc_mem` **olmayan dosyada zaman aşımına
+    uğrar** (simülatörde `rc=0` idi): silmeden önce listeyle varlığı doğrula. Taşıma/kopyalama
+    gerçek tornada henüz denenmedi (yükleme geçmediği için). Araç: `TornaYaz.cs` (`kontrol` /
+    `gonder` / `gonder-calisirken`; ön kontroller + geçici ad + SHA + taşıma + son yerinde doğrulama).
+    **FTP (torna 8, 2026-10-07, YALNIZ OKUMA ile yoklandı, yazma denenmedi):** port 21 açık, anonim giriş
+    (`331`/`230`), sunucu `Windows_CE version 7.0`, kök = `NcFiles` (`CWD AA` çalışır). `HELP` komutları:
+    `USER PASS QUIT PORT PASV TYPE RETR STOR RNFR RNTO DELE CWD XCWD LIST NLST SYST HELP NOOP MKD XMKD
+    RMD XRMD PWD XPWD CDUP XCUP MODE STRU` (SIZE/MDTM/FEAT/APPE/REST YOK). `LIST` biçimi DOS tipi
+    (`MM-DD-YY HH:MM <DIR>|boyut ad`). **FTP, API'nin başaramadığını yapıyor:** 207 dosyalı klasör
+    tam listelendi (API ~100'de takılıyordu), dosya tarihleri GEÇERLİ (API'de bozuktu), boş klasör
+    `LIST` ile 0 satır, `MKD` ile yeni müşteri klasörü açılabilir, `STOR` + `RNFR/RNTO` ile geçici
+    adla yükleyip nihai ada çevirmek mümkün. SMB (445/139) torna 8'de KAPALI.
+    **FTP YAZMA UÇTAN UCA ÇALIŞTI (torna 8, ÜRETİM SIRASINDA, 2026-10-07, ilk denemede):** anonim
+    kullanıcı yazabiliyor. `curl.exe -T kaynak ftp://IP/KLASOR/ZZUPxxxxxx` (`TYPE I` + `STOR`, `226`)
+    → `LIST` (boyut doğru) → `RETR` ile geri oku, SHA-256 ESIT → `-Q "+RNFR ZZUPxxxxxx" -Q "+RNTO NIHAIAD"`
+    (`350`/`250`; `+` öneki komutu `CWD`'den SONRA gönderir) → `LIST` (nihai ad var, geçici yok) → `RETR`
+    ile son yerinde SHA-256 ESIT. 1555 bayt, ~birkaç sn, API yuvası kullanmadı, tornada kalıntı yok.
+    **Bu yüzden aktarım yolu FTP; SDK yalnız durum okuma için.** Denenmedi: `RNTO`'nun hedefte aynı ad
+    varken ezip ezmediği (öncesinde `LIST` ile çakışma denetimi ŞART, ezme varsayılması yasak), `MKD`/`RMD`,
+    `DELE`. SDK'yı atladığı için kontrolcü korumaları (çalışan programı koruma) yoktur: durum, seçili
+    program ve ad çakışması denetimi bizde. Yükleme `TYPE I` (ikili) ile yapılmalı. FTP, API oturum
+    yuvası (4 sınırı) tüketmez. Klasöre düşen program AKTİF olmaz; operatör panelden seçer.
   - Yerel kütüphane yanlış argümanda **try/catch'in yakalayamadığı şekilde süreci düşürür**
     (`MSVCR80 0xC000000D`): aktarım ayrı süreçte çalışmalı, yalnızca burada doğrulanan çağrı biçimleri
     kullanılmalı. Aktarım kodunda `WRITE_nc_main`, `RemoteProgExecute`, `UPLOAD_software/plc_file/

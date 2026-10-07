@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "sim": "node simulator/index.js",
+    "demo": "node scripts/demo.js",
     "dev": "node scripts/dev.js",
     "test": "node --test \"backend/**/*.test.js\""
   }

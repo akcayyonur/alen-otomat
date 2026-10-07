@@ -245,6 +245,7 @@ Bunlar **tek ziyarette** yapılmalı, çünkü IP değişikliği reboot gerektir
 npm run dev     # backend + simülatör birlikte
 npm start       # yalnız backend  → http://localhost:3000
 npm run sim     # yalnız simülatör
+npm run demo    # backend + data/gercek.db'deki GERÇEK kaydı canlı gibi oynatır (demo için)
 npm test        # backend testleri (node:test, bağımlılık yok)
 ```
 
@@ -262,6 +263,12 @@ IP değiştiğinde ajan kendiliğinden yakalar, yeniden başlatma gerekmez.
 **Backend hazır değilse ajan çıkmaz, bekler** (hazır olana ya da liste dolana kadar 5
 sn'de bir, sonra dakikada bir dener): açılışta ikisi aynı anda kalkar ve çıkan bir
 ajanı kimse yeniden başlatmaz. Görev ayrıca 30 sn gecikmeyle tetiklenir.
+
+**Demo (`npm run demo`):** `simulator/replay.js` gerçek tezgahtan yakalanıp `gercek.db`'de
+duran örnekleri her saniye son değeri tutarak backend'e yollar (kayıt bitince başa döner,
+birikimli sayaçlar geriye gitmesin diye kaydırılır). Backend **ayrı** `data/demo.db`'ye
+yazar ve her başlatmada sıfırlar; böylece oynatılan veri gerçek kaydı kirletmez. Ekranda
+"oynatma" olduğunu gösteren bir işaret YOK — sunumda söylenmeli.
 
 Geçersiz kılmak gerekirse:
 - tek tezgah: `--host 192.168.1.101 --machine-id CNC-01`

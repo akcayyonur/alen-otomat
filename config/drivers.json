@@ -32,7 +32,46 @@
       "verifiedOn_detay": "GERÇEK TEZGAH: 192.168.88.99 üzerinde 16:35-16:37 arası 104 örnek alındı, tezgah KESERKEN. Status=START (104/104) → RUNNING eşlemesi doğrulandı. Parça sayacı 1298→1303 (2 dakikada 5 parça), ömür boyu 11400→11405, PowerOn/Kesme/Çalışma sayaçları saniyede 1 arttı. Program: 140100187. PC SIMULATOR: tezgah boştayken Status=READY → IDLE eşlemesi doğrulandı. READ_nc_current_block her ikisinde de -18 (desteklenmiyor).",
       "controllers": [
         "SYNTEC 11B",
-        "SYNTEC 11TB"
+        "SYNTEC 11TB",
+        "SYNTEC 22B",
+        "SYNTEC 22TB"
+      ],
+      "defaultModel": "11TB",
+      "_modelAciklama": "Aynı sürücü (RemoteAPI) iki kontrolcü ailesini konuşur; fark, Syntec'in istemci paketidir. İki paket AYNI SÜREÇTE yüklenemez (aynı adlı yerel DLL'ler), bu yüzden her model için ayrı bir ajan süreci çalışır ve yalnız kendi modelindeki tezgahları okur (/api/agent/machines?model=). clientDll: o paketteki yönetilen istemci DLL'i. agentDir: kurulumda ajanın bulunduğu klasör. fileTransfer.sendEnabled=false: o modelde program GÖNDERME kapalı (okuma/tarama açık); gerçek tezgahta doğrulanınca true yapılır.",
+      "models": [
+        {
+          "id": "11TB",
+          "label": "SYNTEC 11TB",
+          "controller": "SYNTEC 11B",
+          "controllerPanel": "SYNTEC 11TB",
+          "package": "11BLathe_W32_10.116.x",
+          "clientDll": "Syntec.RemoteCNC.Win32.dll",
+          "agentDir": "agent",
+          "status": "supported",
+          "verifiedOn": "2026-10-06",
+          "verifiedAgainst": "Gerçek tezgahlar (yazılım 10.116.54S) ve Syntec W32 PC Simulator 10.116.56Q",
+          "fileTransfer": {
+            "sendEnabled": true
+          }
+        },
+        {
+          "id": "22TB",
+          "label": "SYNTEC 22TB",
+          "controller": "SYNTEC 22B",
+          "controllerPanel": "SYNTEC 22TB",
+          "softwareVersion": "10.118.88T",
+          "package": "22BLathe_W32_10.118.88Z",
+          "clientDll": "Syntec.OpenCNC.dll",
+          "agentDir": "agent22",
+          "status": "experimental",
+          "verifiedOn": "2026-10-07",
+          "verifiedAgainst": "YALNIZ Syntec W32 PC Simulator 10.118.88Z: kimlik (CncType 22B, NC sürüm 10.118.88.26) ve 5 okuma fonksiyonu çalıştı, READ_nc_current_block -18 (11B ile aynı). Gerçek 22TB tezgahta DENENMEDİ.",
+          "fileTransfer": {
+            "sendEnabled": false,
+            "reason": "22TB kontrolcüsünün FTP sunucusu (kök klasör, aynı adın üzerine yazma davranışı) gerçek tezgahta henüz doğrulanmadı. Önce 'Tezgahtaki programları tara' (salt okunur) ile klasör yapısı doğrulanmalı; sonra config/drivers.json'da bu modelin fileTransfer.sendEnabled değeri true yapılır."
+          },
+          "notes": "22B paketinde yönetilen istemci ayrı bir DLL değil: aynı Syntec.Remote.SyntecRemoteCNC sınıfı Syntec.OpenCNC.dll'in içinde (sürüm 10.118.88.26) ve okuma yöntemlerinin imzaları 11B ile birebir aynı. 22B yerel DLL'leri Visual C++ 2005 çalışma zamanına bağlı değil."
+        }
       ],
       "reads": [
         "spindleRpm",
@@ -55,6 +94,7 @@
       "requires": [
         "Kontrolcüde Kernel Server çalışır durumda ('Start server while boot' = açık)",
         "Ajan, Syntec Bin klasörünün İÇİNDEN çalıştırılmalı — yönetilen sarmalayıcı, yanındaki native DLL'leri (OCApi.dll, OCUser.dll, MMICommon32.dll …) çalışma anında yüklüyor. Dosyaları tek tek seçip taşıma, klasörü bölme.",
+        "Her kontrolcü modeli (11TB / 22TB) kendi Syntec paketinden çalışan ayrı bir ajan süreci ister; iki paketi tek klasörde birleştirme",
         "PC güvenlik duvarında TCP 5568 ve 5570 GELEN bağlantıya açık (kontrolcü PC'ye geri bağlantı açıyor)",
         "Ajan 32-bit (x86) derlenmiş olmalı — Syntec dll'leri native 32-bit",
         "İndirilen paket Windows tarafından bloke gelir: Get-ChildItem -Recurse | Unblock-File"

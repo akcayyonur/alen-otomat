@@ -26,55 +26,55 @@
     {
       "id": "CNC-01",
       "name": "ARIX Torna 1",
-      "ip": "192.168.1.101",
-      "identified": true,
-      "cncSerial": "M9L4379",
-      "year": 2020
+      "ip": "192.168.88.91",
+      "identified": false
     },
     {
       "id": "CNC-02",
       "name": "ARIX Torna 2",
-      "ip": "192.168.1.102",
-      "identified": true,
-      "cncSerial": "M4L0007"
+      "ip": "192.168.88.92",
+      "identified": false
     },
     {
       "id": "CNC-03",
       "name": "ARIX Torna 3",
-      "ip": "192.168.1.103",
+      "ip": "192.168.88.93",
       "identified": false
     },
     {
       "id": "CNC-04",
       "name": "ARIX Torna 4",
-      "ip": "192.168.1.104",
+      "ip": "192.168.88.94",
       "identified": false
     },
     {
       "id": "CNC-05",
       "name": "ARIX Torna 5",
-      "ip": "192.168.1.105",
-      "identified": false
+      "ip": "192.168.88.98",
+      "identified": true,
+      "cncSerial": "M4L0007"
     },
     {
       "id": "CNC-06",
       "name": "ARIX Torna 6",
-      "ip": "192.168.1.106",
+      "ip": "192.168.88.96",
       "identified": false
     },
     {
       "id": "CNC-07",
       "name": "ARIX Torna 7",
       "ip": "192.168.88.99",
-      "identified": false
+      "identified": true,
+      "cncSerial": "M9L4379",
+      "year": 2020
     },
     {
       "id": "CNC-08",
       "name": "ARIX Torna 8",
-      "ip": "192.168.88.98",
+      "ip": "192.168.88.97",
       "identified": false
     }
   ],
-  "_ipNotu": "IP'ler kablo cekimi sirasinda atanacak. Kontrolcu ag ayarini YALNIZCA acilista uyguluyor, yani her IP degisikligi bir reboot demek - tek ziyarette yapilmali. Ayni ziyarette 'Start server while boot' ayari da acik konuma alinmali, yoksa reboot sonrasi OCAPIServer kapali gelir.",
+  "_ipNotu": "IP plani (2026-10-07): CNC-01..08 = .91 .92 .93 .94 .98 .96 .99 .97 (192.168.88.x). Su an yalnizca .98 (CNC-05) ve .99 (CNC-07) tornalarda verildi; digerleri atanacak. Kontrolcu ag ayarini YALNIZCA acilista uyguluyor, yani her IP degisikligi bir reboot demek - tek ziyarette yapilmali. Ayni ziyarette 'Start server while boot' ayari da acik konuma alinmali, yoksa reboot sonrasi OCAPIServer kapali gelir.",
   "_surucuNotu": "Hangi alanlarin okunabildigi config/drivers.json'daki surucu tanimindan gelir, buradan degil. Bir tezgah istisnaysa kendi 'reports' listesini yazarak ezebilir. Tezgaha farkli bir marka panel takilirsa yalnizca 'driverId' degisir."
 }

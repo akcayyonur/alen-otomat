@@ -12,10 +12,17 @@
     alinip payload'a konur. payload\ ve output\ .gitignore'da.
 
     Kullanim:
-        .\build-installer.ps1 -SyntecBin "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin"
+        .\build-installer.ps1 -SyntecBin   "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin" `
+                              -SyntecBin22 "C:\...\22BLathe_W32_10.118.88Z\DiskC\OpenCNC\Bin"
 
     -SyntecBin verilmezse CNC_SYNTEC_BIN ortam degiskenine, o da yoksa
     Indirilenler klasorune bakar.
+
+    -SyntecBin22 (22TB kontrolcu ailesi, ikinci Syntec paketi): verilmezse
+    CNC_SYNTEC_BIN22'ye, o da yoksa Indirilenler'deki 22BLathe* klasorune bakar;
+    bulunamazsa paket 22TB DESTEGI OLMADAN uretilir (yalniz 11TB tezgahlar okunur).
+    Iki paketin yerel DLL'leri ayni adi tasidigi icin ayni surecte yuklenemez: her
+    model kurulumda kendi klasorunde (agent\ ve agent22\) ayri bir ajandir.
 
     Gereken: Inno Setup 6 (winget install JRSoftware.InnoSetup), Node 22.5+ (x64),
              .NET Framework 4.0 derleyicisi (Windows'ta hazir gelir).
@@ -24,6 +31,9 @@
 [CmdletBinding()]
 param(
     [string]$SyntecBin = $env:CNC_SYNTEC_BIN,
+
+    # 22TB ailesinin Syntec paketi (OpenCNC\Bin). Istege bagli.
+    [string]$SyntecBin22 = $env:CNC_SYNTEC_BIN22,
 
     # Pakete gomulecek node.exe. Verilmezse PATH'teki Node kullanilir.
     [string]$NodeExe,
@@ -42,6 +52,21 @@ function Adim($m)  { Write-Host ''; Write-Host "  $m" -ForegroundColor Cyan }
 function Tamam($m) { Write-Host "  [+] $m" -ForegroundColor Green }
 function Bilgi($m) { Write-Host "  [ ] $m" -ForegroundColor Gray }
 function Hata($m)  { Write-Host "  [X] $m" -ForegroundColor Red }
+
+# Indirilen Syntec paketleri Windows tarafindan "internetten" isaretli gelir (Zone.Identifier).
+# Copy-Item bu isareti de kopyalar ve .NET bloke DLL'leri yuklemeyi reddeder (0x80131515);
+# duman testi paketten calistigi icin isaret kaldirilir. (Kurulu PC'de dosyalari Setup yeniden
+# olusturur, isaret tasimaz; kurulum.ps1 ayrica Unblock-File yapar.) Kaldirilan dosya sayisini doner.
+function BlokeKaldir($dizin) {
+    $n = 0
+    Get-ChildItem $dizin -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if (Get-Content -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+            $n++
+            Unblock-File -LiteralPath $_.FullName
+        }
+    }
+    return $n
+}
 
 function Vazgec($m) {
     Write-Host ''
@@ -72,7 +97,39 @@ foreach ($dll in 'Syntec.RemoteCNC.Win32.dll', 'OCApi.dll', 'OCUser.dll', 'MMICo
         Vazgec "Syntec Bin klasorunde $dll yok: $SyntecBin"
     }
 }
-Tamam "Syntec Bin: $SyntecBin"
+Tamam "Syntec Bin (11TB): $SyntecBin"
+
+# --- Syntec Bin, 22TB ailesi (istege bagli) ---
+# 22B paketinde yonetilen istemci ayri bir DLL degil: SyntecRemoteCNC sinifi
+# Syntec.OpenCNC.dll'in ICINDE. (11B paketinde de bir Syntec.OpenCNC.dll var ama sinifi
+# icermez; bu yuzden dosyanin varligi yetmez, icinde sinif adi aranir.)
+if (-not $SyntecBin22) {
+    $ind = Join-Path $env:USERPROFILE 'Downloads'
+    $aday = Get-ChildItem $ind -Directory -Filter '22BLathe*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName 'DiskC\OpenCNC\Bin' } |
+        Where-Object { Test-Path (Join-Path $_ 'Syntec.OpenCNC.dll') } | Select-Object -First 1
+    if ($aday) { $SyntecBin22 = $aday; Bilgi "22TB paketi Indirilenler'de bulundu" }
+}
+$bin22Var = $false
+if ($SyntecBin22) {
+    if (-not (Test-Path $SyntecBin22)) { Vazgec "Syntec Bin (22TB) klasoru yok: $SyntecBin22" }
+    if ((Resolve-Path $SyntecBin22).Path -eq (Resolve-Path $SyntecBin).Path) {
+        Vazgec '-SyntecBin22, 11TB paketiyle ayni klasor: iki farkli Syntec paketi gerekir.'
+    }
+    foreach ($dll in 'Syntec.OpenCNC.dll', 'OCApi.dll', 'OCUser.dll', 'MMICommon32.dll') {
+        if (-not (Test-Path (Join-Path $SyntecBin22 $dll))) {
+            Vazgec "Syntec Bin (22TB) klasorunde $dll yok: $SyntecBin22"
+        }
+    }
+    $oc = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $SyntecBin22 'Syntec.OpenCNC.dll')))
+    if (-not $oc.Contains('SyntecRemoteCNC')) {
+        Vazgec 'Syntec.OpenCNC.dll (22TB) SyntecRemoteCNC sinifini icermiyor: bu RemoteAPI icin dogru paket degil.'
+    }
+    $bin22Var = $true
+    Tamam "Syntec Bin (22TB): $SyntecBin22"
+} else {
+    Bilgi '22TB paketi verilmedi/bulunamadi: kurulum 22TB destegi OLMADAN uretilecek (-SyntecBin22).'
+}
 
 # --- Node ---
 if (-not $NodeExe) { $NodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source }
@@ -184,6 +241,8 @@ foreach ($alt in Get-ChildItem $SyntecBin -Directory) {
 }
 $dllSayi = (Get-ChildItem $ajanDizin -Recurse -File).Count
 Tamam "Syntec paketi: $dllSayi dosya"
+$bloke = BlokeKaldir $ajanDizin
+if ($bloke -gt 0) { Bilgi "11TB paketinde $bloke dosyanin internet (bloke) isareti kaldirildi" }
 
 # Ajan: kaynaktan, x86 - paketteki exe her zaman depodaki kodla ayni olsun.
 $ajanExe = Join-Path $ajanDizin 'syntec-agent.exe'
@@ -198,6 +257,25 @@ $b = [IO.File]::ReadAllBytes($ajanExe)
 $makine = [BitConverter]::ToUInt16($b, [BitConverter]::ToInt32($b, 0x3C) + 4)
 if ($makine -ne 0x014C) { Vazgec ('ajan x86 degil (PE makine kodu 0x{0:X})' -f $makine) }
 Tamam 'ajan derlendi (x86)'
+
+# 22TB ailesi: kendi Syntec paketi + AYNI ajan exe'si ayri klasorde (agent22\). Iki paketin
+# yerel DLL'leri ayni adi tasidigi icin tek surecte yuklenemez; ajan hangi modeli konustugunu
+# (--model 22TB) ve hangi DLL'i yukleyecegini klasorden/bayraktan bilir.
+$ajan22Dizin = Join-Path $Payload 'agent22'
+$ajan22Exe = Join-Path $ajan22Dizin 'syntec-agent.exe'
+if ($bin22Var) {
+    New-Item -ItemType Directory -Force -Path $ajan22Dizin | Out-Null
+    Get-ChildItem $SyntecBin22 -File | Where-Object { -not (& $haric $_) } |
+        Copy-Item -Destination $ajan22Dizin
+    foreach ($alt in Get-ChildItem $SyntecBin22 -Directory) {
+        Copy-Item $alt.FullName (Join-Path $ajan22Dizin $alt.Name) -Recurse
+    }
+    Copy-Item $ajanExe $ajan22Exe
+    $dll22Sayi = (Get-ChildItem $ajan22Dizin -Recurse -File).Count
+    Tamam "Syntec paketi (22TB): $dll22Sayi dosya"
+    $bloke22 = BlokeKaldir $ajan22Dizin
+    if ($bloke22 -gt 0) { Bilgi "22TB paketinde $bloke22 dosyanin internet (bloke) isareti kaldirildi" }
+}
 
 # Masaustu uygulamasi: acinca backend ve ajani ayaga kaldirir, dashboard'u acar.
 # Simgesi de burada cizilir (launcher\make-icon.ps1) - dis resim dosyasi yok.
@@ -265,28 +343,50 @@ if (-not $TestAtla) {
     if ($u.ExitCode -ne 1) { Vazgec 'masaustu uygulamasi kapali backend''i fark etmedi' }
     Tamam 'masaustu uygulamasi kapali backend''i de dogru ayirt ediyor'
 
-    # Ajan: DLL'leri yanindaki klasorden gercekten yukleyebiliyor mu. Ulasilamaz
-    # bir adrese baglanmaya calistirip ilk saniyelerin ciktisina bakiyoruz;
-    # yukleme hatasi (BadImageFormat, eksik native DLL) hemen yazilir.
+    # Ajan: DLL'leri yanindaki klasorden gercekten yukleyebiliyor mu. Ulasilamaz bir adrese
+    # (kapali yerel port) baglanmaya calistirip gunluge bakiyoruz. OLUMLU kanit bekleriz: ajan,
+    # istemci DLL'i yuklenip nesne olusturulunca "Syntec istemcisi yuklendi" yazar; yukleme hatasi
+    # (BadImageFormat, eksik native DLL, bloke dosya) yazarsa hemen basarisiz. Sabit sure bekleyip
+    # "hata yok" demek yaniltirdi: yavas baslangicta (taze paket, antivirus taramasi) hata satiri
+    # henuz yazilmamis olabilir ve test bos yere gecerdi.
     # Ciktiyi --log ile alip kontrol ediyoruz: gorevlerin kullanacagi yol bu
     # (kabuk yonlendirmesi yok), yani gunluk ozelligi de ayni anda sinanir.
-    $log = Join-Path $env:TEMP 'cnc-duman-ajan.txt'
-    Remove-Item "$log*" -Force -ErrorAction SilentlyContinue
-    $ajan = Start-Process $ajanExe -ArgumentList '--host', '127.0.0.1', '--machine-id', 'DUMAN', '--log', "`"$log`"" `
-        -WorkingDirectory $ajanDizin -PassThru -WindowStyle Hidden
-    Start-Sleep -Seconds 6
-    if (-not $ajan.HasExited) { Stop-Process -Id $ajan.Id -Force }
-    $metin = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
-    Remove-Item "$log*" -Force -ErrorAction SilentlyContinue
-    if (-not $metin) { Vazgec 'ajan --log ile gunluk dosyasi yazmadi' }
-
-    if ($metin -match 'DLL yuklenemedi|nesne olusturulamadi|tipi bulunamadi|BadImageFormat') {
-        Hata 'Syntec DLL yuklenemedi:'
-        Write-Host $metin
-        exit 1
+    function AjanDumanTesti($exe, $dizin, $id, $model, $dllAdi) {
+        $log = Join-Path $env:TEMP "cnc-duman-$id.txt"
+        Remove-Item "$log*" -Force -ErrorAction SilentlyContinue
+        $argumanlar = @('--host', '127.0.0.1', '--machine-id', $id, '--model', $model, '--log', "`"$log`"")
+        $p = Start-Process $exe -ArgumentList $argumanlar -WorkingDirectory $dizin -PassThru -WindowStyle Hidden
+        $metin = ''
+        $son = (Get-Date).AddSeconds(40)
+        while ((Get-Date) -lt $son) {
+            Start-Sleep -Milliseconds 500
+            $metin = if (Test-Path $log) { Get-Content $log -Raw -ErrorAction SilentlyContinue } else { '' }
+            if ($metin -match 'istemcisi yuklendi|DLL yuklenemedi|nesne olusturulamadi|tipi bulunamadi|BadImageFormat|KRITIK HATA') { break }
+            if ($p.HasExited) { break }
+        }
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+        Remove-Item "$log*" -Force -ErrorAction SilentlyContinue
+        if (-not $metin) { Vazgec "ajan ($model) --log ile gunluk dosyasi yazmadi" }
+        if ($metin -match 'DLL yuklenemedi|nesne olusturulamadi|tipi bulunamadi|BadImageFormat|KRITIK HATA') {
+            Hata "Syntec DLL yuklenemedi ($model):"
+            Write-Host $metin
+            exit 1
+        }
+        if ($metin -notmatch 'Syntec Edge Agent') { Vazgec "ajan ($model) beklenen ciktiyi vermedi:`n$metin" }
+        if ($metin -notmatch "model\s*:\s*$model") { Vazgec "ajan ($model) modelini bildirmedi:`n$metin" }
+        if ($metin -notmatch ('istemcisi yuklendi: ' + [regex]::Escape($dllAdi))) {
+            Vazgec "ajan ($model) $dllAdi yuklediginin kanitini yazmadi (40 sn):`n$metin"
+        }
     }
-    if ($metin -notmatch 'Syntec Edge Agent') { Vazgec "ajan beklenen ciktiyi vermedi:`n$metin" }
-    Tamam 'ajan DLL''leri yukleyebiliyor (x86)'
+
+    AjanDumanTesti $ajanExe $ajanDizin 'DUMAN' '11TB' 'Syntec.RemoteCNC.Win32.dll'
+    Tamam 'ajan Syntec.RemoteCNC.Win32.dll yukleyebiliyor (x86, 11TB)'
+
+    # 22TB: ayni sinav, kendi paketinden: SyntecRemoteCNC, Syntec.OpenCNC.dll icinden yuklenebiliyor mu.
+    if ($bin22Var) {
+        AjanDumanTesti $ajan22Exe $ajan22Dizin 'DUMAN22' '22TB' 'Syntec.OpenCNC.dll'
+        Tamam 'ajan Syntec.OpenCNC.dll yukleyebiliyor (x86, 22TB)'
+    }
 }
 
 # ----------------------------------------------------------------- derleme
@@ -313,6 +413,7 @@ Write-Host '  HAZIR' -ForegroundColor Green
 Write-Host ''
 Write-Host "    $($setup.FullName)" -ForegroundColor White
 Write-Host ('    {0:N1} MB   SHA256 {1}' -f ($setup.Length / 1MB), $hash.Substring(0, 16)) -ForegroundColor Gray
+Write-Host ('    Kontrolcu aileleri: 11TB' + $(if ($bin22Var) { ' + 22TB (agent22\)' } else { ' (22TB paketlenmedi)' })) -ForegroundColor Gray
 Write-Host ''
 Write-Host '  NOT: bu dosya Syntec DLL''lerini icerir. Depoya koyma, herkese acik paylasma.' -ForegroundColor Yellow
 Write-Host ''

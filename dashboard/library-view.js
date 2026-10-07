@@ -512,6 +512,13 @@ export function renderMachinePrograms(host, machine) {
     render();
   }
 
+  /** Göndermeyi engelleyen neden (özellik kapalı / bu kontrolcü modelinde doğrulanmadı) ya da null. */
+  function sendBlocked() {
+    if (!st.cfg.transferEnabled) return 'Gönderme kapalı (TRANSFER_DISABLED=1)';
+    const info = mInfo();
+    return info?.sendAllowed === false ? (info.sendBlockedReason ?? 'Bu kontrolcü modelinde gönderme kapalı') : null;
+  }
+
   function render() {
     const info = mInfo();
     const actions = host.querySelector('[data-role="actions"]');
@@ -520,9 +527,14 @@ export function renderMachinePrograms(host, machine) {
       body().innerHTML = `<p class="notice">Bu tezgahta program aktarımı kullanılamıyor: ${escapeHtml(info?.reason ?? 'bilinmiyor')}</p>`;
       return;
     }
+    const blocked = sendBlocked();
     actions.innerHTML =
       '<button type="button" class="icon-btn" data-act="scan">Tezgahtaki programları tara</button>' +
-      `<button type="button" class="icon-btn btn-primary" data-act="send"${st.cfg.transferEnabled ? '' : ' disabled title="Gönderme kapalı (TRANSFER_DISABLED=1)"'}>Program gönder…</button>`;
+      `<button type="button" class="icon-btn btn-primary" data-act="send"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Program gönder…</button>` +
+      // Özellik genelde açık ama bu kontrolcü modelinde doğrulanmamışsa nedeni göster (üzerine gelmeden de görünsün).
+      (blocked && st.cfg.transferEnabled
+        ? `<span class="hint" style="margin:0" title="${escapeHtml(blocked)}">${escapeHtml(info.controllerModel ?? '')} modelinde gönderme, gerçek tezgahta doğrulanana kadar kapalı</span>`
+        : '');
 
     const d = st.data;
     if (!d.scan || d.scan.entries == null) {
@@ -573,7 +585,7 @@ export function renderMachinePrograms(host, machine) {
     if (details.dataset.missing) {
       body_.innerHTML = '<table class="tbl"><thead><tr><th>Müşteri</th><th>Program</th><th>Sürüm</th><th class="num">Boyut</th><th></th></tr></thead><tbody>' +
         d.missing.map((m) => `<tr><td>${escapeHtml(folderLabel(m.customer))}</td><td class="mono"><b>${escapeHtml(m.name)}</b></td><td>v${m.latestVersion}</td>` +
-          `<td class="num">${escapeHtml(kb(m.size))}</td><td><button type="button" class="icon-btn icon-btn-sm" data-act="send" data-program="${m.programId}"${st.cfg.transferEnabled ? '' : ' disabled'}>Gönder…</button></td></tr>`).join('') +
+          `<td class="num">${escapeHtml(kb(m.size))}</td><td><button type="button" class="icon-btn icon-btn-sm" data-act="send" data-program="${m.programId}"${sendBlocked() ? ` disabled title="${escapeHtml(sendBlocked())}"` : ''}>Gönder…</button></td></tr>`).join('') +
         '</tbody></table>';
       return;
     }

@@ -44,14 +44,19 @@ $ErrorActionPreference = 'Stop'
 
 $BackendGorev = 'CNC Telemetri - Backend'
 $AjanGorev    = 'CNC Telemetri - Edge Agent'
+# 22TB kontrolcu ailesi: ayni ajan, kendi Syntec paketinden (agent22\) calisan AYRI surec.
+# (Iki paketin yerel DLL'leri ayni adi tasidigi icin tek surecte yuklenemez.) Adin sonunda
+# model yazar; 11TB gorevinin adi eski kurulumlarla uyumlu kalsin diye degismedi.
+$Ajan22Gorev  = 'CNC Telemetri - Edge Agent (22TB)'
 $FwKural      = 'CNC Telemetri'
 
 $ProjeKok = Split-Path -Parent $PSScriptRoot
 $LogDizin = Join-Path $ProjeKok 'logs'
 
 # Paketli kurulumda Setup.exe'nin yerlestirdigi dosyalar.
-$PaketliNode = Join-Path $ProjeKok 'runtime\node.exe'
-$PaketliAjan = Join-Path $ProjeKok 'agent\syntec-agent.exe'
+$PaketliNode   = Join-Path $ProjeKok 'runtime\node.exe'
+$PaketliAjan   = Join-Path $ProjeKok 'agent\syntec-agent.exe'
+$PaketliAjan22 = Join-Path $ProjeKok 'agent22\syntec-agent.exe'
 
 function Baslik($metin) {
     Write-Host ''
@@ -72,7 +77,7 @@ function YoneticiMi {
 # ----------------------------------------------------------------- durdurma
 
 function GorevleriDurdur {
-    foreach ($g in @($BackendGorev, $AjanGorev)) {
+    foreach ($g in @($BackendGorev, $AjanGorev, $Ajan22Gorev)) {
         if (Get-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue) {
             Stop-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue
         }
@@ -107,7 +112,7 @@ if ($Kaldir) {
     Baslik 'Kurulum kaldiriliyor'
     GorevleriDurdur
     KokSurecleriniDurdur
-    foreach ($g in @($BackendGorev, $AjanGorev)) {
+    foreach ($g in @($BackendGorev, $AjanGorev, $Ajan22Gorev)) {
         if (Get-ScheduledTask -TaskName $g -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskName $g -Confirm:$false
             Tamam "gorev silindi: $g"
@@ -194,6 +199,7 @@ if ($paketliAjanVar) {
 # ------------------------------------------------------------- ajan kurulumu
 
 $ajanExe = $null
+$ajan22Exe = $null
 $ajanCalismaDizini = $SyntecBin
 if ($paketliAjanVar) {
     Baslik 'Edge Agent'
@@ -205,7 +211,15 @@ if ($paketliAjanVar) {
         Unblock-File -ErrorAction SilentlyContinue
 
     $ajanExe = $PaketliAjan
-    Tamam "hazir: $ajanExe"
+    Tamam "hazir: $ajanExe (11TB)"
+
+    # 22TB ailesi (varsa): kendi paketi, kendi klasoru.
+    if (Test-Path $PaketliAjan22) {
+        Get-ChildItem (Split-Path -Parent $PaketliAjan22) -Recurse -ErrorAction SilentlyContinue |
+            Unblock-File -ErrorAction SilentlyContinue
+        $ajan22Exe = $PaketliAjan22
+        Tamam "hazir: $ajan22Exe (22TB)"
+    }
 } elseif ($SyntecBin -and $ajanDerlenebilir) {
     Baslik 'Edge Agent'
 
@@ -297,7 +311,18 @@ if ($ajanExe) {
     # yoksa hem sadelesir hem de supheli gorunmez (varsayilan zaten 127.0.0.1:3000).
     $ajanArg = '--log "{0}"' -f $ajanLog
     if ($Port -ne 3000) { $ajanArg = "--ingest http://127.0.0.1:$Port/api/ingest $ajanArg" }
+    # Paketli kurulumda model acik yazilir (11TB gorevi eskiden bayraksizdi, klasorden anlasilirdi).
+    if ($paketliAjanVar) { $ajanArg = "--model 11TB $ajanArg" }
     GorevKur $AjanGorev $ajanExe $ajanArg $ajanCalismaDizini 30
+}
+
+if ($ajan22Exe) {
+    # 22TB tezgah yoksa bu ajan bos listeyle bekler (CPU/bellek ihmal edilebilir) ve ayarlar
+    # ekranindan bir tezgaha 22TB modeli secilince kendiliginden okumaya baslar.
+    $ajan22Log = Join-Path $LogDizin 'ajan22.log'
+    $ajan22Arg = '--model 22TB --log "{0}"' -f $ajan22Log
+    if ($Port -ne 3000) { $ajan22Arg = "--ingest http://127.0.0.1:$Port/api/ingest $ajan22Arg" }
+    GorevKur $Ajan22Gorev $ajan22Exe $ajan22Arg (Split-Path -Parent $ajan22Exe) 30
 }
 
 # -------------------------------------------------------------- calistirma
@@ -322,7 +347,11 @@ if ($saglik -and $saglik.ok) {
 
 if ($ajanExe) {
     Start-ScheduledTask -TaskName $AjanGorev
-    Tamam 'ajan baslatildi'
+    Tamam 'ajan baslatildi (11TB)'
+}
+if ($ajan22Exe) {
+    Start-ScheduledTask -TaskName $Ajan22Gorev
+    Tamam 'ajan baslatildi (22TB)'
 }
 
 # ------------------------------------------------------------------ ozet
@@ -342,9 +371,10 @@ Write-Host '    Loglar      ' -NoNewline -ForegroundColor Gray; Write-Host $LogD
 Write-Host '    Veritabani  ' -NoNewline -ForegroundColor Gray; Write-Host (Join-Path $ProjeKok 'data')
 Write-Host ''
 Write-Host '  Siradaki adim:' -ForegroundColor Cyan
-Write-Host '    1. Dashboard > Ayarlar ekranindan her tezgaha IP gir.'
-Write-Host '       Ajan listeyi oradan aliyor; dakikada bir tazeliyor,'
-Write-Host '       tezgah eklemek icin yeniden baslatmaya gerek yok.'
+Write-Host '    1. Dashboard > Ayarlar ekranindan her tezgaha IP gir ve kontrolcu'
+Write-Host '       MODELINI (SYNTEC 11TB / 22TB) sec. Ajan listeyi oradan aliyor;'
+Write-Host '       dakikada bir tazeliyor, tezgah eklemek icin yeniden baslatmaya'
+Write-Host '       gerek yok. Yanlis model secilirse o tezgah okunamaz.'
 Write-Host '    2. Kontrolcude "Start server while boot" ayari ACIK olmali,'
 Write-Host '       yoksa reboot sonrasi OCAPIServer kapali gelir.'
 Write-Host ''

@@ -43,11 +43,17 @@ Kaldırmak: `.\kurulum.ps1 -Kaldir` (veritabanı ve loglar kalır)
 
 ## Kurulumdan sonra
 
-**1. Tezgahlara IP gir.** Dashboard → **Ayarlar** ekranı.
+**1. Tezgahlara IP gir ve kontrolcü modelini seç.** Dashboard → **Ayarlar** ekranı.
 
 Ajan tezgah listesini backend'den alıyor ve dakikada bir tazeliyor. Tezgah
 eklemek veya IP değiştirmek için ajanı yeniden başlatmana gerek yok; logda
 `yeni tezgah: CNC-03 (192.168.1.103)` satırını görürsün.
+
+**Model (SYNTEC 11TB / 22TB):** panelin sol üstünde yazan model. İki ailenin Syntec paketi
+farklı olduğu için iki ajan çalışır (`CNC Telemetri - Edge Agent` = 11TB, `... (22TB)` =
+22TB); her biri yalnız kendi modelindeki tezgahları okur. **Yanlış model seçilirse o tezgah
+hiç okunmaz** (log: ilgili ajanın `ajan.log` / `ajan22.log` dosyasında). Boş bırakmak 11TB demektir.
+22TB henüz gerçek tezgahta denenmedi ("deneysel").
 
 **2. Kontrolcü tarafı.** Her tezgahta bir kez, **tek ziyarette**:
 - Statik IP ver
@@ -59,7 +65,8 @@ eklemek veya IP değiştirmek için ajanı yeniden başlatmana gerek yok; logda
 
 ```
 logs\backend.log      backend çıktısı
-logs\ajan.log         ajan çıktısı — bağlantı sorunları burada
+logs\ajan.log         ajan çıktısı (11TB) — bağlantı sorunları burada
+logs\ajan22.log       22TB ajanının çıktısı (22TB paketi kuruluysa)
 data\telemetry.db     veritabanı (yedeklenecek tek dosya)
 ```
 

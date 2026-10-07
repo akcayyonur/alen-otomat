@@ -7,7 +7,8 @@
 ;   C:\CNC-Telemetri\
 ;     runtime\node.exe        gomulu Node (makinede Node kurulu olmasi gerekmez)
 ;     backend\ shared\ dashboard\ config\   proje kodu
-;     agent\                  syntec-agent.exe + Syntec DLL'leri (BIRLIKTE - bolunmez)
+;     agent\                  syntec-agent.exe + Syntec DLL'leri, 11TB ailesi (BIRLIKTE - bolunmez)
+;     agent22\                ayni ajan + 22TB ailesinin Syntec paketi (varsa)
 ;     kurulum\kurulum.ps1     gorev + guvenlik duvari kaydi (yukleme sonrasi cagrilir)
 ;     data\ logs\             calisirken olusur; kaldirmada SILINMEZ
 
@@ -66,6 +67,11 @@ Source: "{#Payload}\dashboard\*"; DestDir: "{app}\dashboard"; Flags: ignoreversi
 Source: "{#Payload}\kurulum\*"; DestDir: "{app}\kurulum"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Ajan + Syntec DLL'leri: klasor bolunmez, hepsi birlikte (ajan DLL'lerin yanindan calisir).
 Source: "{#Payload}\agent\*"; DestDir: "{app}\agent"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 22TB kontrolcu ailesi: ikinci Syntec paketi + ayni ajan, AYRI klasorde (iki paketin yerel DLL'leri
+; ayni adi tasidigi icin tek surecte yuklenemez). Paket 22TB olmadan uretildiyse bu bolum yoktur.
+#if DirExists(Payload + "\agent22")
+Source: "{#Payload}\agent22\*"; DestDir: "{app}\agent22"; Flags: ignoreversion recursesubdirs createallsubdirs
+#endif
 Source: "{#Payload}\package.json"; DestDir: "{app}"; Flags: ignoreversion
 ; Masaustu uygulamasi: acinca backend + ajani ayaga kaldirir, dashboard'u acar.
 Source: "{#Payload}\CNC Telemetri.exe"; DestDir: "{app}"; Flags: ignoreversion

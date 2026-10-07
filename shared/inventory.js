@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDrivers, getDriver, FALLBACK_DRIVER } from './drivers.js';
+import { loadDrivers, getDriver, resolveModel, FALLBACK_DRIVER } from './drivers.js';
 
 /**
  * Makine envanteri (CNC-TLM-001 Bolum 03A). Saha bilgisi netlestikce
@@ -38,20 +38,55 @@ export function loadInventory() {
   const shared = stripNotes(defaults);
 
   return machines.map((machine) => {
-    const merged = { ...shared, ...stripNotes(machine) };
-    const driver = getDriver(merged.driverId) ?? FALLBACK_DRIVER;
+    const own = stripNotes(machine);
+    const driver = getDriver(own.driverId ?? shared.driverId) ?? FALLBACK_DRIVER;
+
+    // Kontrolcu modeli (11TB / 22TB): tezgah ya da defaults secmisse o, yoksa surucunun
+    // varsayilani. Model YALNIZ acikca secildiyse kimlik alanlarini (kontrolcu adi,
+    // panel, yazilim) doldurur; secilmediyse defaults aynen gecerli kalir.
+    const chosen = own.controllerModel ?? shared.controllerModel ?? null;
+    const model = resolveModel(driver, chosen);
+    const fromModel = {};
+    if (chosen && model?.id === chosen) {
+      for (const key of ['controller', 'controllerPanel', 'softwareVersion']) {
+        if (model[key] != null) fromModel[key] = model[key];
+      }
+    }
+
+    const merged = { ...shared, ...fromModel, ...own };
 
     return {
       ...merged,
       driverId: driver.id,
       driverLabel: driver.label,
       driverStatus: driver.status,
+      /** Cozumlenmis kontrolcu modeli ("11TB" / "22TB"); modeli olmayan surucuda null. */
+      controllerModel: model?.id ?? null,
+      controllerModelLabel: model?.label ?? null,
       /** Telemetri mesajlarindaki `source` - surucu kimligiyle ayni. */
       source: driver.id,
       /** Tezgah ozel bir liste yazmadiysa surucunun okuyabildigi alanlar. */
       reports: [...(merged.reports ?? driver.reads)],
     };
   });
+}
+
+/**
+ * Edge Agent'in okuyacagi tezgahlar: IP'si tanimli olanlar, istenirse surucuye ve
+ * kontrolcu modeline gore suzulmus.
+ *
+ * Model suzgecinin sebebi: her kontrolcu ailesi (11TB / 22TB) kendi Syntec istemci
+ * paketini ister ve iki paket ayni surecte yuklenemez; bu yuzden her model icin ayri
+ * bir ajan calisir ve yalniz KENDI modelindeki tezgahlari gormelidir. `model` verilmezse
+ * (eski ajanlar) suzulmez.
+ */
+export function agentMachines(inventory, { driver = null, model = null } = {}) {
+  return inventory.filter(
+    (m) =>
+      m.ip &&
+      (driver == null || m.driverId === driver) &&
+      (model == null || model === '' || m.controllerModel === model),
+  );
 }
 
 /** Ayarlar ekrani icin ham yapi - cozumlenmemis haliyle. */
@@ -76,6 +111,7 @@ export function validateMachines(input) {
   if (input.length === 0) return { ok: false, errors: ['en az bir tezgah tanimli olmali'] };
 
   const selectable = new Set(loadDrivers().filter((d) => d.selectable).map((d) => d.id));
+  const defaultDriverId = readConfig().defaults?.driverId ?? null;
   const seen = new Set();
   const machines = [];
 
@@ -108,6 +144,21 @@ export function validateMachines(input) {
       );
     }
 
+    // Kontrolcu modeli (ornegin 11TB / 22TB): yalniz modeli olan surucuyle anlamli; bos =
+    // surucunun varsayilan modeli. Gecersiz model sessizce yok sayilmaz: yanlis istemci
+    // paketiyle konusan ajan o tezgahi hic okuyamazdi.
+    const controllerModel =
+      raw.controllerModel == null || raw.controllerModel === '' ? null : String(raw.controllerModel).trim();
+    if (controllerModel !== null) {
+      const effective = getDriver(driverId ?? defaultDriverId);
+      const known = (effective?.models ?? []).map((m) => m.id);
+      if (known.length === 0) {
+        errors.push(`${where}: "${effective?.label ?? driverId ?? defaultDriverId}" sürücüsünde kontrolcü modeli seçimi yok`);
+      } else if (!known.includes(controllerModel)) {
+        errors.push(`${where}: kontrolcü modeli geçersiz "${controllerModel}" (olabilir: ${known.join(', ')})`);
+      }
+    }
+
     const ip = raw.ip == null || raw.ip === '' ? null : String(raw.ip).trim();
     if (ip !== null) {
       const octetsOk =
@@ -136,6 +187,7 @@ export function validateMachines(input) {
       id,
       name,
       ...(driverId === null ? {} : { driverId }),
+      ...(controllerModel === null ? {} : { controllerModel }),
       ip,
       ...(port === null ? {} : { port }),
       ...(ftpPort === null ? {} : { ftpPort }),

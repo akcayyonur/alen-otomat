@@ -31,8 +31,8 @@ using Syntec.Telemetri;
 [assembly: AssemblyDescription("Syntec kontrolcusunden uretim verisi okuyup CNC Telemetri backend'ine gonderir")]
 [assembly: AssemblyCompany("alen-otomat")]
 [assembly: AssemblyProduct("CNC Telemetri")]
-[assembly: AssemblyVersion("0.2.0.0")]
-[assembly: AssemblyFileVersion("0.2.0.0")]
+[assembly: AssemblyVersion("0.3.0.0")]
+[assembly: AssemblyFileVersion("0.3.0.0")]
 
 /// Console.Out'u hem konsola hem dosyaya yazar (--log).
 ///
@@ -106,6 +106,9 @@ static class Agent
 {
     static string IngestUrl;
     static string DllYolu;
+    /// Bu ajanin konustugu kontrolcu ailesi ("11TB" / "22TB"). Backend'den yalniz bu
+    /// modeldeki tezgahlar istenir: her model kendi Syntec paketinden calisan AYRI surectir.
+    static string Model;
     static int AralikMs;
     static int YenidenDenemeMs;
 
@@ -235,7 +238,20 @@ static class Agent
         };
 
         IngestUrl = Get(arg, "ingest", "http://127.0.0.1:3000/api/ingest");
-        DllYolu = Get(arg, "dll", "Syntec.RemoteCNC.Win32.dll");
+
+        // Model: --model verilmisse o (DLL'i de ondan), verilmemisse bulundugu klasordeki
+        // Syntec paketinden anlasilir (11TB'nin ayri DLL'i varsa 11TB, yoksa 22TB).
+        string modelArg = Get(arg, "model", null);
+        DllYolu = Get(arg, "dll", null);
+        if (modelArg != null && SyntecReader.ModelDll(modelArg) == null)
+        {
+            Console.WriteLine("[ajan] bilinmeyen model: \"" + modelArg + "\" (olabilir: 11TB, 22TB)");
+            return 1;
+        }
+        if (DllYolu == null)
+            DllYolu = modelArg != null ? SyntecReader.ModelDll(modelArg)
+                                       : SyntecReader.VarsayilanDll(Directory.GetCurrentDirectory());
+        Model = modelArg != null ? modelArg.Trim().ToUpperInvariant() : SyntecReader.DllModeli(DllYolu);
         AralikMs = int.Parse(Get(arg, "interval", "1000"));
         YenidenDenemeMs = int.Parse(Get(arg, "retry", "10000"));
         OkumaZamanAsimiMs = int.Parse(Get(arg, "read-timeout", "15000"));
@@ -256,6 +272,7 @@ static class Agent
 
         Console.WriteLine("=== Syntec Edge Agent ===");
         Console.WriteLine("ingest    : " + IngestUrl);
+        Console.WriteLine("model     : " + Model);
         Console.WriteLine("dll       : " + DllYolu);
         Console.WriteLine("aralik    : " + AralikMs + " ms");
         Console.WriteLine();
@@ -394,7 +411,7 @@ static class Agent
     {
         int i = ingest.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
         string kok = i > 0 ? ingest.Substring(0, i) : ingest.TrimEnd('/');
-        return kok + "/api/agent/machines?driver=syntec-remoteapi";
+        return kok + "/api/agent/machines?driver=syntec-remoteapi&model=" + Uri.EscapeDataString(Model ?? "");
     }
 
     /// @returns id/ip ciftleri; backend'e ulasilamazsa null (bos liste DEGIL -
@@ -524,6 +541,9 @@ static class Agent
             Console.WriteLine("[" + t.Id + "] " + hata);
             return;
         }
+        // Olumlu kanit: istemci DLL'i yuklendi ve nesne olustu (baglanti ayri konu). Hangi model/paketin
+        // konustugu logdan okunsun; kurulum duman testi de bu satiri bekler.
+        Console.WriteLine("[" + t.Id + "] Syntec istemcisi yuklendi: " + DllYolu + " (model " + Model + ")");
 
         bool kimlikYazildi = false;
 
@@ -841,9 +861,14 @@ static class Agent
         Console.WriteLine("  --retry <ms>         yeniden baglanma araligi (varsayilan 10000)");
         Console.WriteLine("  --read-timeout <ms>  bir okuma bu sureden uzun surerse takildi sayilir (varsayilan 15000)");
         Console.WriteLine("  --duration <sn>      test icin: N saniye sonra duzgun kapanir");
-        Console.WriteLine("  --dll <dosya>        Syntec.RemoteCNC.Win32.dll");
+        Console.WriteLine("  --model <11TB|22TB>  kontrolcu ailesi. Backend'den yalniz bu modeldeki tezgahlar");
+        Console.WriteLine("                       istenir ve istemci DLL'i modelden secilir. Verilmezse");
+        Console.WriteLine("                       klasordeki Syntec paketinden anlasilir.");
+        Console.WriteLine("  --dll <dosya>        istemci DLL'i: 11TB Syntec.RemoteCNC.Win32.dll,");
+        Console.WriteLine("                       22TB Syntec.OpenCNC.dll (modelden otomatik secilir)");
         Console.WriteLine();
-        Console.WriteLine("Bu program Syntec dll'lerinin bulundugu klasorden calistirilmali.");
+        Console.WriteLine("Bu program Syntec dll'lerinin bulundugu klasorden calistirilmali. Iki model");
+        Console.WriteLine("(11TB ve 22TB) ayni surecte calismaz: her biri kendi paketinden ayri bir ajandir.");
     }
 
     static Dictionary<string, string> Args(string[] argv)

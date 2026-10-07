@@ -51,6 +51,47 @@ namespace Syntec.Telemetri
             MakineId = makineId;
         }
 
+        // ------------------------------------------------- kontrolcu modeli / istemci DLL'i
+        //
+        // Ayni SyntecRemoteCNC sinifi iki Syntec paketinde de var, ama farkli DLL'de:
+        //   11TB (paket 10.116.x): Syntec.RemoteCNC.Win32.dll   ayri yonetilen sarmalayici
+        //   22TB (paket 10.118.x): Syntec.OpenCNC.dll           sinif bu DLL'in icine tasinmis
+        // Okuma yontemlerinin imzalari ikisinde de birebir ayni (yansimayla karsilastirildi,
+        // 22B simulatorunde 5 okuma calisti), yani okuma kodu degismez; yalniz hangi DLL'in
+        // yuklenecegi degisir. Iki paketin yerel (native) DLL'leri ayni adi tasidigi icin ayni
+        // surecte birlikte yuklenemez: her model icin AYRI ajan sureci, kendi paketinin
+        // Bin klasorunden calisir.
+        public const string DllOnbirTB = "Syntec.RemoteCNC.Win32.dll";
+        public const string DllYirmiikiTB = "Syntec.OpenCNC.dll";
+
+        /// Model adindan ("11TB" / "22TB", buyuk-kucuk harf fark etmez) istemci DLL'i; taninmayan model icin null.
+        public static string ModelDll(string model)
+        {
+            switch ((model ?? "").Trim().ToUpperInvariant())
+            {
+                case "11TB": return DllOnbirTB;
+                case "22TB": return DllYirmiikiTB;
+                default: return null;
+            }
+        }
+
+        /// DLL adindan model. 11B paketinde de bir Syntec.OpenCNC.dll var (sinifi icermez),
+        /// bu yuzden 11TB DLL'i once aranir: ad "RemoteCNC" iceriyorsa 11TB, degilse 22TB.
+        public static string DllModeli(string dllYolu)
+        {
+            string ad = Path.GetFileName(dllYolu ?? "");
+            return ad.IndexOf("RemoteCNC", StringComparison.OrdinalIgnoreCase) >= 0 ? "11TB" : "22TB";
+        }
+
+        /// Klasorde bulunan pakete gore varsayilan DLL: 11TB'nin ayri DLL'i varsa o, yoksa 22TB'nin
+        /// (ikisi de yoksa 11TB adi: hata mesaji "DLL yuklenemedi" bunu gosterir).
+        public static string VarsayilanDll(string dizin)
+        {
+            if (File.Exists(Path.Combine(dizin, DllOnbirTB))) return DllOnbirTB;
+            if (File.Exists(Path.Combine(dizin, DllYirmiikiTB))) return DllYirmiikiTB;
+            return DllOnbirTB;
+        }
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         static extern IntPtr LoadLibraryEx(string dosya, IntPtr hFile, uint bayraklar);
         const uint LOAD_WITH_ALTERED_SEARCH_PATH = 0x8;

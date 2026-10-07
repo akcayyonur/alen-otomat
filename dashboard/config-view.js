@@ -101,6 +101,9 @@ function driverCard(d) {
     (d.reads?.length
       ? `<div><dt>Okunan alan</dt><dd>${num(d.reads.length)}</dd></div>`
       : '') +
+    (d.models?.length
+      ? `<div><dt>Modeller</dt><dd>${d.models.map((m) => escapeHtml(m.label)).join(', ')}</dd></div>`
+      : '') +
     (d.verifiedOn
       ? `<div><dt>Doğrulandı</dt><dd>${escapeHtml(d.verifiedOn)}</dd></div>`
       : '') +
@@ -111,6 +114,16 @@ function driverCard(d) {
       : '') +
     (d.verifiedOn_detay
       ? `<details><summary>Doğrulama ayrıntısı</summary><p>${escapeHtml(d.verifiedOn_detay)}</p></details>`
+      : '') +
+    // Model başına durum: aynı sürücü iki kontrolcü ailesini konuşur ama biri gerçek tezgahta,
+    // diğeri yalnız simülatörde doğrulanmış olabilir - bu fark gizlenmemeli.
+    (d.models?.length
+      ? '<details><summary>Model durumu</summary><ul>' +
+        d.models.map((m) => {
+          const mm = STATUS_META[m.status] ?? STATUS_META.planned;
+          return `<li><b>${escapeHtml(m.label)}</b> — ${escapeHtml(mm.label)}` +
+            (m.verifiedAgainst ? `. ${escapeHtml(m.verifiedAgainst)}` : '') + '</li>';
+        }).join('') + '</ul></details>'
       : '') +
     (d.requires?.length
       ? '<details><summary>Gereksinimler</summary><ul>' +
@@ -124,7 +137,7 @@ function driverCard(d) {
 function machineTable(machines, drivers, defaultDriver) {
   return (
     '<table class="tbl tbl-edit"><thead><tr>' +
-    '<th>Kimlik</th><th>Ad</th><th>Sürücü</th><th>IP</th><th>Port</th>' +
+    '<th>Kimlik</th><th>Ad</th><th>Sürücü</th><th>Model</th><th>IP</th><th>Port</th>' +
     '<th>Kimlik bilgisi</th><th></th>' +
     '</tr></thead><tbody>' +
     machines.map((m, i) => {
@@ -141,6 +154,7 @@ function machineTable(machines, drivers, defaultDriver) {
         '</select>' +
         (m.driverId ? '' : `<span class="inherit">${escapeHtml(resolved)}</span>`) +
         '</td>' +
+        `<td>${modelCell(m, drivers.find((d) => d.id === (m.driverId || defaultDriver)), i)}</td>` +
         `<td><input data-row="${i}" data-key="ip" value="${escapeHtml(m.ip ?? '')}" placeholder="192.168.1.101" size="13" class="mono"></td>` +
         `<td><input data-row="${i}" data-key="port" value="${escapeHtml(m.port ?? '')}" placeholder="5566" size="6" class="mono"></td>` +
         '<td><label class="chk">' +
@@ -151,6 +165,30 @@ function machineTable(machines, drivers, defaultDriver) {
         '</tr>';
     }).join('') +
     '</tbody></table>'
+  );
+}
+
+/**
+ * Kontrolcü modeli seçimi (ör. SYNTEC 11TB / 22TB). Yalnızca modeli olan sürücüde görünür.
+ * Her model kendi Syntec paketiyle (ayrı ajan süreciyle) okunur: yanlış seçilen modelde ajan
+ * o tezgahı hiç okuyamaz, bu yüzden boş bırakmak "sürücünün varsayılan modeli" demektir.
+ */
+function modelCell(m, driver, i) {
+  const models = driver?.models ?? [];
+  if (models.length === 0) return '<span class="inherit">—</span>';
+  const def = models.find((x) => x.id === driver.defaultModel) ?? models[0];
+  const chosen = models.find((x) => x.id === m.controllerModel) ?? null;
+  const shown = chosen ?? def;
+  return (
+    `<select data-row="${i}" data-key="controllerModel" aria-label="${escapeHtml(m.id ?? '')} kontrolcü modeli">` +
+    `<option value=""${chosen ? '' : ' selected'}>(varsayılan: ${escapeHtml(def.label)})</option>` +
+    models.map((x) =>
+      `<option value="${escapeHtml(x.id)}"${chosen?.id === x.id ? ' selected' : ''}>` +
+      `${escapeHtml(x.label)}${x.status === 'experimental' ? ' — deneysel' : ''}</option>`).join('') +
+    '</select>' +
+    (shown.status === 'experimental'
+      ? '<span class="inherit" title="Gerçek bir tezgahta henüz doğrulanmadı">deneysel</span>'
+      : '')
   );
 }
 
@@ -174,6 +212,11 @@ function wire(host, onSaved) {
       dirty = true;
       const save = host.querySelector('[data-act="save"]');
       if (save) { save.disabled = config.readOnly; save.textContent = 'Kaydet *'; }
+    }
+    // Model seçenekleri sürücüye bağlı: sürücü değişince eski model geçersiz kalır, listeyi yenile.
+    if (key === 'driverId') {
+      draft[i].controllerModel = '';
+      renderConfig(host, onSaved);
     }
   });
 

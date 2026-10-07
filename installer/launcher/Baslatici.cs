@@ -1,4 +1,4 @@
-﻿// CNC Telemetri baslatici - masaustu uygulamasi.
+// CNC Telemetri baslatici - masaustu uygulamasi.
 //
 // Acinca: backend ve ajan calisiyor mu bakar. Calismiyorsa Gorev Zamanlayici'daki
 // iki gorevi baslatir (acilista zaten kendiliginden baslarlar; bu, durmus ya da
@@ -40,13 +40,15 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("CNC Telemetri hizmetlerini baslatir ve dashboard'u acar")]
 [assembly: AssemblyCompany("alen-otomat")]
 [assembly: AssemblyProduct("CNC Telemetri")]
-[assembly: AssemblyVersion("0.2.0.0")]
-[assembly: AssemblyFileVersion("0.2.0.0")]
+[assembly: AssemblyVersion("0.3.0.0")]
+[assembly: AssemblyFileVersion("0.3.0.0")]
 
 static class Baslatici
 {
     const string BackendGorev = "CNC Telemetri - Backend";
     const string AjanGorev = "CNC Telemetri - Edge Agent";
+    /// 22TB kontrolcu ailesinin ajani (ayri surec). Her kurulumda yoktur: kayitli degilse atlanir.
+    const string Ajan22Gorev = "CNC Telemetri - Edge Agent (22TB)";
     const int BackendBeklemeSn = 60;
     const int AjanBeklemeSn = 10;
 
@@ -153,6 +155,11 @@ static class Baslatici
             if (Komut("schtasks.exe", "/Run /TN \"" + g + "\"") != 0)
                 return yukseltilmis ? 4 : 5;
         }
+
+        // 22TB ajani yalnizca kuruluysa. Sorgu basarisizsa gorev yok demektir (ya da bu
+        // kullanici goremiyor); ikisinde de zorunlu degil, hata sayilmaz.
+        if (Komut("schtasks.exe", "/Query /TN \"" + Ajan22Gorev + "\"") == 0)
+            Komut("schtasks.exe", "/Run /TN \"" + Ajan22Gorev + "\"");
         return 0;
     }
 

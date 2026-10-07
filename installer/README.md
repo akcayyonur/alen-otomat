@@ -7,10 +7,17 @@ Node ve Syntec DLL'leri var; hedef PC'ye ayrıca hiçbir şey kurmak gerekmez.
 
 ```powershell
 cd installer
-.\build-installer.ps1 -SyntecBin "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin"
+.\build-installer.ps1 -SyntecBin   "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin" `
+                      -SyntecBin22 "C:\...\22BLathe_W32_10.118.88Z\DiskC\OpenCNC\Bin"
 ```
 
-Çıktı: `installer\output\CNC-Telemetri-Kurulum-<sürüm>.exe` (~24 MB).
+Çıktı: `installer\output\CNC-Telemetri-Kurulum-<sürüm>.exe` (~26 MB; 22TB paketiyle ~40 MB).
+
+**İki kontrolcü ailesi (SYNTEC 11TB ve 22TB).** İki Syntec paketinin yerel DLL'leri aynı adı
+taşıdığı için aynı süreçte yüklenemez; bu yüzden kurulumda **iki ajan** vardır: `agent\` (11TB)
+ve `agent22\` (22TB), ikisi de aynı `syntec-agent.exe` ama kendi paketinin yanından, `--model`
+ile çalışır. `-SyntecBin22` verilmezse (ya da `CNC_SYNTEC_BIN22` / İndirilenler'de `22BLathe*`
+yoksa) paket **22TB desteği olmadan** üretilir; betik bunu açıkça söyler.
 
 Gereken: Inno Setup 6 (`winget install JRSoftware.InnoSetup`), Node 22.5+ x64 ve
 **`installer\prereq\vcredist_x86.exe`** (Microsoft'tan; Syntec DLL'lerinin bağlı olduğu
@@ -23,7 +30,8 @@ Betik sırasıyla: kodu `payload\` altına toplar → ajanı **x86** derler ve P
 başlığından doğrular → **duman testi** yapar → Setup.exe'yi derler. Duman testi
 paketlenmiş `node.exe` ile backend'i (node:sqlite dahil) açar, dashboard'u ve
 `/api/agent/machines`'i çağırır, ajanın Syntec DLL'lerini kendi klasöründen
-yüklediğini doğrular. Bunlardan biri tutmazsa Setup.exe üretilmez.
+yüklediğini doğrular (22TB paketi varsa onun ajanı da kendi `Syntec.OpenCNC.dll`'ini).
+Bunlardan biri tutmazsa Setup.exe üretilmez.
 
 ## Hedef PC'de kurmak
 
@@ -52,9 +60,12 @@ açılır, dashboard `http://<bu-pc-ip>:3000` ile başka bilgisayardan görülü
 
 ## Kurulumdan sonra
 
-- Dashboard → **Ayarlar**'dan her tezgahın IP'sini girin; ajan listeyi oradan alır.
+- Dashboard → **Ayarlar**'dan her tezgahın IP'sini girin **ve kontrolcü modelini seçin**
+  (SYNTEC 11TB / 22TB); ajanlar listeyi oradan alır, her biri yalnız kendi modelindekileri.
+  Yanlış model seçilirse o tezgah okunamaz. 22TB, gerçek tezgahta henüz denenmediği için
+  "deneysel" etiketlidir ve o modelde program gönderme kapalıdır (CLAUDE.md §3).
 - Kontrolcüde `Start server while boot` açık olmalı, statik IP + reboot (CLAUDE.md §5).
-- Loglar: `C:\CNC-Telemetri\logs\` (`ajan.log`, `backend.log`, `kurulum.log`).
+- Loglar: `C:\CNC-Telemetri\logs\` (`ajan.log`, `ajan22.log`, `backend.log`, `kurulum.log`).
 
 ## Güncelleme ve kaldırma
 
@@ -94,6 +105,7 @@ kurulu bir PC'de `Trojan:Win32/Dexphot.CB` çıkmıştı (2026-10-06).
   64-bit Windows'ta sorunsuz çalışır.)
 - Görevler **SYSTEM** hesabıyla çalışır. Syntec DLL'leri bundan rahatsız olursa
   `kurulum\KURULUM.md` sonundaki "Ajan SYSTEM olarak çalışamıyor" notuna bakın.
-- `payload\agent\` içindeki dosyalar Syntec paketinin `Bin` klasörünün bire bir
-  kopyasıdır (alt klasörleriyle); bizim ürettiğimiz yakalama dosyaları hariç.
-  Klasörü bölmeyin: yönetilen sarmalayıcı native DLL'leri çalışma anında yüklüyor.
+- `payload\agent\` (ve varsa `payload\agent22\`) içindeki dosyalar ilgili Syntec paketinin
+  `Bin` klasörünün bire bir kopyasıdır (alt klasörleriyle); bizim ürettiğimiz yakalama
+  dosyaları hariç. Klasörü bölmeyin, iki paketi birleştirmeyin: yönetilen sarmalayıcı
+  native DLL'leri çalışma anında yüklüyor ve iki paketin yerel DLL'leri aynı adı taşıyor.

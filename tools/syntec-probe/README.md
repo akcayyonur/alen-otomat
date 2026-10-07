@@ -45,7 +45,7 @@ syntec-probe.exe --host 192.168.88.99 --seconds 60
 | `--seconds` | `60` | Yakalama süresi |
 | `--interval` | `1000` | Örnekleme aralığı (ms) |
 | `--out` | otomatik | JSONL dosya adı |
-| `--dll` | `Syntec.RemoteCNC.Win32.dll` | İstemci kütüphanesi |
+| `--dll` | `Syntec.RemoteCNC.Win32.dll` (11TB paketi); klasörde o yoksa ve `Syntec.OpenCNC.dll` varsa **`Syntec.OpenCNC.dll`** (22TB paketi) | İstemci kütüphanesi |
 | `--ingest` | yok | Verilirse her örnek bu adrese POST edilir |
 | `--machine-id` | `CNC-01` | `config/machines.json`'daki tezgah kimliği |
 

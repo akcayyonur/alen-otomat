@@ -29,6 +29,11 @@ export function loadDrivers() {
     ...stripNotes(d),
     reads: [...(d.reads ?? [])],
     requires: [...(d.requires ?? [])],
+    /**
+     * Kontrolcu modelleri (ornegin Syntec 11TB / 22TB). Ayni surucu birden cok aileyi
+     * konusabilir; fark, o ailenin istemci paketidir. Modeli olmayan surucude bos.
+     */
+    models: (d.models ?? []).map((m) => stripNotes(m)),
     /** Ayarlar ekraninda secilebilir mi - ajani olmayan surucu secilemez. */
     selectable: d.status === 'supported' || d.status === 'experimental',
   }));
@@ -37,6 +42,20 @@ export function loadDrivers() {
 
 export function getDriver(id) {
   return loadDrivers().find((d) => d.id === id) ?? null;
+}
+
+/**
+ * Bir tezgahin kontrolcu modelini cozer: istenen id'yi surucunun modelleri arasinda arar;
+ * bos/bilinmiyorsa surucunun varsayilan modeli. Surucunun modeli yoksa null.
+ */
+export function resolveModel(driver, requestedId) {
+  const models = driver?.models ?? [];
+  if (models.length === 0) return null;
+  return (
+    models.find((m) => m.id === requestedId) ??
+    models.find((m) => m.id === driver.defaultModel) ??
+    models[0]
+  );
 }
 
 /** Bir tezgaha surucu atanmamissa ya da bilinmeyen bir id yazilmissa. */

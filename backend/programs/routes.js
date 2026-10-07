@@ -11,7 +11,7 @@
  */
 import { MAX_PROGRAM_BYTES, TEMP_PREFIX, ValidationError } from './library.js';
 import { FtpError } from './ftp-client.js';
-import { driverFtpOptions } from './machine-files.js';
+import { driverFtpOptions, sendPolicy } from './machine-files.js';
 
 const MAX_JSON_BYTES = 100_000;
 
@@ -76,8 +76,11 @@ const R = {
  * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, url: URL) => Promise<boolean>}
  */
 export function createProgramRoutes({ library, files, listMachines }) {
+  // Tarama/kutuphane icin uygun mu (FTP ayari var mi) + kontrolcu modelinde GONDERME acik mi.
   const eligibility = (m) => {
-    try { driverFtpOptions(m); return { capable: true, reason: null }; } catch (err) { return { capable: false, reason: err.message }; }
+    const policy = sendPolicy(m);
+    const model = { controllerModel: m.controllerModel ?? null, sendAllowed: policy.allowed, sendBlockedReason: policy.reason };
+    try { driverFtpOptions(m); return { capable: true, reason: null, ...model }; } catch (err) { return { capable: false, reason: err.message, ...model }; }
   };
 
   return async function handle(req, res, url) {

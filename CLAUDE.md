@@ -11,6 +11,13 @@ dashboard'da gösteren uygulama. Gereksinim belgesi: `cnc-telemetri-gereksinim.h
 
 - **7 adet CNC torna**, hepsi aynı: ARIX T-42CL gövde, **SYNTEC 11B** kontrolcü,
   yazılım **10.116.54S**, Windows CE / AM335x ARM.
+- **IP planı (2026-10-07, `config/machines.json`):** CNC-01..08 = 192.168.88.**91 · 92 · 93 · 94 · 98 · 96 · 99 · 97**.
+  Şu an yalnız **.98 = CNC-05** ve **.99 = CNC-07** tornalarda verildi, diğerleri atanacak. Bu belgenin eski bölümlerinde
+  .98 tornası "CNC-08" (ve .99 "1. torna") diye geçer: IP'ler doğru, numaralandırma o gün öyle anılmıştı; gerçek tezgahtan
+  alınan kayıtlar (`gercek.db`, kütüphane taramaları, aktarım kayıtları) eski adıyla (CNC-08) duruyor. CNC seri
+  numaraları IP'ye bağlı kanıtla taşındı: M4L0007 (.98 → CNC-05), M9L4379 (.99 → CNC-07).
+- **Sonradan öğrenildi (2026-10-07): 8 tezgahın biri farklı kontrolcü ailesi, SYNTEC 22TB** (model 22B, yazılım
+  10.118.88T). Ayarlar ekranında her tezgaha model (11TB / 22TB) seçilir. Bkz. §3 "22TB ailesi".
 - Tezgahlar ofisten uzakta. **Sık sık makine başına gidilemiyor** — bu kısıt
   mimariyi belirledi (aşağıda "makineye gitmeden doğrulama").
 - Kablolama kararı: her panelden ofise Ethernet çekilecek, ofiste switch'te
@@ -45,6 +52,13 @@ değişmez. Bu, gereksinim belgesi Bölüm 02/05'in gereği.
 **Sürücü kaydı:** `config/drivers.json` hangi protokollerin desteklendiğini
 `supported` / `experimental` / `planned` olarak tutar. Ayarlar ekranı `planned`
 olanı **seçtirmez** — ajanı yazılmamış bir protokol için müşteriye söz verilmez.
+
+**Kontrolcü modeli (11TB / 22TB):** aynı sürücü (`syntec-remoteapi`) iki Syntec ailesinin RemoteAPI'sini konuşur;
+fark Syntec'in istemci paketidir (§3 "22TB ailesi"). `config/drivers.json` sürücüye `models` ekler
+(`clientDll`, `agentDir`, `status`, `fileTransfer.sendEnabled`); envanterde tezgah başına isteğe bağlı
+`controllerModel` ("11TB" / "22TB"; boş = sürücünün `defaultModel`'i, yani 11TB). Model seçilince
+`controller` / `controllerPanel` / `softwareVersion` kimlik alanları modelden gelir (tezgahın kendi değeri ezer).
+Her model için **ayrı ajan süreci** çalışır ve yalnız kendi modelindeki tezgahları okur.
 
 **Program kütüphanesi ve tezgaha aktarım (yazma yolu):** telemetri yolundan (ajan →
 ingest → dashboard, tek yönlü, salt okunur) **tamamen ayrı** bir yol: `backend/programs/`,
@@ -214,6 +228,37 @@ Henüz gerçek tornada denenmedi. Ortam: PC Simulator'ı **kısa yoldan** çalı
     kullanılmalı. Aktarım kodunda `WRITE_nc_main`, `RemoteProgExecute`, `UPLOAD_software/plc_file/
     param_file`, `WRITE_macro_*`, `FileUpload` (gizli) ve `MultiTCPInstall` ASLA geçmemeli.
 
+### 🆕 22TB ailesi (SYNTEC 22B, yazılım 10.118.88) — YALNIZ PC Simulator'da doğrulandı, 2026-10-07
+
+8 tezgahın biri farklı bir kontrolcü ailesi: panelde **SYNTEC 22TB** (System Data ekranı: kontrolcü modeli
+**22B**, yazılım **10.118.88T**). Syntec paketi `22BLathe_W32_10.118.88Z` (11TB'ninki: `11BLathe_W32_10.116.56Q`).
+Ayarlar ekranında her tezgaha **model** (11TB / 22TB) seçilir; sürücü aynı (`syntec-remoteapi`).
+
+**Paket farkları (ikilide ve yansımayla ölçüldü, kod çalıştırmadan):**
+- 22B paketinde **`Syntec.RemoteCNC.Win32.dll` YOK.** Aynı `Syntec.Remote.SyntecRemoteCNC` sınıfı
+  **`Syntec.OpenCNC.dll`'in içine taşınmış** (sürüm 10.118.88.26). 11B paketinde de bir `Syntec.OpenCNC.dll` var
+  ama bu sınıfı İÇERMEZ: DLL'in varlığı değil, içindeki sınıf ayırt eder.
+- `READ_status/spindle/part_count/time/alm_current/nc_current_block/information`, `isConnected`, `Close`, `Dispose`,
+  kurucu(`string`) ve `SeriesNo/MainBoardPlatformName/CncOption` imzaları **birebir aynı** → ajanın okuma
+  kodu (`SyntecReader`) değişmedi; yalnız yüklenen DLL'in adı değişir (`--model` / klasörden).
+- 22B yerel DLL'leri (OCApi/OCUser) yalnız sistem DLL'lerine bağlı: **Visual C++ 2005 gerekmiyor** (11B'de gerekiyordu).
+- İki paketin yerel DLL'leri **aynı adı taşır** → aynı süreçte yüklenemez → **model başına ayrı ajan süreci**,
+  kendi paketinin klasöründen (`agent\` = 11TB, `agent22\` = 22TB); ajan `--model` ile yalnız kendi modelindeki
+  tezgahları backend'den alır (`/api/agent/machines?driver=&model=`).
+
+**22B PC Simulator'da (`C:\Users\akcay\simtest22`, kısa yol; `cnc.bat` ile CncMon32, sonra Bin'den `OCAPIServer.exe`
+elle):** kimlik `CncType 22B`, NC sürüm `10.118.88.26`, `Seri Lathe`, 4 eksen (X,Y,Z,C), azami 6; 5 okuma
+fonksiyonu çalıştı, `READ_nc_current_block` **-18** (11B ile aynı); ham değerler `Status=READY`, `Mode=AUTO`,
+`Alarm/EMG=****` (11B sözlüğüyle aynı). Ajan (`--model 22TB`) + gerçek backend + dashboard uçtan uca: 38 okuma = 38
+gönderim, 0 düşen, çıkış kodu 0, kapanışta açık bağlantı 0, dashboard'da `SYNTEC 22B · 10.118.88T`, durum IDLE.
+
+**GERÇEK 22TB tezgahta HİÇBİR ŞEY denenmedi.** Bilinmeyenler: gerçek tezgahın API portları/oturum kuralları (4 oturum
+sınırı?), `RUNNING` iken dönen `Status` metni (11B'de `START`), FTP sunucusunun varlığı/kök klasörü/davranışı,
+`Start server while boot` ayarı (22B menüsünde de var). **Bu yüzden 22TB'de program GÖNDERME kapalıdır**
+(`config/drivers.json` → `models[22TB].fileTransfer.sendEnabled = false`); tarama (salt okunur) ve okuma açıktır.
+İlk gerçek bağlantıda sıra: ajan okuması → `/api/health` `statusMapping` → "Tezgahtaki programları tara" → FTP
+kök/davranış doğrulanınca `sendEnabled` true.
+
 ### ✅ İkinci gerçek tezgahta doğrulandı — 2026-10-06, 192.168.88.98
 
 Aynı PC, kablo, DLL'ler ve probe ile **60 sn'de 52 örnek, hiç takılma**: ort. 1,16 sn
@@ -300,6 +345,11 @@ cd tools\syntec-agent
 build.bat "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin"
 ```
 
+**22TB ailesi (ikinci paket):** `22BLathe_W32_10.118.88Z\DiskC\OpenCNC\Bin` — yönetilen istemci `Syntec.OpenCNC.dll`
+içinde (ayrı `Syntec.RemoteCNC.Win32.dll` yok). Ajan aynı exe'dir; o paketin `Bin` klasöründen çalıştırılır:
+`syntec-agent.exe --model 22TB`. **İki paketi aynı klasörde ya da aynı süreçte birleştirme** (yerel DLL'ler aynı adı
+taşır). `--model` verilmezse model klasördeki pakete bakılarak seçilir.
+
 > **Neden dosya listesi vermiyoruz:** `Syntec.RemoteCNC.Win32.dll` yönetilen bir
 > sarmalayıcı; arkasında bir dizi **native** DLL'i çalışma anında yüklüyor
 > (`OCApi.dll`, `OCUser.dll`, `MMICommon32.dll` ve başkaları). Bunlar yansımayla
@@ -368,6 +418,8 @@ Gerçek tezgahla:
 ```bat
 REM Windows'ta, DLL klasöründen
 syntec-agent.exe --ingest http://OFIS-PC:3000/api/ingest --interval 1000
+REM 22TB ailesi: kendi paketinin Bin klasöründen, ayrı süreç
+syntec-agent.exe --model 22TB --ingest http://OFIS-PC:3000/api/ingest
 ```
 
 **Ajan tezgah listesini backend'den alır** (`GET /api/agent/machines`) ve
@@ -411,8 +463,14 @@ x86 ajan. Hedef PC'ye ayrıca bir şey kurmak gerekmez. Üretmek:
 
 ```powershell
 cd installer
-.\build-installer.ps1 -SyntecBin "C:\...\DiskC\OpenCNC\Bin"   # → installer\output\CNC-Telemetri-Kurulum-<sürüm>.exe
+.\build-installer.ps1 -SyntecBin   "C:\...\11BLathe_W32_10.116.56Q\DiskC\OpenCNC\Bin" `
+                      -SyntecBin22 "C:\...\22BLathe_W32_10.118.88Z\DiskC\OpenCNC\Bin"
+# → installer\output\CNC-Telemetri-Kurulum-<sürüm>.exe   (-SyntecBin22 yoksa 22TB desteği paketlenmez)
 ```
+
+İki kontrolcü ailesi = iki ajan: kurulumda `agent\` (11TB) ve `agent22\` (22TB) klasörleri, iki görev
+(`CNC Telemetri - Edge Agent` ve `CNC Telemetri - Edge Agent (22TB)`; ikisi de `--model` ile başlar, günlükler
+`ajan.log` / `ajan22.log`). 22TB tezgah tanımlı değilse 22TB ajanı boş listeyle bekler, kaynak tüketimi ihmal edilebilir.
 
 - Setup.exe dosyaları `C:\CNC-Telemetri` altına koyar ve **`kurulum.ps1`'i
   çağırır**; görev/güvenlik duvarı mantığı tek yerde (yineleme yok). `kurulum.ps1`,
@@ -501,6 +559,10 @@ gerçek torna 8'in 2026-10-07 protokol diyaloğundan) · `test/harness.js`.
 8. Bir tezgaha aynı anda **tek işlem** (tarama/gönderme/içeri alma); ikincisi `409`.
 9. Yeni **müşteri klasörü açılmaz** (`MKD` kullanılmıyor): klasör tezgahta olmalı (panelden açılır).
 10. Kütüphaneye ad: `[A-Za-z0-9_.-]{1,40}`, `ZZUP`/`ZZRB` ile başlamaz; dosya ≤ 1 MB, metin (NUL yok).
+11. **Kontrolcü modeline göre kapı:** sürücü kaydında modelin `fileTransfer.sendEnabled` değeri açıkça `false` ise
+    (şu an **22TB**: gerçek tezgahta hiç denenmedi) ön kontrol "engel" verir, `send` 422 ile reddeder ve **FTP'ye hiç
+    bağlanılmaz**; tarama/içeri alma (salt okunur) çalışır. Gerçek tezgahta doğrulanınca `true` yapılır
+    (`sendPolicy()` in `machine-files.js`; testi `backend/models.test.js`).
 
 **Ayarlar / ortam değişkenleri:** `TRANSFER_DISABLED=1` gönderme tamamen kapanır (kütüphane,
 tarama, ön kontrol çalışır) · `LIBRARY_DB_FILE` (varsayılan `data/library.db`; telemetri DB'sinden
@@ -544,8 +606,8 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | Yol | İş |
 |---|---|
 | `shared/schema.js` | Normalize telemetri sözleşmesi + ingest doğrulaması. Alan eklemek buradan başlar. |
-| `shared/drivers.js` · `config/drivers.json` | Sürücü kaydı (hangi protokol destekleniyor). |
-| `shared/inventory.js` · `config/machines.json` | Tezgah envanteri; ayarlar ekranı buraya yazar. |
+| `shared/drivers.js` · `config/drivers.json` | Sürücü kaydı (hangi protokol destekleniyor) ve kontrolcü modelleri (`models`: 11TB / 22TB). |
+| `shared/inventory.js` · `config/machines.json` | Tezgah envanteri (model çözümü, `agentMachines` süzgeci); ayarlar ekranı buraya yazar. |
 | `backend/db.js` | SQLite: `samples` (detay, 7 gün) + `spans` (durum aralıkları, 400 gün). Raporlar `spans`'ten gelir, satır sayısından bağımsız hızlı. **Yeniden başlamada** (`resumeTimelines`) PC'nin kapalı kaldığı süre `NO_DATA` yazılır — ani kapanışta açık kalan aralık yeniden başlama anında değil, tezgahın son kaydedilen örneğinde biter; testi `backend/restart.test.js`. |
 | `backend/store.js` | Canlı durum (bellek) + aralık yönetimi + veri boşluğu tespiti. |
 | `backend/server.js` | HTTP API + SSE. |
@@ -575,7 +637,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `GET /api/machines/:id/history?window=30m` | Seyreltilmiş zaman serisi. |
 | `GET /api/machines/:id/export.csv?window=24h` | Türkçe Excel CSV (BOM + `sep=;` + ondalık virgül). |
 | `GET /api/health` | Durum + **`statusMapping`**: hangi ham değer hangi duruma eşlendi. |
-| `GET /api/agent/machines` | **Ajanın okuduğu tezgah listesi** — IP'si tanımlı olanlar. Ajan bunu dakikada bir çeker. |
+| `GET /api/agent/machines?driver=&model=` | **Ajanın okuduğu tezgah listesi** — IP'si tanımlı olanlar; `model` (11TB / 22TB) verilirse yalnız o modeldekiler (her model kendi ajanıdır). Ajan bunu dakikada bir çeker. |
 | `GET /api/drivers` · `GET /api/config` · `PUT /api/config/machines` | Sürücüler ve yapılandırma. |
 | `GET /api/library/config` · `/customers` · `/matrix` | Özellik durumu (`transferEnabled`…), müşteri klasörleri, program × tezgah matrisi. |
 | `GET/POST /api/library/programs` | Liste (`?customer=&q=`); yükleme: gövde = ham dosya, `?customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik). |
@@ -594,6 +656,12 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       oturumda hiç denenmedi. Artık en kolay yol: `installer/` ile üretilen
       Setup.exe'yi hedef PC'de çalıştırmak (görev, güvenlik duvarı, açılışta
       başlatma ve SYSTEM hesabında ajan ilk kez orada sınanır).
+- [ ] **22TB tezgahta ilk gerçek bağlantı** (§3 "22TB ailesi"): önce `22BLathe` paketini o tezgahın PC'sine/ofis PC'sine
+      koy, `Start server while boot` aç, ayarlar ekranında o tezgaha model = SYNTEC 22TB seç. Sırayla: ajan okuması
+      (yalnız okuma, tek ajan) → `/api/health` `statusMapping` (RUNNING'de dönen ham metin) → "Tezgahtaki programları
+      tara" → FTP kök klasörü/davranışı doğrulanınca `config/drivers.json`'da `models[22TB].fileTransfer.sendEnabled = true`.
+- [ ] **İki ajanlı kurulum (agent\ + agent22\) yükseltilmiş oturumda denenmedi**: iki görev, SYSTEM hesabı, ikinci
+      ajanın log/bellek davranışı. Yalnız paket duman testi (iki ajan da kendi DLL'ini yüklüyor) yapıldı.
 - [ ] **Gerçek tezgahta ajanı çalıştır** — şimdiye kadar yalnızca sahte DLL ile
       uçtan uca test edildi; gerçek donanımda yalnızca probe çalıştı.
 - [ ] **Boşta/alarm ham değerlerini gerçek tezgahtan yakala** — `/api/health`

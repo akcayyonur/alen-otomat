@@ -71,7 +71,11 @@ static class Probe
         string host = Get(arg, "host", "127.0.0.1");
         int saniye = int.Parse(Get(arg, "seconds", "60"));
         int aralik = int.Parse(Get(arg, "interval", "1000"));
-        string dll = Get(arg, "dll", "Syntec.RemoteCNC.Win32.dll");
+        // 22TB paketinde (10.118.x) yonetilen istemci ayri DLL degil, Syntec.OpenCNC.dll icinde;
+        // klasorde 11TB'nin ayri DLL'i yoksa ve OpenCNC varsa onu kullan (--dll ile ezilebilir).
+        string varsayilanDll = !File.Exists("Syntec.RemoteCNC.Win32.dll") && File.Exists("Syntec.OpenCNC.dll")
+            ? "Syntec.OpenCNC.dll" : "Syntec.RemoteCNC.Win32.dll";
+        string dll = Get(arg, "dll", varsayilanDll);
         string cikti = Get(arg, "out", "syntec-" + host.Replace('.', '_') + "-" +
                            DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".jsonl");
         IngestUrl = Get(arg, "ingest", null);

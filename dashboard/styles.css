@@ -199,6 +199,8 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 
 /* ---------- detay ---------- */
 .detail{display:flex;flex-direction:column;gap:14px;}
+/* display:flex [hidden]'i ezer; gizli ekranlarin (ayarlar, kutuphane) icerigi digerlerinin altinda kalmasin. */
+.detail[hidden]{display:none;}
 .dt-head{
   display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;
   background:var(--surface);border:1px solid var(--line);border-radius:11px;

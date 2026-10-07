@@ -21,7 +21,7 @@
  *   8. Bir tezgaha ayni anda tek islem (tarama/gonderme/iceri alma): ikincisi 409.
  */
 import { setTimeout as sleep } from 'node:timers/promises';
-import { getDriver } from '../../shared/drivers.js';
+import { getDriver, resolveModel } from '../../shared/drivers.js';
 import { withFtp, FtpError } from './ftp-client.js';
 import { parseList } from './list-parse.js';
 import {
@@ -58,6 +58,26 @@ export function driverFtpOptions(machine) {
     user: ft.user ?? 'anonymous',
     password: ft.password ?? 'cnc-telemetri@local',
   };
+}
+
+/**
+ * Tezgahin kontrolcu modeli icin GONDERME acik mi (config/drivers.json -> models[].fileTransfer).
+ * Dogrulanmamis bir modelde (ornegin gercek tezgahta hic denenmemis 22TB) gonderme kapali
+ * tutulur; okuma/tarama etkilenmez. Modeli olmayan surucuyle ve modelde `sendEnabled`
+ * yazilmamissa acik: yalniz acikca `false` yazilan kapanir.
+ */
+export function sendPolicy(machine) {
+  const driver = getDriver(machine.driverId);
+  const model = resolveModel(driver, machine.controllerModel);
+  const ft = model?.fileTransfer;
+  if (ft && ft.sendEnabled === false) {
+    return {
+      allowed: false,
+      model: model.label ?? model.id,
+      reason: ft.reason ?? `${model.label ?? model.id} için program gönderme henüz doğrulanmadı.`,
+    };
+  }
+  return { allowed: true, model: model?.label ?? null, reason: null };
 }
 
 /** "MUSTERI_B\\100200300" ya da "100200300" -> "100200300" (kucuk harf). */
@@ -330,6 +350,11 @@ export class MachineFiles {
       checks.push({ id: 'ozellik', level: 'block', title: 'Dosya gönderme kapalı', detail: 'Sunucu TRANSFER_DISABLED=1 ile başlatılmış.' });
       return { machineId, programId: program.id, versionNo: version.meta.versionNo, customer: target, name: program.name, size: version.meta.size, sha256: version.meta.sha256, checks, canSend: false, needsAck: [], folderNames: [] };
     }
+    const policy = sendPolicy(machine);
+    if (!policy.allowed) {
+      checks.push({ id: 'model', level: 'block', title: `${policy.model}: program gönderme kapalı`, detail: policy.reason });
+      return { machineId, programId: program.id, versionNo: version.meta.versionNo, customer: target, name: program.name, size: version.meta.size, sha256: version.meta.sha256, checks, canSend: false, needsAck: [], folderNames: [] };
+    }
     const ftp = this.ftpOptionsFor(machine);
     const result = await this.#lock(machineId, 'ön kontrol', () =>
       withFtp(ftp, (c) => this.#inspect(c, { machine, customer: target, name: program.name, version })));
@@ -345,6 +370,8 @@ export class MachineFiles {
   async send({ machineId, programId, versionNo, customer, confirm, by = null, clientIp = null, acks = [] }) {
     if (!this.transferEnabled) throw new DisabledError('Dosya gönderme kapalı (TRANSFER_DISABLED=1).');
     const machine = this.#machine(machineId);
+    const policy = sendPolicy(machine);
+    if (!policy.allowed) throw new UnsupportedError(`${policy.model}: ${policy.reason}`);
     if (confirm !== machine.id) {
       throw new ValidationError(`Onay metni tezgah kimliğiyle aynı olmalı: ${machine.id}`);
     }

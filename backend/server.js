@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseTelemetry } from '../shared/schema.js';
 import { loadDrivers } from '../shared/drivers.js';
-import { loadInventory, loadConfig, validateMachines, saveMachines } from '../shared/inventory.js';
+import { loadInventory, loadConfig, validateMachines, saveMachines, agentMachines } from '../shared/inventory.js';
 import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
 import { Library } from './programs/library.js';
 import { MachineFiles } from './programs/machine-files.js';
@@ -338,16 +338,19 @@ const server = http.createServer(async (req, res) => {
     }
     // Edge Agent'in okuyacagi tezgah listesi. Ajan kendi dosyasini tutmaz;
     // tek gercek kaynak ayarlar ekraninin yazdigi config/machines.json.
+    // `model` (11TB / 22TB): her kontrolcu ailesinin kendi ajan sureci vardir ve yalniz
+    // kendi modelindeki tezgahlari alir. Verilmezse suzulmez (eski ajanlar).
     if (req.method === 'GET' && pathname === '/api/agent/machines') {
-      const driver = url.searchParams.get('driver');
-      const machines = loadInventory()
-        .filter((m) => m.ip && (driver == null || m.driverId === driver))
-        .map((m) => ({
-          id: m.id,
-          ip: m.ip,
-          port: m.port ?? null,
-          driverId: m.driverId,
-        }));
+      const machines = agentMachines(loadInventory(), {
+        driver: url.searchParams.get('driver'),
+        model: url.searchParams.get('model'),
+      }).map((m) => ({
+        id: m.id,
+        ip: m.ip,
+        port: m.port ?? null,
+        driverId: m.driverId,
+        controllerModel: m.controllerModel ?? null,
+      }));
       return sendJson(res, 200, { machines });
     }
     if (req.method === 'GET' && pathname === '/api/config') {

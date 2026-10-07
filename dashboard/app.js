@@ -227,6 +227,7 @@ function detailShell(m) {
     `<p class="dt-sub">${escapeHtml(m.machineBuilder ?? '')} ${escapeHtml(m.machineModel ?? '')}` +
     (m.cncSerial ? ` · CNC seri ${escapeHtml(m.cncSerial)}` : '') +
     ` · sürücü <b>${escapeHtml(m.driverLabel ?? m.source ?? '—')}</b>` +
+    (m.controllerModelLabel ? ` · ${escapeHtml(m.controllerModelLabel)}` : '') +
     (m.ip ? ` · ${escapeHtml(m.ip)}` : '') +
     '</p>' +
     '</div>' +

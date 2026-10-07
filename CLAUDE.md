@@ -143,7 +143,7 @@ hem probe hem ajan 3–6 çağrıdan sonra takılıyor**:
   **Not:** `SyntecReader.DurumEsle` `Contains("READY")` ile baktığı için `NOTREADY`
   `IDLE`'a sessizce eşleniyordu; düzeltildi (`NOT…` ile başlayan değer tanımsız sayılır:
   `BilinmeyenDurum`'a yazılır, loga ve `controller.rawStatus`'a düşer, durum yine IDLE).
-  Henüz yeni pakete girmedi.
+  0.1.6 paketinde (paketlenen ajanda eşleme doğrudan denendi).
 - **Elenen hipotezler (ek):** "sunucu açılışta başlıyor" (18 Eylül'de de `Start server
   while boot` açıktı), "torna boşta" (üretim yapıyor: HMI `Auto`+`Busy`, iki kanalda da
   program çalışıyor), "torna hazır değil", **"HMI ayar sayfasındayken API veri vermiyor"**
@@ -159,7 +159,7 @@ hem probe hem ajan 3–6 çağrıdan sonra takılıyor**:
 - **Sıradaki:** tornanın günlüklerini FTP'den okumak; ARIX/Syntec'e rapor (simülatör
   tamam, torna 10.116.54S bağlanıyor ama yarım veri + takılma).
 - Teşhis araçları: `syntec-probe` (kontrol), ajanın `--log`'u. Ajan artık takılan çağrıyı
-  zaman aşımıyla yakalar ve `Status` boşsa sahte IDLE yaymaz (0.1.5'te paketlenecek).
+  zaman aşımıyla yakalar ve `Status` boşsa sahte IDLE yaymaz (0.1.5'ten beri paketli).
 
 **Kural:** Tanınmayan ham değer **sessizce eşlenmez**. `SyntecReader.DurumEsle`
 onu `BilinmeyenDurum`'a yazar, ajan loga basar, ham değer her mesajda

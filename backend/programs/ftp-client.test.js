@@ -21,7 +21,7 @@ test('LIST cozumleyici: gercek torna 8 cikti bicimi (DOS)', () => {
   const metin = [
     '10-07-26  08:19                   22 MDIBlock',
     '02-19-26  06:28                  244 O9001',
-    '01-12-26  15:18       <DIR>          M-TEKNIK',
+    '01-12-26  15:18       <DIR>          MUSTERI_C',
     '12-16-25  14:20       <DIR>          MUSTERI A',
     '01-02-26  15:46                  916 140100102',
     '',
@@ -30,7 +30,7 @@ test('LIST cozumleyici: gercek torna 8 cikti bicimi (DOS)', () => {
   assert.equal(unparsed.length, 0);
   assert.equal(entries.length, 5);
   assert.deepEqual(entries[0], { name: 'MDIBlock', isDir: false, size: 22, modified: '2026-10-07 08:19' });
-  assert.deepEqual(entries[2], { name: 'M-TEKNIK', isDir: true, size: null, modified: '2026-01-12 15:18' });
+  assert.deepEqual(entries[2], { name: 'MUSTERI_C', isDir: true, size: null, modified: '2026-01-12 15:18' });
   assert.equal(entries[3].name, 'MUSTERI A', 'bosluklu klasor adi korunmali');
   assert.equal(entries[4].size, 916);
 });
@@ -62,6 +62,30 @@ test('istemci: baglan, kok LIST, alt klasore gir, geri cik', async () => {
     assert.ok(s.commands.includes('USER anonymous'));
     assert.ok(s.commands.some((k) => k.startsWith('EPSV')), 'once EPSV denenmeli');
     assert.ok(!s.commands.some((k) => k.startsWith('FEAT')), 'olmayan FEAT\'e gerek yok');
+  } finally { await s.stop(); }
+});
+
+// GERCEK TORNA bulgusu (.99, 2026-10-07): bos klasorde LIST, 125'den hemen sonra 226 verir, veri kanalina
+// hic bayt gondermez ve kanali KAPATMAZ. Kanalin kapanmasini bekleyen istemci 20 sn zaman asimina duser
+// (ilk gercek gonderme denemesi "veri aktarimi zaman asimina ugradi" ile boyle basarisiz oldu).
+test('istemci: bos klasorde sunucu veri kanalini kapatmaz -> 226 ile biter, zaman asimina dusmez', async () => {
+  const s = await sunucu({ holdEmptyData: true }, (m) => { m.mkdir('BOS'); m.mkdir('AA'); m.put('AA/DOLU', 'G0\r\n'); m.put('AA/BOSDOSYA', ''); });
+  try {
+    await withFtp({ ...secenek(s), dataIdleTimeoutMs: 10_000 }, async (c) => {
+      await c.cwd('BOS');
+      const t0 = Date.now();
+      assert.equal(parseList(await c.listRaw()).entries.length, 0);
+      assert.ok(Date.now() - t0 < 3_000, `veri kanalinin kapanmasini beklememeli (${Date.now() - t0} ms)`);
+      await c.cdup();
+
+      // Ayni oturum sonraki komutlarla surer; dolu klasor ve bos dosya da dogru okunur.
+      await c.cwd('AA');
+      assert.deepEqual(parseList(await c.listRaw()).entries.map((e) => e.name).sort(), ['BOSDOSYA', 'DOLU']);
+      const t1 = Date.now();
+      assert.equal((await c.retr('BOSDOSYA')).length, 0);
+      assert.ok(Date.now() - t1 < 3_000, 'bos dosya RETR de kanalin kapanmasini beklememeli');
+      assert.equal((await c.retr('DOLU')).toString(), 'G0\r\n');
+    });
   } finally { await s.stop(); }
 });
 

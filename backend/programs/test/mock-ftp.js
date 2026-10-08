@@ -15,7 +15,7 @@
  * (MoveFile davranisi); `renameOverwrites: true` ile ezme simule edilir.
  *
  * Hata enjeksiyonu secenekleri: readOnly, corruptStor, failRnto, dropOnStor,
- * delayMs, listCap.
+ * delayMs, listCap, holdEmptyData (bos LIST/RETR'de veri kanalini kapatmaz: gercek torna).
  */
 import net from 'node:net';
 
@@ -33,7 +33,7 @@ export class MockFtpServer {
   /** @param {{readOnly?: boolean, corruptStor?: boolean, failRnto?: boolean, dropOnStor?: boolean,
    *   delayMs?: number, renameOverwrites?: boolean, listCap?: number}} [opts] */
   constructor(opts = {}) {
-    this.opts = { readOnly: false, corruptStor: false, failRnto: false, dropOnStor: false, delayMs: 0, renameOverwrites: false, listCap: 0, ...opts };
+    this.opts = { readOnly: false, corruptStor: false, failRnto: false, dropOnStor: false, delayMs: 0, renameOverwrites: false, listCap: 0, holdEmptyData: false, ...opts };
     this.root = newDir('');
     /** Tum oturumlarda gelen komutlar (testler dogrulama icin okur). */
     this.commands = [];
@@ -177,6 +177,16 @@ export class MockFtpServer {
         for (const d of dir.dirs.values()) rows.push(`${dosDate(d.mtime)}       <DIR>          ${d.name}`);
         for (const f of dir.files.values()) rows.push(`${dosDate(f.mtime)}${String(f.data.length).padStart(21)} ${f.name}`);
         const shown = this.opts.listCap > 0 ? rows.slice(0, this.opts.listCap) : rows;
+        // Gercek tornada (.99, 2026-10-07) BOS klasor: 125, hemen 226, veri kanalina HIC bayt yok ve
+        // kanal kapanmaz. 226'yi gorunce bitiren istemci (curl) sorunsuz; kanalin kapanmasini bekleyen
+        // istemci zaman asimina duser.
+        if (this.opts.holdEmptyData && shown.length === 0) {
+          // Yalniz BU aktarimin pasif sunucusunu kapat: gec gelen kapanis, sonraki komutun yeni portunu kapatmasin.
+          const srv = st.dataServer;
+          sock.on('close', () => { if (st.dataServer === srv) closeData(); });
+          reply('226 Closing data connection. ');
+          return;
+        }
         sock.end(shown.map((r) => `${r}\r\n`).join(''));
         sock.on('close', () => { closeData(); reply('226 Closing data connection. '); });
       },
@@ -186,6 +196,12 @@ export class MockFtpServer {
         let sock;
         try { sock = await takeData(); } catch { return reply('425 Cannot open data connection.'); }
         reply('125 Data connection already open; transfer starting.');
+        if (this.opts.holdEmptyData && f.data.length === 0) {
+          const srv = st.dataServer;
+          sock.on('close', () => { if (st.dataServer === srv) closeData(); });
+          reply('226 Closing data connection. ');
+          return;
+        }
         sock.end(f.data);
         sock.on('close', () => { closeData(); reply('226 Closing data connection. '); });
       },

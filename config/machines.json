@@ -72,6 +72,7 @@
       "id": "CNC-08",
       "name": "ARIX Torna 8",
       "ip": "192.168.88.97",
+      "controllerModel": "22TB",
       "identified": false
     }
   ],

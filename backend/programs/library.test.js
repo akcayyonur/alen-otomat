@@ -24,7 +24,7 @@ test('musteri klasoru: bos = kok, yol ayiraci/kontrol karakteri reddedilir', () 
   assert.equal(validateCustomer(''), '');
   assert.equal(validateCustomer('MUSTERI_B'), 'MUSTERI_B');
   assert.equal(validateCustomer('MUSTERI A'), 'MUSTERI A');
-  assert.equal(validateCustomer('HAVA-APARAT-2'), 'HAVA-APARAT-2');
+  assert.equal(validateCustomer('MUSTERI-002'), 'MUSTERI-002');
   for (const c of ['a/b', 'a\\b', '..', '.', ' A', 'A ', 'a\r\nb', 'a:b', 'x'.repeat(65)]) {
     assert.throws(() => validateCustomer(c), ValidationError, `reddedilmeli: ${JSON.stringify(c)}`);
   }

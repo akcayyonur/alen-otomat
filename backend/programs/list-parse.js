@@ -3,7 +3,7 @@
  *
  * Syntec'in Windows CE FTP sunucusu DOS bicimi verir (gercek torna 8, 2026-10-07):
  *   10-07-26  08:19                   22 MDIBlock
- *   01-12-26  15:18       <DIR>          M-TEKNIK
+ *   01-12-26  15:18       <DIR>          MUSTERI_C
  * UNIX bicimi de (drwxr-xr-x ...) desteklenir: baska bir tezgah/sunucu gelirse
  * cozumleyici degismeden calissin.
  *

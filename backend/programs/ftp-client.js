@@ -31,6 +31,9 @@ export class FtpError extends Error {
   }
 }
 
+/** 226 geldikten sonra veri kanalindan yeni veri beklenen azami sure (kanal kapanmasa da biter). */
+const CONTROL_DONE_GRACE_MS = 600;
+
 const DEFAULTS = Object.freeze({
   port: 21,
   user: 'anonymous',
@@ -210,34 +213,67 @@ export class FtpClient {
     return connectSocket(this.opt.host, port, this.opt.connectTimeoutMs);
   }
 
-  #readAll(data, maxBytes) {
+  /**
+   * Veri kanalini sonuna kadar okur. Bitis, ikisinden biri:
+   *   - sunucu veri kanalini kapatir (normal durum), ya da
+   *   - kontrol kanalindan tamamlanma yaniti (`controlDone`, 226) gelir ve ardindan kisa bir sure
+   *     (CONTROL_DONE_GRACE_MS) yeni veri gelmez.
+   * Ikincisi GERCEK TORNA icin sart: bos klasorde (ve bos dosyada) torna 125'ten hemen sonra 226 verir,
+   * veri kanalina hic bayt yazmaz ve kanali KAPATMAZ (.99, 2026-10-07; curl 226'da bitirdigi icin
+   * sorunsuz). Kanalin kapanmasini bekleyen istemci dataIdleTimeoutMs (20 sn) sonra zaman asimina duser.
+   */
+  #readAll(data, maxBytes, controlDone = null) {
     return new Promise((resolve, reject) => {
       const chunks = [];
       let size = 0;
-      let idle = setTimeout(onIdle, this.opt.dataIdleTimeoutMs);
-      function onIdle() {
+      let settled = false;
+      let controlAnswered = false;
+      let idle = null;
+      const finish = (fn) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(idle);
+        fn();
+      };
+      const onIdle = () => {
         data.destroy();
-        reject(new FtpError('veri aktarımı zaman aşımına uğradı', { step: 'veri' }));
-      }
+        if (controlAnswered) finish(() => resolve(Buffer.concat(chunks)));
+        else finish(() => reject(new FtpError('veri aktarımı zaman aşımına uğradı', { step: 'veri' })));
+      };
+      const arm = () => {
+        clearTimeout(idle);
+        idle = setTimeout(onIdle, controlAnswered ? CONTROL_DONE_GRACE_MS : this.opt.dataIdleTimeoutMs);
+      };
+      arm();
       data.on('data', (c) => {
         size += c.length;
         if (size > maxBytes) {
-          clearTimeout(idle);
           data.destroy();
-          reject(new FtpError(`dosya çok büyük (> ${maxBytes} bayt)`, { step: 'veri' }));
+          finish(() => reject(new FtpError(`dosya çok büyük (> ${maxBytes} bayt)`, { step: 'veri' })));
           return;
         }
         chunks.push(c);
-        clearTimeout(idle);
-        idle = setTimeout(onIdle, this.opt.dataIdleTimeoutMs);
+        arm();
       });
-      data.once('end', () => { clearTimeout(idle); resolve(Buffer.concat(chunks)); });
-      data.once('close', () => { clearTimeout(idle); resolve(Buffer.concat(chunks)); });
+      data.once('end', () => finish(() => resolve(Buffer.concat(chunks))));
+      data.once('close', () => finish(() => resolve(Buffer.concat(chunks))));
       data.once('error', (err) => {
-        clearTimeout(idle);
-        reject(new FtpError(`veri bağlantısı hatası: ${err.code ?? err.message}`, { step: 'veri' }));
+        finish(() => reject(new FtpError(`veri bağlantısı hatası: ${err.code ?? err.message}`, { step: 'veri' })));
       });
+      // Yanitin KODU burada denetlenmez (ust katman #expect ile eder): burada yalniz "sunucu bitti dedi".
+      controlDone?.then(
+        () => { controlAnswered = true; if (!settled) arm(); },
+        (err) => { data.destroy(); finish(() => reject(err)); },
+      );
     });
+  }
+
+  /** Bekleyen yanit beklemesini birakir (veri okuma hatayla biterse, sarkan zamanlayici oturumu kapatmasin). */
+  #dropWait() {
+    if (this.waiter) {
+      clearTimeout(this.waiter.timer);
+      this.waiter = null;
+    }
   }
 
   /* ----------------------------------------------------------------------- komutlar */
@@ -275,15 +311,20 @@ export class FtpClient {
     await this.#setType('A');
     const data = await this.#openData();
     let body;
+    let fin;
     try {
       const r1 = await this.#command('LIST');
       this.#expect(r1, [125, 150], 'LIST');
-      body = await this.#readAll(data, this.opt.maxBytes * 4);
+      // Tamamlanma yaniti (226) veri okunurken ayni anda beklenir: bkz. #readAll.
+      fin = this.#nextReply('LIST sonu', this.opt.dataIdleTimeoutMs);
+      fin.catch(() => {}); // readAll once hata verirse "islenmemis red" olmasin
+      body = await this.#readAll(data, this.opt.maxBytes * 4, fin);
     } catch (err) {
       data.destroy();
+      this.#dropWait();
       throw err;
     }
-    this.#expect(await this.#nextReply('LIST sonu'), [226, 250], 'LIST sonu');
+    this.#expect(await fin, [226, 250], 'LIST sonu');
     return body.toString('latin1');
   }
 
@@ -293,15 +334,19 @@ export class FtpClient {
     await this.#setType('I');
     const data = await this.#openData();
     let body;
+    let fin;
     try {
       const r1 = await this.#command(`RETR ${name}`);
       this.#expect(r1, [125, 150], 'RETR');
-      body = await this.#readAll(data, maxBytes);
+      fin = this.#nextReply('RETR sonu', this.opt.dataIdleTimeoutMs);
+      fin.catch(() => {});
+      body = await this.#readAll(data, maxBytes, fin);
     } catch (err) {
       data.destroy();
+      this.#dropWait();
       throw err;
     }
-    this.#expect(await this.#nextReply('RETR sonu'), [226, 250], 'RETR sonu');
+    this.#expect(await fin, [226, 250], 'RETR sonu');
     return body;
   }
 

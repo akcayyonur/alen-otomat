@@ -228,7 +228,25 @@ Henüz gerçek tornada denenmedi. Ortam: PC Simulator'ı **kısa yoldan** çalı
     kullanılmalı. Aktarım kodunda `WRITE_nc_main`, `RemoteProgExecute`, `UPLOAD_software/plc_file/
     param_file`, `WRITE_macro_*`, `FileUpload` (gizli) ve `MultiTCPInstall` ASLA geçmemeli.
 
-### 🆕 22TB ailesi (SYNTEC 22B, yazılım 10.118.88) — YALNIZ PC Simulator'da doğrulandı, 2026-10-07
+### 🆕 22TB ailesi (SYNTEC 22B, yazılım 10.118.88) — PC Simulator (2026-10-07) + GERÇEK tornada okuma (2026-10-08)
+
+**GERÇEK 22TB tornası (CNC-08, 192.168.88.97), 2026-10-08, ~4 dk, ajan `--model 22TB`, tek istemci, YALNIZ OKUMA:**
+- **Kimlik:** `SeriesNo M1R11926`, `MainBoardPlatformName i.MX6-H` (11TB'de `AM335x-H`: farklı donanım), `CncType 22B`,
+  `NcSurum 10.118.88.20`, `CncOption 5 32 45 52 54`, 4 eksen (azami 6), `Seri Lathe`. İlk oturumda tam geldi (restart gerekmedi).
+- **Portlar:** 21 (FTP), 5566, 5568, 5570, 5572 açık. **Bir oturum 5 TCP açıyor** (5566, 5568, **5570 ×2**, 5572); 11TB'de 4.
+  Sunucunun oturum sınırı (11TB'de 4 oturum) 22B'de ÖLÇÜLMEDİ: torna başına tek ajan istemcisi kuralı aynen geçerli.
+- **Okuma:** 193 okuma = 193 gönderim, 0 düşen, takılma yok. Ham `Status=START` → RUNNING (11TB ile aynı sözlük,
+  `/api/health` `statusMapping: RUNNING<-START`), `Mode=AUTO`, `Alarm/EMG=****`. Program adı 12 haneli (`6014…`),
+  mil 0…2000 arasında değişiyor (işlem arasında 0), ilerleme değişiyor, `partTarget` null, parça sayacı 212 → 213
+  (çevrim süresi 75 → 4'e sıfırlandı, ~80 sn/parça), güç/kesme süreleri artıyor.
+- **FTP:** 11TB ile AYNI diyalog (anonim `331`/`230`, `EPSV`, `125`/`226`); kök 9 girdi (3 klasör), kendi istemcimizle `LIST` 73 ms,
+  ürünün "Tezgahtaki programları tara"sı 1,1 sn, 38 girdi, uyarı yok. **Yazma (STOR/RNFR/RNTO) denenmedi.**
+- **Hâlâ bilinmeyenler:** uzun süreli kararlılık (yalnız ~4 dk), boşta/alarm ham değerleri, FTP'de yazma ve aynı ada `RNTO`
+  davranışı. Bu yüzden 22TB'de gönderme KAPALI kalır (aşağıda); durum `experimental`.
+
+*(Aşağıdaki simülatör bulguları geçerlidir.)*
+
+### 22TB ailesi — PC Simulator ayrıntıları, 2026-10-07
 
 8 tezgahın biri farklı bir kontrolcü ailesi: panelde **SYNTEC 22TB** (System Data ekranı: kontrolcü modeli
 **22B**, yazılım **10.118.88T**). Syntec paketi `22BLathe_W32_10.118.88Z` (11TB'ninki: `11BLathe_W32_10.116.56Q`).
@@ -252,12 +270,10 @@ fonksiyonu çalıştı, `READ_nc_current_block` **-18** (11B ile aynı); ham de�
 `Alarm/EMG=****` (11B sözlüğüyle aynı). Ajan (`--model 22TB`) + gerçek backend + dashboard uçtan uca: 38 okuma = 38
 gönderim, 0 düşen, çıkış kodu 0, kapanışta açık bağlantı 0, dashboard'da `SYNTEC 22B · 10.118.88T`, durum IDLE.
 
-**GERÇEK 22TB tezgahta HİÇBİR ŞEY denenmedi.** Bilinmeyenler: gerçek tezgahın API portları/oturum kuralları (4 oturum
-sınırı?), `RUNNING` iken dönen `Status` metni (11B'de `START`), FTP sunucusunun varlığı/kök klasörü/davranışı,
-`Start server while boot` ayarı (22B menüsünde de var). **Bu yüzden 22TB'de program GÖNDERME kapalıdır**
-(`config/drivers.json` → `models[22TB].fileTransfer.sendEnabled = false`); tarama (salt okunur) ve okuma açıktır.
-İlk gerçek bağlantıda sıra: ajan okuması → `/api/health` `statusMapping` → "Tezgahtaki programları tara" → FTP
-kök/davranış doğrulanınca `sendEnabled` true.
+(Gerçek tornada okuma + FTP okuma sonradan doğrulandı, yukarıya bakın.) **22TB'de program GÖNDERME kapalıdır**
+(`config/drivers.json` → `models[22TB].fileTransfer.sendEnabled = false`): FTP'de yazma gerçek 22TB'de denenmedi.
+Tarama (salt okunur) ve okuma açıktır. Sıradaki: tek kontrollü gönderme testi (yeni test adı, boş/yeni klasör), sonra
+`sendEnabled` true.
 
 ### ✅ İkinci gerçek tezgahta doğrulandı — 2026-10-06, 192.168.88.98
 
@@ -656,10 +672,10 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       oturumda hiç denenmedi. Artık en kolay yol: `installer/` ile üretilen
       Setup.exe'yi hedef PC'de çalıştırmak (görev, güvenlik duvarı, açılışta
       başlatma ve SYSTEM hesabında ajan ilk kez orada sınanır).
-- [ ] **22TB tezgahta ilk gerçek bağlantı** (§3 "22TB ailesi"): önce `22BLathe` paketini o tezgahın PC'sine/ofis PC'sine
-      koy, `Start server while boot` aç, ayarlar ekranında o tezgaha model = SYNTEC 22TB seç. Sırayla: ajan okuması
-      (yalnız okuma, tek ajan) → `/api/health` `statusMapping` (RUNNING'de dönen ham metin) → "Tezgahtaki programları
-      tara" → FTP kök klasörü/davranışı doğrulanınca `config/drivers.json`'da `models[22TB].fileTransfer.sendEnabled = true`.
+- [x] ~~22TB tezgahta ilk gerçek bağlantı~~ — yapıldı (2026-10-08, CNC-08 / .97): okuma ve FTP taraması doğrulandı (§3).
+- [ ] **22TB: gönderme testi ve uzun süreli kararlılık.** Tek kontrollü gönderme (yeni test adı, yeni/boş klasör) → başarılıysa
+      `config/drivers.json`'da `models[22TB].fileTransfer.sendEnabled = true`; ajanı saatlerce açık bırakıp takılma/oturum
+      sızıntısı olmadığını doğrula (22B oturumu 5 TCP açıyor, oturum sınırı ölçülmedi).
 - [ ] **İki ajanlı kurulum (agent\ + agent22\) yükseltilmiş oturumda denenmedi**: iki görev, SYSTEM hesabı, ikinci
       ajanın log/bellek davranışı. Yalnız paket duman testi (iki ajan da kendi DLL'ini yüklüyor) yapıldı.
 - [ ] **Gerçek tezgahta ajanı çalıştır** — şimdiye kadar yalnızca sahte DLL ile

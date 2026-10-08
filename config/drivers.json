@@ -64,8 +64,8 @@
           "clientDll": "Syntec.OpenCNC.dll",
           "agentDir": "agent22",
           "status": "experimental",
-          "verifiedOn": "2026-10-07",
-          "verifiedAgainst": "YALNIZ Syntec W32 PC Simulator 10.118.88Z: kimlik (CncType 22B, NC sürüm 10.118.88.26) ve 5 okuma fonksiyonu çalıştı, READ_nc_current_block -18 (11B ile aynı). Gerçek 22TB tezgahta DENENMEDİ.",
+          "verifiedOn": "2026-10-08",
+          "verifiedAgainst": "Syntec W32 PC Simulator 10.118.88Z (2026-10-07) ve GERÇEK 22TB tezgah (10.118.88.20, 2026-10-08, ~4 dk, yalnız okuma): kimlik tam, 193 okuma = 193 gönderim, Status START → RUNNING, FTP salt okunur tarama çalıştı. Uzun süreli kararlılık ve FTP'de YAZMA denenmedi.",
           "fileTransfer": {
             "sendEnabled": false,
             "reason": "22TB kontrolcüsünün FTP sunucusu (kök klasör, aynı adın üzerine yazma davranışı) gerçek tezgahta henüz doğrulanmadı. Önce 'Tezgahtaki programları tara' (salt okunur) ile klasör yapısı doğrulanmalı; sonra config/drivers.json'da bu modelin fileTransfer.sendEnabled değeri true yapılır."

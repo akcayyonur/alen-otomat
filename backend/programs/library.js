@@ -80,6 +80,33 @@ export function validateContent(content) {
   }
 }
 
+/**
+ * Tezgahta YENI acilacak musteri klasoru adi. Mevcut klasor adlari (validateCustomer) serbesttir ama
+ * yeni ad dar tutulur: yalniz ASCII harf/rakam/`_`/`-`/`.`. Turkce karakterler yok: tornanin Windows CE FTP
+ * sunucusuna komut metni gider ve CE'nin kod sayfasi dogrulanmadi (yanlis bayt = baska adli klasor).
+ */
+const NEW_FOLDER_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,39}$/;
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+/** @returns {string} temiz klasor adi; gecersizse ValidationError */
+export function validateNewFolderName(raw) {
+  const name = String(raw ?? '').trim();
+  if (!NEW_FOLDER_PATTERN.test(name) || name.endsWith('.')) {
+    throw new ValidationError(
+      `Klasör adı geçersiz: "${name}". Yalnızca İngilizce harf, rakam, "_", "-" ve "." kullanılabilir ` +
+      '(en fazla 40 karakter, harf/rakam/"_" ile başlamalı, "." ile bitemez). Türkçe karakter kullanmayın (ör. Ş yerine S).',
+    );
+  }
+  if (WINDOWS_RESERVED.test(name)) {
+    throw new ValidationError(`"${name}" Windows'un ayrılmış bir adıdır; başka bir ad seçin.`);
+  }
+  const upper = name.toUpperCase();
+  if (upper.startsWith(TEMP_PREFIX) || upper.startsWith('ZZRB')) {
+    throw new ValidationError(`"${TEMP_PREFIX}" ve "ZZRB" ile başlayan adlar aktarım için ayrılmıştır.`);
+  }
+  return name;
+}
+
 export const isSystemEntry = (customer, name) => customer === '' && SYSTEM_ROOT_FILES.has(name.toLowerCase());
 const keyOf = (customer, name) => `${customer.toLowerCase()}\u0000${name.toLowerCase()}`;
 
@@ -91,6 +118,55 @@ function lineEnding(text) {
   if (crlf > 0 && lf === 0) return 'CRLF';
   if (lf > 0 && crlf === 0) return 'LF';
   return 'karışık';
+}
+
+const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+/** Satir sonlarini LF'e indirger (karsilastirma icin). */
+export const eolFlatten = (text) => text.replace(/\r\n?/g, '\n');
+
+/**
+ * Dosya baytlarini metne cevirir. UTF-8 degilse latin1 (bayt = karakter: bilgi kaybi YOK).
+ * UTF-8 BOM'u metne GIRMEZ ama `bom` olarak dondurulur; editor kaydederken geri koyar, yoksa
+ * kullanicinin dokunmadigi dosyanin ilk baytlari degisirdi.
+ * @returns {{text: string, encoding: 'utf-8'|'latin1', bom: boolean, lineEnding: string}}
+ */
+export function decodeText(buf) {
+  const bom = buf.length >= 3 && buf.subarray(0, 3).equals(BOM);
+  let text;
+  let encoding = 'utf-8';
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(buf);
+  } catch {
+    text = buf.toString('latin1');
+    encoding = 'latin1';
+  }
+  return { text, encoding, bom: encoding === 'utf-8' && bom, lineEnding: lineEnding(text) };
+}
+
+/**
+ * Editorden gelen metni dosya baytlarina cevirir. Satir sonlari TEK bicime cevrilir (editor metni
+ * zaten LF'e indirger); kodlama latin1 secilip karakter 255'i asarsa SESSIZCE bozulmaz, reddedilir.
+ * Icerik yorumlanmaz: yalnizca satir sonu, kodlama ve BOM.
+ */
+export function encodeText(text, { lineEnding: ending = 'CRLF', encoding = 'utf-8', bom = false } = {}) {
+  if (typeof text !== 'string') throw new ValidationError('Program metni yok.');
+  if (ending !== 'CRLF' && ending !== 'LF') throw new ValidationError(`Satır sonu geçersiz: "${ending}" (CRLF ya da LF).`);
+  if (encoding !== 'utf-8' && encoding !== 'latin1') throw new ValidationError(`Kodlama geçersiz: "${encoding}" (utf-8 ya da latin1).`);
+  const lf = text.replace(/\r\n?/g, '\n');
+  const unified = ending === 'CRLF' ? lf.replace(/\n/g, '\r\n') : lf;
+  if (encoding === 'latin1') {
+    const bad = /[^\u0000-ÿ]/.exec(lf);
+    if (bad) {
+      const line = lf.slice(0, bad.index).split('\n').length;
+      throw new ValidationError(
+        `Satır ${line}: "${bad[0]}" karakteri Latin-1 kodlamasında yok. Karakteri değiştirin ya da kodlamayı UTF-8 seçin.`,
+      );
+    }
+    return Buffer.from(unified, 'latin1');
+  }
+  const body = Buffer.from(unified, 'utf8');
+  return bom ? Buffer.concat([BOM, body]) : body;
 }
 
 /**
@@ -124,9 +200,37 @@ export class Library {
     return this.#add({ customer, name, content, note, createdBy, originalName, source: 'yukleme' });
   }
 
-  /** Tezgahtan iceri alma (taramada gorulen ve kutuphanede olmayan program). */
-  addFromMachine({ machineId, customer, name, content, createdBy = null }) {
-    return this.#add({ customer, name, content, note: null, createdBy, originalName: null, source: 'tezgah-tarama', sourceMachine: machineId });
+  /** Tezgahtan iceri alma (taramada gorulen ve kutuphanede olmayan program; toplu alimda `note` yazilir). */
+  addFromMachine({ machineId, customer, name, content, createdBy = null, note = null }) {
+    return this.#add({ customer, name, content, note, createdBy, originalName: null, source: 'tezgah-tarama', sourceMachine: machineId });
+  }
+
+  /**
+   * Tezgahtan okunan bir dosya kutuphaneye gore ne durumda? (toplu iceri alma plani)
+   *   yeni      kutuphanede (musteri, ad) yok
+   *   ayni      icerigi (SHA-256) bir surumle ayni: alinacak bir sey yok
+   *   cakisma   AYNI AD, hicbir surumle tutmayan icerik. `eolOnlyVersion`: icerik yalniz satir sonu (CRLF/LF)
+   *             farkiyla o surume esitse onun numarasi (cogu "cakisma" boyle cikar).
+   */
+  classifyIncoming({ customer, name, sha256: sha, content }) {
+    const program = this.db.findProgram(customer, name);
+    if (!program) return { kind: 'yeni' };
+    const versions = this.db.listVersions(program.id); // yeniden eskiye
+    const latest = versions[0];
+    const hit = versions.find((v) => v.sha256 === sha);
+    if (hit) return { kind: 'ayni', programId: program.id, versionNo: hit.versionNo, latestVersion: latest.versionNo };
+    const incoming = eolFlatten(decodeText(content).text);
+    let eolOnlyVersion = null;
+    for (const v of versions) {
+      const stored = this.db.getVersion(program.id, v.versionNo);
+      if (stored && eolFlatten(decodeText(stored.content).text) === incoming) { eolOnlyVersion = v.versionNo; break; }
+    }
+    return {
+      kind: 'cakisma',
+      programId: program.id,
+      latest: { versionNo: latest.versionNo, size: latest.size, createdAt: latest.createdAt, sha256: latest.sha256 },
+      eolOnlyVersion,
+    };
   }
 
   #add({ customer, name, content, note, createdBy, originalName, source, sourceMachine = null }) {
@@ -146,25 +250,82 @@ export class Library {
     });
   }
 
-  /** Onizleme: ilk `maxChars` karakter. Kodlamayi DEGISTIRMEZ (yalniz gosterim). */
+  /**
+   * Editorde yazilan metni kutuphaneye kaydeder.
+   *   - programId verilirse: o programin YENI SURUMU (musteri/ad degismez). `baseVersionNo`, editorun
+   *     actigi surumdur; bu arada daha yeni surum olustuysa 409 (`acceptNewer` ile asilir).
+   *   - verilmezse: YENI program. (musteri, ad) kutuphanede zaten varsa 409: yanlislikla baska
+   *     programin surumu olmasin.
+   * Ayni icerik en son surumle ayniysa yeni surum acilmaz (created: false).
+   */
+  saveText({
+    programId = null, baseVersionNo = null, customer = '', name, text, lineEnding: ending = 'CRLF',
+    encoding = 'utf-8', bom = false, note = null, createdBy = null, acceptNewer = false,
+  }) {
+    let target;
+    if (programId != null) {
+      const program = this.db.getProgram(Number(programId));
+      if (!program) throw new ValidationError('Program kütüphanede bulunamadı.', 404);
+      const latest = this.db.latestVersion(program.id);
+      if (baseVersionNo == null || !this.db.getVersion(program.id, Number(baseVersionNo))) {
+        throw new ValidationError(`Düzenlenen sürüm bulunamadı: v${baseVersionNo}.`, 404);
+      }
+      if (latest.versionNo !== Number(baseVersionNo) && !acceptNewer) {
+        const err = new ValidationError(
+          `Bu program siz düzenlerken değişmiş: son sürüm v${latest.versionNo}, siz v${baseVersionNo} üzerinde çalışıyorsunuz. ` +
+          `Yine de kaydederseniz v${latest.versionNo + 1} olarak eklenir; v${latest.versionNo}'deki değişiklikler bu sürüme taşınmaz.`,
+          409,
+        );
+        err.code = 'newer-version';
+        throw err;
+      }
+      target = { customer: program.customer, name: program.name };
+    } else {
+      target = { customer: validateCustomer(customer), name: validateProgramName(name) };
+      const exists = this.db.findProgram(target.customer, target.name);
+      if (exists) {
+        const err = new ValidationError(
+          `"${target.customer === '' ? '' : `${target.customer}\\`}${target.name}" kütüphanede zaten var. ` +
+          'Var olan programı değiştirmek için programı açıp "Düzenle"yi kullanın; yeni program için başka bir ad seçin.',
+          409,
+        );
+        err.code = 'exists';
+        throw err;
+      }
+    }
+    const content = encodeText(text, { lineEnding: ending, encoding, bom });
+    const result = this.#add({
+      ...target, content, note, createdBy, originalName: null, source: 'editor',
+    });
+    return result;
+  }
+
+  /**
+   * Onizleme: ilk `maxChars` karakter (editor `Infinity` ile TAM metni ister: kesik metinle
+   * kaydetmek icerigi sessizce kisaltirdi). Kodlamayi DEGISTIRMEZ (yalniz gosterim).
+   */
   preview(programId, versionNo, maxChars = 20_000) {
     const v = this.db.getVersion(programId, versionNo);
     if (!v) return null;
-    let text;
-    let encoding = 'utf-8';
-    try {
-      text = new TextDecoder('utf-8', { fatal: true }).decode(v.content);
-    } catch {
-      text = v.content.toString('latin1');
-      encoding = 'latin1 (UTF-8 değil)';
-    }
+    const { text, encoding, bom, lineEnding: ending } = decodeText(v.content);
     const truncated = text.length > maxChars;
+    // roundTrip: editor bu metni (tek tip satir sonuyla) kaydederse dosya BAYT BAYT ayni cikar mi?
+    // Karisik/tekil CR satir sonlarinda hayir: editor onlari tek tipe cevirir, kullanici bilmeli.
+    let roundTrip = false;
+    if (!truncated) {
+      try {
+        roundTrip = encodeText(text, { lineEnding: ending === 'LF' ? 'LF' : 'CRLF', encoding, bom }).equals(v.content);
+      } catch { /* kodlanamadi: ayni cikmaz */ }
+    }
     return {
       meta: v.meta,
       text: truncated ? text.slice(0, maxChars) : text,
       truncated,
-      encoding,
-      lineEnding: lineEnding(text),
+      encoding: encoding === 'utf-8' ? 'utf-8' : 'latin1 (UTF-8 değil)',
+      encodingId: encoding,
+      bom,
+      lineEnding: ending,
+      roundTrip,
       lines: text.split('\n').length,
     };
   }

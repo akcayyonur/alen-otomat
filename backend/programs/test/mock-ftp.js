@@ -15,7 +15,10 @@
  * (MoveFile davranisi); `renameOverwrites: true` ile ezme simule edilir.
  *
  * Hata enjeksiyonu secenekleri: readOnly, corruptStor, failRnto, dropOnStor,
- * delayMs, listCap, holdEmptyData (bos LIST/RETR'de veri kanalini kapatmaz: gercek torna).
+ * delayMs, listCap, holdEmptyData (bos LIST/RETR'de veri kanalini kapatmaz: gercek torna),
+ * failMkd (MKD 550), mkdNoop (MKD 257 der ama klasor olusmaz), deleNoop (DELE 250 der ama dosya durur),
+ * afterRetr (RETR bitince cagrilan kanca: yaris durumlarini sinamak icin).
+ * MKD: ayni adli klasor/dosya varsa 550 (varsayim: CE de reddeder; GERCEKTE DENENMEDI).
  */
 import net from 'node:net';
 
@@ -203,7 +206,12 @@ export class MockFtpServer {
           return;
         }
         sock.end(f.data);
-        sock.on('close', () => { closeData(); reply('226 Closing data connection. '); });
+        sock.on('close', () => {
+          closeData();
+          reply('226 Closing data connection. ');
+          // Test kancasi: dosya okunduktan HEMEN sonra baska biri (operator) dosyayi degistirmis gibi.
+          this.opts.afterRetr?.(this, st.cwd.join('/'), arg);
+        });
       },
       STOR: async (arg) => {
         if (this.opts.readOnly) { st.dataServer?.close(); return reply('550 Access is denied.'); }
@@ -243,12 +251,20 @@ export class MockFtpServer {
       DELE: (arg) => {
         const dir = cwdDir();
         if (this.opts.readOnly) return reply('550 Access is denied.');
+        // deleNoop: "silindi" der ama dosyayi silmez (dogrulama adimini sinamak icin).
+        if (this.opts.deleNoop) return dir.files.has(arg.toLowerCase()) ? reply('250 Requested file action okay, completed.') : reply('550 Requested action not taken. File not found.');
         if (!dir.files.delete(arg.toLowerCase())) return reply('550 Requested action not taken. File not found.');
         reply('250 Requested file action okay, completed.');
       },
       MKD: (arg) => {
-        if (this.opts.readOnly) return reply('550 Access is denied.');
-        this.#walk([...st.cwd, arg], true);
+        if (this.opts.readOnly || this.opts.failMkd) return reply('550 Access is denied.');
+        const dir = cwdDir();
+        // CE: ayni adli klasor YA DA dosya varsa olusturmaz (buyuk/kucuk harfe duyarsiz).
+        if (dir.dirs.has(arg.toLowerCase()) || dir.files.has(arg.toLowerCase())) {
+          return reply('550 Requested action not taken. File exists.');
+        }
+        // mkdNoop: "basarili" der ama klasoru olusturmaz (dogrulama adimini sinamak icin).
+        if (!this.opts.mkdNoop) this.#walk([...st.cwd, arg], true);
         reply(`257 "${arg}" directory created.`);
       },
       HELP: () => reply('214-The following commands are implemented.\r\nUSER  PASS  QUIT  PORT  PASV\r\nTYPE  RETR  STOR  RNFR  RNTO\r\nDELE  CWD  XCWD  LIST  NLST\r\nSYST  HELP  NOOP  MKD  XMKD\r\nRMD  XRMD  PWD  XPWD  CDUP\r\nXCUP  MODE  STRU\r\n214 HELP command successful.'),
@@ -269,6 +285,9 @@ export class MockFtpServer {
         this.commands.push(cmd === 'PASS' ? 'PASS ****' : line);
         const handler = handlers[cmd];
         const run = () => {
+          // Baglanti kopmus (test sunucuyu durdurdu): gecikmeli komut artik calistirilmaz. Calissa yeni bir pasif
+          // veri sunucusu acip dinlemeyi surdurur ve test sureci kapanmazdi.
+          if (control.destroyed) return;
           if (!handler) return reply('500 Syntax error, command unrecognized.');
           if (!st.auth && !['USER', 'PASS', 'QUIT', 'SYST'].includes(cmd)) return reply('530 Not logged in.');
           return handler(arg);

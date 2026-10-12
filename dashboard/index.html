@@ -23,6 +23,8 @@
           <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-text">bağlanıyor…</span>
         </div>
+        <button class="user-chip" id="user-chip" type="button" hidden></button>
+        <button class="icon-btn" id="logout-btn" type="button" hidden>Çıkış</button>
         <button class="icon-btn" id="theme-toggle" type="button">Tema</button>
       </div>
     </header>
@@ -39,6 +41,13 @@
         </button>
         <p class="sidebar-label">Tezgahlar</p>
         <ul class="machine-list" id="machine-list"></ul>
+        <button class="mi mi-production" id="production-btn" type="button">
+          <span class="mi-dot st-none" aria-hidden="true"></span>
+          <span class="mi-main">
+            <span class="mi-name">Üretim raporu</span>
+            <span class="mi-sub">vardiya adetleri</span>
+          </span>
+        </button>
         <button class="mi mi-library" id="library-btn" type="button">
           <span class="mi-dot st-none" aria-hidden="true"></span>
           <span class="mi-main">
@@ -64,6 +73,7 @@
         <section class="detail" id="detail" aria-live="polite" hidden></section>
         <section class="detail" id="config-view" hidden></section>
         <section class="detail" id="library-view" hidden></section>
+        <section class="detail" id="production-view" hidden></section>
       </main>
     </div>
 

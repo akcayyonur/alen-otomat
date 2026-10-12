@@ -4,6 +4,7 @@
  * Gorunumler, kalici bir tezgah secici:
  *   #/filo             filo geneli (KPI + kartlar)
  *   #/tezgah/CNC-01    tek tezgah ayrintisi
+ *   #/uretim           uretim raporu (vardiya x tezgah x program adetleri)
  *   #/programlar       program kutuphanesi   (#/programlar/12: program ayrintisi)
  *   #/ayarlar          tezgah ve surucu ayarlari
  *
@@ -14,6 +15,8 @@
 import { lineChart, timeline, ribbonHtml } from './charts.js';
 import { renderConfig, resetConfigView } from './config-view.js';
 import { renderLibrary, resetLibraryView, renderMachinePrograms } from './library-view.js';
+import { renderProduction, resetProductionView, initMachineProduction, refreshMachineProduction } from './production-view.js';
+import { initAuth, isAdmin, checkSessionAfterStreamError } from './auth-view.js';
 import {
   STATES, stateOf, num, pct, dur, clock, dateTime, ago,
   FIELD_GROUPS, escapeHtml,
@@ -37,7 +40,7 @@ const HISTORY_REFRESH_MS = 10_000;
 
 const state = {
   /** @type {object|null} */ snapshot: null,
-  /** @type {'fleet'|'machine'|'config'|'library'} */ view: 'fleet',
+  /** @type {'fleet'|'machine'|'config'|'library'|'production'} */ view: 'fleet',
   /** @type {string|null} */ selected: null,
   /** @type {number|null} kutuphane ekraninda secili program */ programId: null,
   window: '30m',
@@ -66,9 +69,19 @@ function readRoute() {
   } else if (hash === '/ayarlar') {
     state.view = 'config';
     state.selected = null;
+  } else if (hash === '/uretim') {
+    state.view = 'production';
+    state.selected = null;
   } else {
     state.view = 'fleet';
     state.selected = null;
+  }
+  // Izleyici (viewer) program kutuphanesini ve ayarlari goremez: adres cubuguna yazsa bile filoya doner.
+  // (Sunucu bu uclari zaten reddeder; burasi yalniz bos/hatali bir ekran gostermemek icin.)
+  if (!isAdmin() && (state.view === 'library' || state.view === 'config')) {
+    state.view = 'fleet';
+    state.selected = null;
+    history.replaceState(null, '', '#/filo');
   }
 }
 
@@ -123,6 +136,7 @@ function renderSidebar() {
 
   refs.fleetBtn.classList.toggle('is-active', state.view === 'fleet');
   refs.libraryBtn.classList.toggle('is-active', state.view === 'library');
+  refs.productionBtn.classList.toggle('is-active', state.view === 'production');
   refs.configBtn.classList.toggle('is-active', state.view === 'config');
 }
 
@@ -244,6 +258,9 @@ function detailShell(m) {
 
     '<section class="dt-live" data-role="live"></section>' +
 
+    // Vardiya adetleri (07-19 / 19-07, program bazinda, yanlarinda parca suresi): izleme verisi, viewer da gorur.
+    '<section class="dt-block" data-role="production"></section>' +
+
     '<section class="dt-block">' +
     '<div class="dt-block-head">' +
     '<h3>Durum şeridi</h3>' +
@@ -259,7 +276,8 @@ function detailShell(m) {
     '<h3>Ölçümler</h3>' +
     '<div class="dt-actions">' +
     '<button type="button" class="icon-btn" data-role="table-toggle">Tablo</button>' +
-    '<a class="icon-btn" data-role="csv" download>CSV indir</a>' +
+    '<a class="icon-btn" data-role="csv" download title="Özet: üretilen her parça ve durum / program / alarm değişimleri; arada geçen saniyelik satırlar yok">CSV indir</a>' +
+    '<a class="icon-btn" data-role="csv-raw" download title="Kaydedilen her örnek (eski biçim)">Ham CSV</a>' +
     '</div>' +
     '</div>' +
     '<div class="charts" data-role="charts"></div>' +
@@ -271,8 +289,8 @@ function detailShell(m) {
     '<div data-role="downtimes"></div>' +
     '</section>' +
 
-    // Program kutuphanesi ile karsilastirma ve tezgaha program gonderme.
-    '<section class="dt-block" data-role="programs"></section>' +
+    // Program kutuphanesi ile karsilastirma ve tezgaha program gonderme: YALNIZ yonetici.
+    (isAdmin() ? '<section class="dt-block" data-role="programs"></section>' : '') +
 
     '<section class="dt-block">' +
     '<h3>Kontrolcüden gelen ham değerler</h3>' +
@@ -286,7 +304,9 @@ function detailShell(m) {
 function renderDetailStatic(m) {
   refs.detail.innerHTML = detailShell(m);
   state.detailFor = m.machineId;
-  renderMachinePrograms(refs.detail.querySelector('[data-role="programs"]'), m);
+  const programsHost = refs.detail.querySelector('[data-role="programs"]');
+  if (programsHost) renderMachinePrograms(programsHost, m);
+  initMachineProduction(refs.detail.querySelector('[data-role="production"]'), m.machineId);
 
   // Alan gruplari - yapi bir kez kurulur, degerler sonra yamanir.
   refs.detail.querySelector('[data-role="live"]').innerHTML = FIELD_GROUPS.map((g) =>
@@ -501,6 +521,10 @@ function drawHistory() {
   if (csv) {
     csv.href = `/api/machines/${encodeURIComponent(state.selected)}/export.csv?window=${state.window}`;
   }
+  const csvRaw = refs.detail.querySelector('[data-role="csv-raw"]');
+  if (csvRaw) {
+    csvRaw.href = `/api/machines/${encodeURIComponent(state.selected)}/export.csv?window=${state.window}&format=ham`;
+  }
 }
 
 /** Grafiklerin tablo karsiligi - renk/konum gormeden de okunabilsin. */
@@ -539,11 +563,13 @@ function render() {
   refs.detail.hidden = view !== 'machine';
   refs.configView.hidden = view !== 'config';
   refs.libraryView.hidden = view !== 'library';
+  refs.productionView.hidden = view !== 'production';
 
   refs.title.textContent =
     view === 'machine' ? m.name
       : view === 'config' ? 'Ayarlar'
-        : view === 'library' ? 'Program Kütüphanesi' : 'Filo Genel Bakış';
+        : view === 'production' ? 'Üretim Raporu'
+          : view === 'library' ? 'Program Kütüphanesi' : 'Filo Genel Bakış';
 
   if (view === 'machine') {
     if (state.detailFor !== m.machineId) {
@@ -563,6 +589,16 @@ function render() {
     if (refs.libraryView.dataset.key !== key) {
       refs.libraryView.dataset.key = key;
       renderLibrary(refs.libraryView, state.programId);
+    }
+  } else if (view === 'production') {
+    // Uretim raporu kendi verisini ceker (kendi 15 sn dongusuyle tazelenir); SSE karelerinde yeniden cizilmez.
+    if (state.prevView !== 'production') {
+      resetProductionView();
+      delete refs.productionView.dataset.ready;
+    }
+    if (!refs.productionView.dataset.ready) {
+      refs.productionView.dataset.ready = '1';
+      renderProduction(refs.productionView);
     }
   } else if (view === 'config') {
     // Ayarlar ekrani kendi verisini ceker; her SSE karesinde yeniden cizilmez.
@@ -600,7 +636,11 @@ function connect() {
     setConn('canlı', true);
     render();
   });
-  es.addEventListener('error', () => setConn('bağlantı kesildi — yeniden deneniyor', false));
+  es.addEventListener('error', () => {
+    setConn('bağlantı kesildi — yeniden deneniyor', false);
+    // Kopma oturum bitisinden mi? (bittiyse giris ekranina doner; yalniz ag sorunuysa akis kendi yeniden baglanir)
+    checkSessionAfterStreamError();
+  });
 }
 
 function setConn(text, ok) {
@@ -641,13 +681,18 @@ function initKeyboard() {
   });
 }
 
-function init() {
+async function init() {
+  // Once giris: oturum yoksa giris/ilk kurulum ekrani gelir ve giris yapilana dek burada beklenir.
+  await initAuth();
+
   refs.machineList = $('#machine-list');
   refs.fleetBtn = $('#fleet-btn');
   refs.configBtn = $('#config-btn');
   refs.configView = $('#config-view');
   refs.libraryBtn = $('#library-btn');
   refs.libraryView = $('#library-view');
+  refs.productionBtn = $('#production-btn');
+  refs.productionView = $('#production-view');
   refs.sidebar = $('#sidebar');
   refs.kpis = $('#kpis');
   refs.fleetGrid = $('#fleet-grid');
@@ -662,6 +707,10 @@ function init() {
   refs.fleetBtn.addEventListener('click', () => go(null));
   refs.configBtn.addEventListener('click', () => { location.hash = '#/ayarlar'; });
   refs.libraryBtn.addEventListener('click', () => { location.hash = '#/programlar'; });
+  refs.productionBtn.addEventListener('click', () => { location.hash = '#/uretim'; });
+  // Izleyici: program kutuphanesi ve ayarlar menuden de kalkar.
+  refs.libraryBtn.hidden = !isAdmin();
+  refs.configBtn.hidden = !isAdmin();
   addEventListener('hashchange', () => { readRoute(); render(); });
 
   initTheme();
@@ -669,7 +718,11 @@ function init() {
   readRoute();
   connect();
 
-  setInterval(() => { if (state.selected) refreshHistory(); }, HISTORY_REFRESH_MS);
+  setInterval(() => {
+    if (!state.selected) return;
+    refreshHistory();
+    refreshMachineProduction();
+  }, HISTORY_REFRESH_MS);
   // Pencere boyutu degisince grafikler yeniden olculmeli.
   let resizeTimer;
   addEventListener('resize', () => {
@@ -678,4 +731,7 @@ function init() {
   });
 }
 
-init();
+init().catch((err) => {
+  console.error('[dashboard] baslatilamadi', err);
+  document.body.insertAdjacentHTML('afterbegin', `<p class="notice notice-sim" style="margin:16px">Arayüz başlatılamadı: ${escapeHtml(err.message)}</p>`);
+});

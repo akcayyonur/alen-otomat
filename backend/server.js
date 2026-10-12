@@ -13,6 +13,12 @@ import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
 import { Library } from './programs/library.js';
 import { MachineFiles } from './programs/machine-files.js';
 import { createProgramRoutes } from './programs/routes.js';
+import { AuthDb } from './auth/auth-db.js';
+import { Auth } from './auth/auth.js';
+import { createGate, createAuthRoutes } from './auth/http.js';
+import { redactSnapshot, redactDetail } from './auth/policy.js';
+import { csvDocument } from './csv.js';
+import { buildReport, reportCsv, compactMachineCsv, resolveRange } from './production-report.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -25,11 +31,25 @@ const LIBRARY_DB_FILE = process.env.LIBRARY_DB_FILE ?? 'data/library.db';
  */
 const TRANSFER_DISABLED = process.env.TRANSFER_DISABLED === '1';
 /**
+ * Tornadan program SILMEYI (FTP DELE) zorla acar. Normalde silme, modelin `fileTransfer.deleteEnabled` degeri
+ * (config/drivers.json) gercek tezgahta dogrulaninca acilir. Bu bayrak YALNIZ o dogrulamayi yapmak icindir
+ * (ornegin kendi gonderdigimiz bir test dosyasini silmek); gundelik kullanimda verilmez.
+ */
+const DELETE_ENABLED = process.env.DELETE_ENABLED === '1';
+/**
  * Ayarlar ekranindan yapilandirma yazimi. Kimlik dogrulama HENUZ YOK - ofis
  * agindaki herkes tezgah tanimlarini degistirebilir. Dashboard ofis LAN'i
  * disina acilacaksa bunu 1 yapip yazimi kapatin (Bolum 08).
  */
 const CONFIG_READONLY = process.env.CONFIG_READONLY === '1';
+/**
+ * Kimlik dogrulama (admin / viewer): data/auth.db. AUTH_DISABLED=1 HER SEYI ACIK BIRAKIR (yalniz gelistirme/demo:
+ * scripts/dev.js, demo*.js bunu kendisi verir); gercek kurulumda ASLA verilmez.
+ */
+const AUTH_DB_FILE = process.env.AUTH_DB_FILE ?? 'data/auth.db';
+const AUTH_DISABLED = process.env.AUTH_DISABLED === '1';
+/** Acik SSE akislarinda oturumun hala gecerli oldugu bu kadar karede bir (1 sn x N) denetlenir. */
+const SESSION_RECHECK_TICKS = 30;
 /** Dashboard'a yayin sikligi - ingest hizindan bagimsiz (Bolum 07: < 2-5 sn). */
 const BROADCAST_MS = 1000;
 const MAX_BODY_BYTES = 1_000_000;
@@ -44,9 +64,17 @@ const machineFiles = new MachineFiles({
   library,
   getMachine: (id) => loadInventory().find((m) => m.id === id) ?? null,
   liveInfo: (id) => store.liveInfo(id),
-  flags: { transferDisabled: TRANSFER_DISABLED },
+  flags: { transferDisabled: TRANSFER_DISABLED, deleteEnabled: DELETE_ENABLED },
 });
-const programRoutes = createProgramRoutes({ library, files: machineFiles, listMachines: () => loadInventory() });
+const programRoutes = createProgramRoutes({
+  library, files: machineFiles, listMachines: () => loadInventory(), authRequired: !AUTH_DISABLED,
+});
+
+// Kimlik dogrulama: her istek once kapidan (gate) gecer; izin tablosu backend/auth/policy.js'te.
+const authDb = new AuthDb(AUTH_DB_FILE);
+const auth = new Auth({ db: authDb });
+const gate = createGate({ auth, disabled: AUTH_DISABLED });
+const authRoutes = createAuthRoutes({ auth, disabled: AUTH_DISABLED });
 
 /** @type {Set<import('node:http').ServerResponse>} */
 const clients = new Set();
@@ -58,6 +86,16 @@ const STATIC_FILES = {
   '/charts.js': ['../dashboard/charts.js', 'text/javascript; charset=utf-8'],
   '/config-view.js': ['../dashboard/config-view.js', 'text/javascript; charset=utf-8'],
   '/library-view.js': ['../dashboard/library-view.js', 'text/javascript; charset=utf-8'],
+  '/lib-common.js': ['../dashboard/lib-common.js', 'text/javascript; charset=utf-8'],
+  '/editor-view.js': ['../dashboard/editor-view.js', 'text/javascript; charset=utf-8'],
+  '/folder-view.js': ['../dashboard/folder-view.js', 'text/javascript; charset=utf-8'],
+  '/diff.js': ['../dashboard/diff.js', 'text/javascript; charset=utf-8'],
+  '/bulk-import-view.js': ['../dashboard/bulk-import-view.js', 'text/javascript; charset=utf-8'],
+  '/delete-view.js': ['../dashboard/delete-view.js', 'text/javascript; charset=utf-8'],
+  '/diff-render.js': ['../dashboard/diff-render.js', 'text/javascript; charset=utf-8'],
+  '/auth-view.js': ['../dashboard/auth-view.js', 'text/javascript; charset=utf-8'],
+  '/users-view.js': ['../dashboard/users-view.js', 'text/javascript; charset=utf-8'],
+  '/production-view.js': ['../dashboard/production-view.js', 'text/javascript; charset=utf-8'],
   '/format.js': ['../dashboard/format.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['../dashboard/styles.css', 'text/css; charset=utf-8'],
 };
@@ -151,6 +189,9 @@ async function handleIngest(req, res) {
 }
 
 function handleStream(req, res) {
+  // Akisin sahibi: kare icerigi role gore suzulur (viewer tezgah IP'lerini gormez), oturum duzenli denetlenir.
+  res.cncRole = req.user?.role ?? 'viewer';
+  res.cncToken = req.session?.tokenHash ?? null;
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store',
@@ -158,22 +199,41 @@ function handleStream(req, res) {
     'x-accel-buffering': 'no',
   });
   res.write('retry: 2000\n\n');
-  res.write(`event: snapshot\ndata: ${JSON.stringify(store.snapshot())}\n\n`);
+  res.write(`event: snapshot\ndata: ${JSON.stringify(snapshotFor(res.cncRole))}\n\n`);
 
   clients.add(res);
   req.on('close', () => clients.delete(res));
 }
 
+/** Rolune gore anlik goruntu: admin her seyi, viewer IP/port gibi ic ag ayrintilari OLMADAN gorur. */
+function snapshotFor(role, snapshot = store.snapshot()) {
+  return role === 'admin' ? snapshot : redactSnapshot(snapshot);
+}
+
+let tick = 0;
 function broadcast() {
   if (clients.size === 0) {
     // Istemci yoksa da sessizlige dusen tezgahlar NO_DATA olarak isaretlenmeli.
     store.sweep();
     return;
   }
-  const frame = `event: snapshot\ndata: ${JSON.stringify(store.snapshot())}\n\n`;
+  tick += 1;
+  const snapshot = store.snapshot();
+  const frames = new Map();
+  const frameFor = (role) => {
+    if (!frames.has(role)) frames.set(role, `event: snapshot\ndata: ${JSON.stringify(snapshotFor(role, snapshot))}\n\n`);
+    return frames.get(role);
+  };
+  const recheck = !AUTH_DISABLED && tick % SESSION_RECHECK_TICKS === 0;
   for (const res of clients) {
+    // Suresi dolan ya da kapatilan oturumun acik akisi kesilir (tarayici girise doner).
+    if (recheck && res.cncToken && !auth.isValid(res.cncToken)) {
+      clients.delete(res);
+      res.end();
+      continue;
+    }
     // Yavas istemci baglantiyi tikamasin diye yazma hatasi sessizce dusurulur.
-    res.write(frame, (err) => {
+    res.write(frameFor(res.cncRole), (err) => {
       if (err) clients.delete(res);
     });
   }
@@ -204,28 +264,50 @@ const CSV_COLUMNS = Object.freeze([
   ['ham_degerler', (r) => r.controller],
 ]);
 
-function csvCell(value) {
-  if (value === null || value === undefined) return '';
-  // Ondalik ayirici virgul - Turkce Excel sayiyi boyle tanir.
-  const text = typeof value === 'number' ? String(value).replace('.', ',') : String(value);
-  return /[";\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-function handleExport(res, machineId, fromMs, toMs) {
-  const { rows } = store.db.samples(machineId, fromMs, toMs, 100_000);
-  const lines = ['sep=;', CSV_COLUMNS.map(([name]) => name).join(';')];
-  for (const row of rows) {
-    lines.push(CSV_COLUMNS.map(([, read]) => csvCell(read(row))).join(';'));
-  }
-
-  const stamp = new Date(fromMs).toISOString().slice(0, 10);
+function sendCsv(res, filename, text) {
   res.writeHead(200, {
     'content-type': 'text/csv; charset=utf-8',
-    'content-disposition': `attachment; filename="${machineId}-${stamp}.csv"`,
+    'content-disposition': `attachment; filename="${filename}"`,
     'cache-control': 'no-store',
   });
-  // BOM: Excel dosyayi UTF-8 olarak acsin, Turkce karakterler bozulmasin.
-  res.end('﻿' + lines.join('\r\n') + '\r\n');
+  res.end(text);
+}
+
+/**
+ * Tezgah dokumu. `format=ham`: kaydedilen HER ornek (eski bicim). Varsayilan `ozet`: arada gecen ayni-durum
+ * satirlari atilir; yalniz uretilen parcalar ve durum/program/alarm degisimleri kalir (production-report.js).
+ */
+function handleExport(res, machineId, fromMs, toMs, format = 'ozet') {
+  const stamp = new Date(fromMs).toISOString().slice(0, 10);
+  if (format === 'ham') {
+    const { rows } = store.db.samples(machineId, fromMs, toMs, 100_000);
+    return sendCsv(res, `${machineId}-ham-${stamp}.csv`, csvDocument(
+      CSV_COLUMNS.map(([name]) => name),
+      rows.map((row) => CSV_COLUMNS.map(([, read]) => read(row))),
+    ));
+  }
+  return sendCsv(res, `${machineId}-ozet-${stamp}.csv`, compactMachineCsv(store.db, machineId, fromMs, toMs));
+}
+
+/** GET /api/production[/export.csv]: vardiya x tezgah x program uretim adetleri (izleme verisi: viewer de gorur). */
+function handleProduction(url, res, csv) {
+  const range = resolveRange(url.searchParams.get('from'), url.searchParams.get('to'));
+  if (range.error) return sendJson(res, 400, { error: range.error });
+  const machineId = url.searchParams.get('machine') || null;
+  if (machineId && !store.has(machineId)) return sendJson(res, 404, { error: `tezgah bulunamadi: ${machineId}` });
+
+  const report = buildReport({
+    db: store.db,
+    machines: store.listMachines(),
+    machineId,
+    ...range,
+  });
+  if (!csv) return sendJson(res, 200, report);
+
+  const view = url.searchParams.get('view') ?? 'makine';
+  if (!['makine', 'urun', 'gunluk'].includes(view)) return sendJson(res, 400, { error: `view gecersiz: ${view}` });
+  const span = range.from === range.to ? range.from : `${range.from}_${range.to}`;
+  return sendCsv(res, `uretim-${view}${machineId ? `-${machineId}` : ''}-${span}.csv`, reportCsv(report, view));
 }
 
 /**
@@ -256,7 +338,7 @@ async function handleConfigWrite(req, res) {
 
 const MACHINE_ROUTE = /^\/api\/machines\/([^/]+)(?:\/([a-z.]+))?$/;
 
-function handleMachineRoute(url, res, idRaw, action) {
+function handleMachineRoute(url, res, idRaw, action, role = 'viewer') {
   const machineId = decodeURIComponent(idRaw);
   if (!store.has(machineId)) {
     return sendJson(res, 404, { error: `tezgah bulunamadi: ${machineId}` });
@@ -271,13 +353,14 @@ function handleMachineRoute(url, res, idRaw, action) {
       // Detay: anlik gorunum + bellek ici canli pencere + vardiya raporu.
       const snapshot = store.snapshot();
       const machine = snapshot.machines.find((m) => m.machineId === machineId);
-      return sendJson(res, 200, {
+      const detail = {
         machine,
         live: store.liveHistory(machineId).samples,
         summary: store.db.summary(machineId, fromMs, toMs),
         spans: store.db.spans(machineId, fromMs, toMs),
         downtimes: store.db.downtimes(machineId, fromMs, toMs),
-      });
+      };
+      return sendJson(res, 200, role === 'admin' ? detail : redactDetail(detail));
     }
     case 'history': {
       const maxPoints = Math.min(
@@ -304,7 +387,7 @@ function handleMachineRoute(url, res, idRaw, action) {
         downtimes: store.db.downtimes(machineId, fromMs, toMs),
       });
     case 'export.csv':
-      return handleExport(res, machineId, fromMs, toMs);
+      return handleExport(res, machineId, fromMs, toMs, url.searchParams.get('format') === 'ham' ? 'ham' : 'ozet');
     default:
       return sendJson(res, 404, { error: `bilinmeyen islem: ${action}` });
   }
@@ -324,14 +407,23 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
   const { pathname } = url;
 
+  // Tarayici korumasi: icerik turu tahmini, cerceveleme (clickjacking) ve Referer sizmasi kapali.
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'no-referrer');
+
   try {
+    // Kapi: oturum, rol, yerel-yalniz uclar, CSRF (policy.js). Reddedilirse yanit verilmistir.
+    if (!(await gate(req, res, url))) return;
+    // Giris / cikis / kullanici yonetimi.
+    if (await authRoutes(req, res, url)) return;
     // Program kutuphanesi / aktarim uclari (kendi hata yanitlarini verir).
     if (await programRoutes(req, res, url)) return;
 
     if (req.method === 'POST' && pathname === '/api/ingest') return await handleIngest(req, res);
     if (req.method === 'GET' && pathname === '/api/stream') return handleStream(req, res);
     if (req.method === 'GET' && pathname === '/api/machines') {
-      return sendJson(res, 200, store.snapshot());
+      return sendJson(res, 200, snapshotFor(req.user?.role));
     }
     if (req.method === 'GET' && pathname === '/api/drivers') {
       return sendJson(res, 200, { drivers: loadDrivers() });
@@ -365,6 +457,8 @@ const server = http.createServer(async (req, res) => {
       return await handleConfigWrite(req, res);
     }
     if (req.method === 'GET' && pathname === '/api/health') {
+      // Giris yapmamis (ve yonetici olmayan) istemci yalniz "ayakta" bilgisini gorur.
+      if (req.user?.role !== 'admin') return sendJson(res, 200, { ok: true });
       return sendJson(res, 200, {
         ok: true,
         clients: clients.size,
@@ -377,9 +471,12 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    if (req.method === 'GET' && pathname === '/api/production') return handleProduction(url, res, false);
+    if (req.method === 'GET' && pathname === '/api/production/export.csv') return handleProduction(url, res, true);
+
     const machineMatch = pathname.match(MACHINE_ROUTE);
     if (req.method === 'GET' && machineMatch) {
-      return handleMachineRoute(url, res, machineMatch[1], machineMatch[2]);
+      return handleMachineRoute(url, res, machineMatch[1], machineMatch[2], req.user?.role);
     }
 
     if (req.method === 'GET' && (await serveStatic(pathname, res))) return;
@@ -401,7 +498,18 @@ server.listen(PORT, HOST, () => {
     `[backend] kutuphane  -> ${LIBRARY_DB_FILE}` +
       (TRANSFER_DISABLED ? '  (tezgaha GONDERME KAPALI: TRANSFER_DISABLED=1)' : ''),
   );
+  if (AUTH_DISABLED) {
+    console.log('[backend] !!! GIRIS SISTEMI KAPALI (AUTH_DISABLED=1): herkes yonetici. Yalniz gelistirme/demo icin.');
+  } else {
+    console.log(`[backend] giris      -> ${AUTH_DB_FILE}` + (auth.setupRequired ? '  (HESAP YOK: ilk yonetici hesabi localhost uzerinden olusturulmali)' : ''));
+  }
 });
+
+// Suresi dolan oturumlari periyodik temizle (acilista da bir kez).
+if (!AUTH_DISABLED) {
+  auth.purge();
+  setInterval(() => auth.purge(), 3_600_000).unref();
+}
 
 /** Kapanirken acik araliklari kapat ve tamponu bosalt - veri kaybolmasin. */
 function shutdown() {
@@ -409,6 +517,7 @@ function shutdown() {
   for (const res of clients) res.end();
   store.close();
   library.close();
+  authDb.close();
   process.exit(0);
 }
 process.on('SIGINT', shutdown);

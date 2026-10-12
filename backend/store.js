@@ -1,6 +1,7 @@
 import { MachineStatus, TimelineState } from '../shared/schema.js';
 import { loadInventory } from '../shared/inventory.js';
 import { TelemetryDb, GAP_THRESHOLD_MS } from './db.js';
+import { PartTracker } from './production.js';
 
 const RIBBON_CHAR = Object.freeze({
   [TimelineState.RUNNING]: 'R',
@@ -75,6 +76,10 @@ export class TelemetryStore {
     this.rejectedCount = 0;
     /** @type {Set<string>} Durum eslemesinde taninmayan ham degerler. */
     this.unknownRawStatus = new Set();
+    // Uretim adedi: parca sayaci her artisinda kalici bir olay yazilir (raporlar bunlardan gelir). Yeniden baslamada
+    // taban, tezgahin son kayitli ornegidir; boylece kapali kalinan surede artan adet kaybolmaz (zamani isaretlenir).
+    this.tracker = new PartTracker({ seed: (id) => this.db.lastCounters(id), gapMs: GAP_THRESHOLD_MS });
+    this.productionErrors = 0;
 
     for (const info of loadInventory()) {
       this.machines.set(info.id, this.#blank(info));
@@ -181,6 +186,15 @@ export class TelemetryStore {
       (msg.alarms?.length ?? 0) !== (prev.alarms?.length ?? 0) ||
       msg.partCount !== prev.partCount;
     this.db.recordSample(msg, { force });
+
+    // Uretim adedi hesabi telemetriyi ASLA bozmamali: hata olursa sayilir, ingest devam eder.
+    try {
+      const produced = this.tracker.observe(msg);
+      if (produced) this.db.recordProduction(produced);
+    } catch (err) {
+      this.productionErrors += 1;
+      if (this.productionErrors <= 3) console.error('[uretim] olay yazilamadi:', err.message);
+    }
 
     // Durum eslemesi henuz dogrulanmamis ham degerleri topla (RUNNING metni
     // gercek tezgahta hala bilinmiyor - bkz. SYNTEC-REMOTEAPI.md).
@@ -290,6 +304,11 @@ export class TelemetryStore {
 
   has(machineId) {
     return this.machines.has(machineId);
+  }
+
+  /** Tezgah kimligi + adi (raporlarda sira ve baslik icin). Envanterden cikarilmis ama verisi olanlar da dahil. */
+  listMachines() {
+    return [...this.machines.values()].map((e) => ({ id: e.info.id, name: e.info.name ?? e.info.id }));
   }
 
   close() {

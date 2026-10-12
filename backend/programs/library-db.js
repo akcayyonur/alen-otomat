@@ -9,7 +9,8 @@
  *   program_versions  icerik BLOB + SHA-256; ayni icerik ikinci kez surum olmaz
  *   machine_programs  son taramada tezgahta GORULENLER (envanter)
  *   machine_scans     tezgah basina son tarama bilgisi
- *   transfers         gonderme denetim kaydi (kim, ne zaman, hangi tezgaha, sonuc)
+ *   transfers         tezgaha YAZMA denetim kaydi (kim, ne zaman, hangi tezgaha, sonuc);
+ *                     kind = 'gonderme' (program) | 'klasor' (yeni musteri klasoru)
  *
  * Ad karsilastirmalari buyuk/kucuk harfe DUYARSIZ (COLLATE NOCASE): tornanin
  * Windows CE dosya sistemi de oyle; "ornek" ile "ORNEK" ayni dosyadir.
@@ -123,6 +124,14 @@ export class LibraryDb {
     this.db.exec('PRAGMA synchronous = FULL'); // programlar kritik: yazma kaybolmasin
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
+    this.#migrate();
+  }
+
+  /** Var olan (gercek) library.db'yi bozmadan eksik sutunlari ekler. */
+  #migrate() {
+    const cols = this.db.prepare('PRAGMA table_info(transfers)').all().map((c) => c.name);
+    // kind: 'gonderme' (program gonderme) | 'klasor' (tezgahta yeni musteri klasoru acma)
+    if (!cols.includes('kind')) this.db.exec("ALTER TABLE transfers ADD COLUMN kind TEXT NOT NULL DEFAULT 'gonderme'");
   }
 
   #tx(fn) {
@@ -285,6 +294,11 @@ export class LibraryDb {
       .run(sha256, machineId, customer, name);
   }
 
+  /** Tornadan silme sonrasi: envanterden kaldir (dosya artik tezgahta yok). */
+  removeInventory(machineId, customer, name) {
+    this.db.prepare('DELETE FROM machine_programs WHERE machine_id = ? AND customer = ? AND name = ?').run(machineId, customer, name);
+  }
+
   /** Gonderme sonrasi: tezgahta artik bu dosya var. */
   upsertInventory(machineId, { customer, name, size, sha256 }) {
     this.db
@@ -335,15 +349,20 @@ export class LibraryDb {
       .map((r) => r.name);
   }
 
+  /** Tezgahta yeni acilan klasoru bilinen klasorlere ekler (yeniden taramaya gerek kalmasin). */
+  addFolder(machineId, name) {
+    this.db.prepare('INSERT OR IGNORE INTO machine_folders (machine_id, name) VALUES (?, ?)').run(machineId, name);
+  }
+
   /* ----------------------------------------------------------------- denetim kaydi */
 
   startTransfer(t) {
     const r = this.db
       .prepare(
-        `INSERT INTO transfers (machine_id, program_id, version_id, customer, name, started_at, status, size, sha_sent, requested_by, client_ip, acks)
-         VALUES (?, ?, ?, ?, ?, ?, 'basladi', ?, ?, ?, ?, ?)`,
+        `INSERT INTO transfers (kind, machine_id, program_id, version_id, customer, name, started_at, status, size, sha_sent, requested_by, client_ip, acks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'basladi', ?, ?, ?, ?, ?)`,
       )
-      .run(t.machineId, t.programId ?? null, t.versionId ?? null, t.customer ?? null, t.name ?? null, Date.now(), t.size ?? null, t.shaSent ?? null, t.requestedBy ?? null, t.clientIp ?? null, JSON.stringify(t.acks ?? []));
+      .run(t.kind ?? 'gonderme', t.machineId, t.programId ?? null, t.versionId ?? null, t.customer ?? null, t.name ?? null, Date.now(), t.size ?? null, t.shaSent ?? null, t.requestedBy ?? null, t.clientIp ?? null, JSON.stringify(t.acks ?? []));
     return Number(r.lastInsertRowid);
   }
 
@@ -355,7 +374,7 @@ export class LibraryDb {
 
   #transferRow(r) {
     return {
-      id: r.id, machineId: r.machine_id, programId: r.program_id, versionId: r.version_id,
+      id: r.id, kind: r.kind, machineId: r.machine_id, programId: r.program_id, versionId: r.version_id,
       customer: r.customer, name: r.name, startedAt: r.started_at, finishedAt: r.finished_at,
       status: r.status, size: r.size, shaSent: r.sha_sent, shaVerified: r.sha_verified,
       requestedBy: r.requested_by, clientIp: r.client_ip, error: r.error,

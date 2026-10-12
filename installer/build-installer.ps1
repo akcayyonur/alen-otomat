@@ -301,7 +301,10 @@ if (-not $TestAtla) {
     $port = 39000 + (Get-Random -Maximum 900)
     $db = Join-Path $env:TEMP "cnc-duman-$port.db"
     $kutuphaneDb = Join-Path $env:TEMP "cnc-duman-$port-kutuphane.db"
-    $env:PORT = "$port"; $env:HOST = '127.0.0.1'; $env:DB_FILE = $db; $env:LIBRARY_DB_FILE = $kutuphaneDb
+    $authDb = Join-Path $env:TEMP "cnc-duman-$port-auth.db"
+    $env:PORT = "$port"; $env:HOST = '127.0.0.1'; $env:DB_FILE = $db; $env:LIBRARY_DB_FILE = $kutuphaneDb; $env:AUTH_DB_FILE = $authDb
+    # Giris sistemi ACIK denenir (AUTH_DISABLED verilmez): paketin gercek davranisi bu.
+    Remove-Item Env:AUTH_DISABLED -ErrorAction SilentlyContinue
     $sunucu = $null
     try {
         $sunucu = Start-Process (Join-Path $rt 'node.exe') -ArgumentList 'backend\server.js' `
@@ -322,9 +325,15 @@ if (-not $TestAtla) {
         Tamam "ajan listesi uc noktasi cevap veriyor ($(@($liste.machines).Count) tezgah)"
 
         # Program kutuphanesi: modul paketten yukleniyor mu, ayri veritabani acildi mi.
-        $kut = Invoke-RestMethod "http://127.0.0.1:$port/api/library/config" -TimeoutSec 5
-        if ($kut.authRequired -ne $false -or $null -eq $kut.stats) { Vazgec 'program kutuphanesi uc noktasi beklenmedik cevap verdi' }
-        Tamam "program kutuphanesi uc noktasi cevap veriyor (gonderme $(if ($kut.transferEnabled) { 'acik' } else { 'kapali' }))"
+        # Giris sistemi: hesap yok -> ilk kurulum bekliyor; veri uclari giris olmadan KAPALI (401); ajan ucu (yerel) acik.
+        $oturum = Invoke-RestMethod "http://127.0.0.1:$port/api/session" -TimeoutSec 5
+        if ($oturum.authenticated -ne $false -or $oturum.setupRequired -ne $true -or $oturum.setupAllowed -ne $true) { Vazgec 'giris sistemi beklenmedik durumda (ilk kurulum bekliyor olmaliydi)' }
+        foreach ($yol in '/api/machines', '/api/library/config', '/api/config') {
+            $kod = 0
+            try { Invoke-WebRequest "http://127.0.0.1:$port$yol" -UseBasicParsing -TimeoutSec 5 | Out-Null; $kod = 200 } catch { $kod = [int]$_.Exception.Response.StatusCode }
+            if ($kod -ne 401) { Vazgec "$yol giris olmadan acik (HTTP $kod, 401 beklenirdi)" }
+        }
+        Tamam 'giris sistemi: veri uclari giris olmadan 401, ilk kurulum bekliyor (program kutuphanesi modulu de yuklu)'
         $kutJs = Invoke-WebRequest "http://127.0.0.1:$port/library-view.js" -UseBasicParsing -TimeoutSec 5
         if ($kutJs.StatusCode -ne 200) { Vazgec 'kutuphane arayuz dosyasi servis edilmedi' }
 
@@ -334,8 +343,8 @@ if (-not $TestAtla) {
         Tamam 'masaustu uygulamasi acik backend''i taniyor'
     } finally {
         if ($sunucu -and -not $sunucu.HasExited) { Stop-Process -Id $sunucu.Id -Force }
-        Remove-Item "$db*", "$kutuphaneDb*" -Force -ErrorAction SilentlyContinue
-        Remove-Item Env:PORT, Env:HOST, Env:DB_FILE, Env:LIBRARY_DB_FILE -ErrorAction SilentlyContinue
+        Remove-Item "$db*", "$kutuphaneDb*", "$authDb*" -Force -ErrorAction SilentlyContinue
+        Remove-Item Env:PORT, Env:HOST, Env:DB_FILE, Env:LIBRARY_DB_FILE, Env:AUTH_DB_FILE -ErrorAction SilentlyContinue
     }
 
     # Backend kapandi: ayni denetim simdi "yok" demeli.

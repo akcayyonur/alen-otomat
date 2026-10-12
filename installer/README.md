@@ -56,7 +56,9 @@ uygulama durmuş ya da elle kapatılmış hizmetleri tek tıkla kaldırmak için
 
 "Dashboard'a ağdaki diğer bilgisayarlardan erişime izin ver" seçiliyse 3000 portu da
 açılır, dashboard `http://<bu-pc-ip>:3000` ile başka bilgisayardan görülür.
-**Giriş şifresi yoktur** (CLAUDE.md §10) — yalnızca güvenilir ofis ağında.
+Dashboard **giriş ister** (0.5.0'dan beri): admin (her şey) ve viewer (yalnızca izleme) rolleri; ilk yönetici
+hesabı yalnızca bu bilgisayarda `http://localhost:3000` üzerinden oluşturulur (ayrıntı: `kurulum-sonrasi.txt`,
+CLAUDE.md §6 "Kimlik doğrulama"). Şifre unutulursa: `runtime\node.exe backend\auth-cli.js sifre <kullanici>`.
 
 ## Kurulumdan sonra
 

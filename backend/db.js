@@ -22,6 +22,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { TimelineState } from '../shared/schema.js';
+import { PartTracker, programOf } from './production.js';
 
 /** Bu sureden uzun sessizlik veri boslugu sayilir. */
 export const GAP_THRESHOLD_MS = 10_000;
@@ -34,6 +35,9 @@ const FLUSH_MS = 2_000;
 
 const SAMPLE_RETENTION_DAYS = 7;
 const SPAN_RETENTION_DAYS = 400;
+const PRODUCTION_RETENTION_DAYS = 400;
+
+const PRODUCTION_COLUMNS = 'machine_id, ts, program, qty, part_total, part_count, status, cycle_sec, gap_ms, suspect';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS samples (
@@ -72,6 +76,29 @@ CREATE TABLE IF NOT EXISTS spans (
   reason      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spans_machine_start ON spans (machine_id, started_at);
+
+-- Uretim olaylari: parca sayaci her artisinda bir satir (backend/production.js). Ornekler 7 gunde silinir,
+-- vardiya/urun raporlari aylarca geriye baktigi icin bunlar ayri ve uzun saklanir.
+CREATE TABLE IF NOT EXISTS production (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  machine_id TEXT    NOT NULL,
+  ts         INTEGER NOT NULL,
+  program    TEXT,
+  qty        INTEGER NOT NULL,
+  part_total INTEGER,
+  part_count INTEGER,
+  status     TEXT,
+  cycle_sec  REAL,
+  gap_ms     INTEGER NOT NULL DEFAULT 0,
+  suspect    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_production_machine_ts ON production (machine_id, ts);
+CREATE INDEX IF NOT EXISTS idx_production_ts ON production (ts);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
 `;
 
 const SAMPLE_COLUMNS = Object.freeze([
@@ -125,6 +152,9 @@ export class TelemetryDb {
       'INSERT INTO spans (machine_id, state, started_at, reason) VALUES (?, ?, ?, ?)',
     );
     this.closeSpanStmt = this.db.prepare('UPDATE spans SET ended_at = ? WHERE id = ?');
+    this.insertProduction = this.db.prepare(
+      `INSERT INTO production (${PRODUCTION_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    );
 
     /** @type {object[]} yazilmayi bekleyen ornekler */
     this.pending = [];
@@ -135,6 +165,139 @@ export class TelemetryDb {
     this.flushTimer.unref?.();
 
     this.pruneOld();
+    try {
+      this.backfillProduction();
+    } catch (err) {
+      // Gecmisi doldurmak bir kolaylik: basarisizsa sunucu yine acilir, bir sonraki acilista yeniden denenir.
+      console.error('[db] uretim gecmisi orneklerden doldurulamadi:', err.message);
+    }
+  }
+
+  /**
+   * Uretim olayini yazar (parca sayaci artti). Nadir (tezgah basina ~25 sn'de bir) oldugu icin
+   * tamponlanmaz: anlik yazilir, sunucu cokse bile kaybolmaz.
+   * @param {import('./production.js').ProductionEvent} ev
+   */
+  recordProduction(ev) {
+    this.insertProduction.run(
+      ev.machineId, ev.ts, bindable(ev.program), ev.qty, bindable(ev.partTotal), bindable(ev.partCount),
+      bindable(ev.status), bindable(ev.cycleSec), ev.gapMs ?? 0, ev.suspect ? 1 : 0,
+    );
+  }
+
+  /**
+   * Sunucu yeniden basladiginda uretim izleyicisinin tabani: tezgahin son kayitli ornegi.
+   * (Ornekler seyreltilir; en gec ~5 sn eski olabilir, aradaki artis ilk mesajda yakalanir.)
+   */
+  lastCounters(machineId) {
+    const r = this.db
+      .prepare(
+        `SELECT ts, part_total, part_count, program, main_program FROM samples
+          WHERE machine_id = ? ORDER BY ts DESC LIMIT 1`,
+      )
+      .get(machineId);
+    if (!r) return null;
+    return {
+      ts: Number(r.ts),
+      total: r.part_total,
+      count: r.part_count,
+      program: programOf({ mainProgram: r.main_program, program: r.program }),
+    };
+  }
+
+  /**
+   * Ilk acilista (uretim tablosu ozelligi eklenmeden onceki) ornekleri tarar ve uretim olaylarini cikarir;
+   * boylece guncellemeden hemen sonra "bu vardiya" bos gorunmez. Bir kez calisir (`meta`).
+   * Ornekler seyreltilmis oldugu icin bu olaylarin cevrim suresi yoktur (`cycle_sec` NULL): tahmin yazilmaz.
+   * @returns {number} eklenen olay sayisi
+   */
+  backfillProduction() {
+    if (this.db.prepare("SELECT 1 AS x FROM meta WHERE key = 'production_backfill'").get()) return 0;
+    const machines = this.db.prepare('SELECT DISTINCT machine_id AS id FROM samples').all();
+    const rowsOf = this.db.prepare(
+      `SELECT ts, status, part_total, part_count, program, main_program
+         FROM samples WHERE machine_id = ? ORDER BY ts`,
+    );
+    let inserted = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const { id } of machines) {
+        const tracker = new PartTracker({ gapMs: GAP_THRESHOLD_MS });
+        for (const r of rowsOf.all(id)) {
+          const ev = tracker.observe({
+            machineId: id,
+            ts: new Date(Number(r.ts)).toISOString(),
+            status: r.status,
+            partTotal: r.part_total,
+            partCount: r.part_count,
+            program: r.program,
+            mainProgram: r.main_program,
+            cycleTimeSec: null,
+          });
+          if (ev) { this.recordProduction(ev); inserted += 1; }
+        }
+      }
+      this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('production_backfill', ?)").run(String(Date.now()));
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return inserted;
+  }
+
+  /**
+   * [fromMs, toMs) araligindaki uretim: tezgah x program toplamlari. Supheli (elle ayarlanmis sayac) olaylar
+   * hariç. `approxQty`: veri kopuklugundan sonra sayilan (zamani kesin olmayan) adet.
+   * Cevrim suresi yalniz `cycle_sec` bilinen olaylardan (cycleN) hesaplanir.
+   */
+  productionWindow(fromMs, toMs, machineId = null) {
+    const rows = this.db
+      .prepare(
+        `SELECT machine_id AS machineId, program,
+                SUM(qty) AS qty,
+                SUM(CASE WHEN gap_ms > 0 THEN qty ELSE 0 END) AS approxQty,
+                COUNT(cycle_sec) AS cycleN, SUM(cycle_sec) AS cycleSum,
+                MIN(cycle_sec) AS cycleMin, MAX(cycle_sec) AS cycleMax
+           FROM production
+          WHERE ts >= ? AND ts < ? AND suspect = 0 ${machineId ? 'AND machine_id = ?' : ''}
+          GROUP BY machine_id, program
+          ORDER BY machine_id, program`,
+      )
+      .all(...(machineId ? [fromMs, toMs, machineId] : [fromMs, toMs]));
+    return rows.map((r) => ({
+      machineId: r.machineId,
+      program: r.program ?? null,
+      qty: Number(r.qty),
+      approxQty: Number(r.approxQty),
+      cycleN: Number(r.cycleN),
+      cycleSum: r.cycleSum == null ? 0 : Number(r.cycleSum),
+      cycleMin: r.cycleMin == null ? null : Number(r.cycleMin),
+      cycleMax: r.cycleMax == null ? null : Number(r.cycleMax),
+    }));
+  }
+
+  /** Sayilmayan (supheli) olaylar: [fromMs, toMs) icinde kac olay, toplam kac adet. */
+  productionSuspect(fromMs, toMs, machineId = null) {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(qty), 0) AS qty FROM production
+          WHERE ts >= ? AND ts < ? AND suspect = 1 ${machineId ? 'AND machine_id = ?' : ''}`,
+      )
+      .get(...(machineId ? [fromMs, toMs, machineId] : [fromMs, toMs]));
+    return { events: Number(r.n), qty: Number(r.qty) };
+  }
+
+  /** Ham uretim olaylari (CSV icin), zaman sirasiyla. */
+  productionEvents(machineId, fromMs, toMs) {
+    return this.db
+      .prepare(
+        `SELECT ts, program, qty, part_total AS partTotal, part_count AS partCount, status,
+                cycle_sec AS cycleSec, gap_ms AS gapMs, suspect
+           FROM production WHERE machine_id = ? AND ts >= ? AND ts <= ? ORDER BY ts, id`,
+      )
+      .all(machineId, fromMs, toMs)
+      .map((r) => ({ ...r, ts: Number(r.ts), qty: Number(r.qty), gapMs: Number(r.gapMs), suspect: r.suspect === 1 }));
   }
 
   /**
@@ -383,12 +546,14 @@ export class TelemetryDb {
     const spanCut = now - SPAN_RETENTION_DAYS * 86_400_000;
     this.db.prepare('DELETE FROM samples WHERE ts < ?').run(sampleCut);
     this.db.prepare('DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?').run(spanCut);
+    this.db.prepare('DELETE FROM production WHERE ts < ?').run(now - PRODUCTION_RETENTION_DAYS * 86_400_000);
   }
 
   stats() {
     const samples = this.db.prepare('SELECT COUNT(*) AS n FROM samples').get().n;
     const spans = this.db.prepare('SELECT COUNT(*) AS n FROM spans').get().n;
-    return { samples: Number(samples), spans: Number(spans), pending: this.pending.length };
+    const production = this.db.prepare('SELECT COUNT(*) AS n FROM production').get().n;
+    return { samples: Number(samples), spans: Number(spans), production: Number(production), pending: this.pending.length };
   }
 
   close() {

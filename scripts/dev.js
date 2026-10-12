@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 const run = (name, relative) => {
   const child = spawn(process.execPath, [fileURLToPath(new URL(relative, import.meta.url))], {
     stdio: 'inherit',
+    // Gelistirme: giris sistemi kapali (gercek kurulumda ASLA). Giris denemek icin: npm start.
+    env: { ...process.env, AUTH_DISABLED: '1' },
   });
   child.on('exit', (code) => {
     console.log(`[dev] ${name} durdu (kod ${code}) - hepsi kapatiliyor`);

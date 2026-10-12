@@ -8,9 +8,18 @@
  *  - Gondermeden once on kontrol, sonra TEZGAH KIMLIGINI yazarak onay.
  * Icerik yorumlanmaz: dosya oldugu gibi saklanir ve tasinir.
  *
+ * Program yazma/duzenleme: editor-view.js. Tezgahta yeni musteri klasoru acma: folder-view.js.
+ *
  * Durum rengi tek basina anlam tasimaz: her durum ikon + etiket + renk.
  */
 import { escapeHtml, num, dateTime, clock } from './format.js';
+import {
+  kb, folderLabel, programLabel, api, post, userName, CHANGED, announce, TRANSFER_STATUS, stepsTable, byLocked,
+} from './lib-common.js';
+import { openEditor } from './editor-view.js';
+import { openFolderDialog } from './folder-view.js';
+import { openBulkImport } from './bulk-import-view.js';
+import { openDeleteDialog } from './delete-view.js';
 
 /* ------------------------------------------------------------------ ortak */
 
@@ -25,53 +34,10 @@ const STATUS = Object.freeze({
   sistem: { icon: '⚙', label: 'Sistem dosyası', cls: 'none' },
 });
 
-const TRANSFER_STATUS = Object.freeze({
-  basarili: { icon: '✓', label: 'Başarılı', cls: 'ok' },
-  reddedildi: { icon: '✕', label: 'Gönderilmedi (ön kontrol)', cls: 'bad' },
-  basarisiz: { icon: '✕', label: 'Başarısız', cls: 'bad' },
-  dogrulanamadi: { icon: '▲', label: 'Doğrulanamadı', cls: 'warn' },
-  basladi: { icon: '…', label: 'Sürüyor', cls: 'info' },
-});
-
-const STEP_LABEL = Object.freeze({
-  'on-kontrol': 'Ön kontrol',
-  yukle: 'Geçici adla yükleme',
-  'boyut-dogrula': 'Boyut doğrulama',
-  'geri-oku-sha': 'Geri okuma ve SHA-256',
-  'nihai-ada-cevir': 'Nihai ada çevirme',
-  'son-dogrulama': 'Son doğrulama',
-  temizlik: 'Temizlik',
-});
-
 const CHECK_ICON = Object.freeze({ ok: '✓', info: 'ℹ', warn: '▲', block: '✕' });
 
-const kb = (n) => (n == null ? '—' : n < 1024 ? `${num(n)} bayt` : `${num(n / 1024, 1)} KB`);
 /** Sinir etiketi: 1.000.000 bayt "1 MB" okunur (976,6 KB degil). */
 const maxLabel = (n) => (n % 1_000_000 === 0 ? `${n / 1_000_000} MB` : kb(n));
-const folderLabel = (c) => (c === '' ? 'Kök (ortak alan)' : c);
-const programLabel = (customer, name) => `${customer === '' ? '' : `${customer}\\`}${name}`;
-
-class ApiError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
-}
-
-async function api(path, init) {
-  let res;
-  try {
-    res = await fetch(path, init);
-  } catch (err) {
-    throw new ApiError(`Sunucuya ulaşılamadı: ${err.message}`, 0);
-  }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(body.error ?? `Hata (HTTP ${res.status})`, res.status);
-  return body;
-}
-const post = (path, obj) => api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj ?? {}) });
-
-const userName = {
-  get() { try { return localStorage.getItem('cnc-user') ?? ''; } catch { return ''; } },
-  set(v) { try { localStorage.setItem('cnc-user', v); } catch { /* gizli sekme */ } },
-};
 
 function chip(status, text = null, title = null) {
   const s = STATUS[status] ?? { icon: '·', label: String(status), cls: 'none' };
@@ -100,9 +66,6 @@ function toast(host, text, ok = true) {
   el.className = `notice${ok ? '' : ' notice-sim'}`;
   el.textContent = text ?? '';
 }
-
-const CHANGED = 'cnc:programs-changed';
-const announce = () => document.dispatchEvent(new CustomEvent(CHANGED));
 
 /* ================================================================ KUTUPHANE EKRANI */
 
@@ -141,7 +104,9 @@ function buildLibrarySkeleton() {
     '<div data-role="notices"></div>' +
 
     '<section class="dt-block"><div class="dt-block-head"><h3>Programı kütüphaneye ekle</h3>' +
-    '<label class="fld-inline">Adınız (kayıt için) <input data-role="user" maxlength="40" placeholder="ör. Ayşe"></label></div>' +
+    '<div class="dt-actions">' +
+    '<button type="button" class="icon-btn btn-primary" data-act="new-program">Yeni program yaz…</button>' +
+    '<label class="fld-inline">Adınız (kayıt için) <input data-role="user" maxlength="40" placeholder="ör. Ayşe"' + byLocked() + '></label></div></div>' +
     '<div class="dropzone" data-role="drop" tabindex="0" role="button" ' +
     'aria-label="Program dosyalarını sürükleyip bırakın ya da dosya seçmek için Enter\'a basın">' +
     '<p><b>Program dosyalarını buraya sürükleyin</b> ya da <u>dosya seçin</u></p>' +
@@ -214,8 +179,11 @@ function renderNotices() {
     parts.push('<p class="notice notice-sim"><b>Tezgaha gönderme kapalı</b> (sunucu <code>TRANSFER_DISABLED=1</code> ile başlatılmış). ' +
       'Kütüphane, tarama ve karşılaştırma çalışır.</p>');
   }
-  parts.push('<p class="notice">Bu ekranda kimlik doğrulama <b>yok</b>; ofis ağındaki herkes programları görüp gönderebilir. ' +
-    'Gönderirken tezgahın kimliğini yazarak onaylamanız istenir. Üzerine yazma yoktur: aynı adlı dosya varsa gönderilmez.</p>');
+  parts.push(c.authRequired
+    ? '<p class="notice">Bu ekranı yalnızca <b>yönetici</b> hesabı görür. Gönderirken tezgahın kimliğini yazarak onaylamanız istenir; ' +
+      'işlemi yapan kullanıcı kayda yazılır. Üzerine yazma yoktur: aynı adlı dosya varsa gönderilmez.</p>'
+    : '<p class="notice notice-sim"><b>Giriş sistemi kapalı</b> (yalnızca geliştirme/demo): ağdaki herkes programları görüp gönderebilir. ' +
+      'Gönderirken tezgahın kimliğini yazarak onaylamanız istenir. Üzerine yazma yoktur: aynı adlı dosya varsa gönderilmez.</p>');
   if (c.machines.every((m) => !m.capable)) {
     parts.push('<p class="notice notice-sim">Dosya aktarımı yapabilen (IP\'si tanımlı, FTP destekli) tezgah yok. ' +
       'Ayarlar ekranından tezgahın IP\'sini girin.</p>');
@@ -371,15 +339,17 @@ function renderDetail() {
     `<div><span class="eyebrow">${escapeHtml(folderLabel(program.customer))}</span><h3 class="mono">${escapeHtml(program.name)}</h3></div>` +
     '<div class="dt-actions">' +
     `<button type="button" class="icon-btn btn-primary" data-act="send" data-program="${program.id}">Tezgaha gönder…</button>` +
+    `<button type="button" class="icon-btn" data-act="edit" data-no="${lib.previewNo ?? versions[0].versionNo}">Düzenle… (v${lib.previewNo ?? versions[0].versionNo})</button>` +
     '<button type="button" class="icon-btn" data-act="close-detail">Kapat</button></div></div>' +
 
     '<h4 class="sub">Sürümler</h4><div class="table-wrap"><table class="tbl"><thead><tr><th>Sürüm</th><th class="num">Boyut</th><th>SHA-256</th><th>Eklenme</th><th>Kaynak</th><th>Kim</th><th>Not</th><th></th></tr></thead><tbody>' +
     versions.map((v) =>
       `<tr${v.versionNo === lib.previewNo ? ' class="is-selected"' : ''}><td><b>v${v.versionNo}</b></td><td class="num">${escapeHtml(kb(v.size))}</td>` +
       `<td class="mono" title="${escapeHtml(v.sha256)}">${escapeHtml(v.sha256.slice(0, 12))}…</td><td>${escapeHtml(dateTime(v.createdAt))}</td>` +
-      `<td>${v.source === 'tezgah-tarama' ? `tezgahtan alındı (${escapeHtml(v.sourceMachine ?? '')})` : 'yüklendi'}${v.originalName ? ` · <span class="mono">${escapeHtml(v.originalName)}</span>` : ''}</td>` +
+      `<td>${v.source === 'tezgah-tarama' ? `tezgahtan alındı (${escapeHtml(v.sourceMachine ?? '')})` : v.source === 'editor' ? 'editörde yazıldı' : 'yüklendi'}${v.originalName ? ` · <span class="mono">${escapeHtml(v.originalName)}</span>` : ''}</td>` +
       `<td>${escapeHtml(v.createdBy ?? '—')}</td><td>${escapeHtml(v.note ?? '')}</td>` +
       `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="preview" data-no="${v.versionNo}">Önizle</button> ` +
+      `<button type="button" class="icon-btn icon-btn-sm" data-act="edit" data-no="${v.versionNo}">Düzenle</button> ` +
       `<a class="icon-btn icon-btn-sm" href="/api/library/programs/${program.id}/versions/${v.versionNo}?download=1" download>İndir</a></td></tr>`).join('') +
     '</tbody></table></div>' +
 
@@ -398,13 +368,17 @@ function renderDetail() {
 
 function renderHistory() {
   const host = lib.host.querySelector('[data-role="history"]');
-  if (lib.transfers.length === 0) { host.innerHTML = '<p class="empty">Henüz gönderme yapılmadı.</p>'; return; }
+  if (lib.transfers.length === 0) { host.innerHTML = '<p class="empty">Henüz tezgaha yazma yapılmadı.</p>'; return; }
   host.innerHTML =
-    '<table class="tbl"><thead><tr><th>Zaman</th><th>Tezgah</th><th>Program</th><th>Sonuç</th><th>Kim</th><th>Ayrıntı</th></tr></thead><tbody>' +
+    '<table class="tbl"><thead><tr><th>Zaman</th><th>Tezgah</th><th>Program / klasör</th><th>Sonuç</th><th>Kim</th><th>Ayrıntı</th></tr></thead><tbody>' +
     lib.transfers.map((t) => {
       const s = TRANSFER_STATUS[t.status] ?? { icon: '·', label: t.status, cls: 'none' };
       return `<tr><td>${escapeHtml(dateTime(t.startedAt))}</td><td class="mono">${escapeHtml(t.machineId)}</td>` +
-        `<td class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</td>` +
+        (t.kind === 'klasor'
+          ? `<td><span class="chip chip-info">＋ yeni klasör</span> <span class="mono">${escapeHtml(t.customer ?? '')}</span></td>`
+          : t.kind === 'silme'
+            ? `<td><span class="chip chip-bad">− silindi</span> <span class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</span></td>`
+            : `<td class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</td>`) +
         `<td><span class="chip chip-${s.cls}"><span aria-hidden="true">${s.icon}</span> ${escapeHtml(s.label)}</span></td>` +
         `<td>${escapeHtml(t.requestedBy ?? '—')}${t.clientIp ? ` <small class="hint">${escapeHtml(t.clientIp)}</small>` : ''}</td>` +
         `<td>${escapeHtml(t.error ?? '')}</td></tr>`;
@@ -457,7 +431,17 @@ function wireLibrary() {
       else if (act === 'close-detail') { location.hash = '#/programlar'; }
       else if (act === 'preview') { await previewVersion(Number(btn.dataset.no)); }
       else if (act === 'send') { openSendDialog({ programId: Number(btn.dataset.program), machineId: btn.dataset.machine ?? null }); }
-      else if (act === 'scan') {
+      else if (act === 'new-program') {
+        openEditor({
+          mode: 'new', customer: lib.customer && lib.customer !== '__root' ? lib.customer : '',
+          onSend: (programId) => openSendDialog({ programId }),
+        });
+      } else if (act === 'edit') {
+        openEditor({
+          mode: 'version', programId: lib.selectedId, versionNo: Number(btn.dataset.no),
+          onSend: (programId) => openSendDialog({ programId }),
+        });
+      } else if (act === 'scan') {
         const id = btn.dataset.machine;
         btn.disabled = true;
         btn.textContent = '⟳ taranıyor…';
@@ -519,6 +503,14 @@ export function renderMachinePrograms(host, machine) {
     return info?.sendAllowed === false ? (info.sendBlockedReason ?? 'Bu kontrolcü modelinde gönderme kapalı') : null;
   }
 
+  /** Tornadan silmeyi engelleyen neden (yazma kapısı ya da silme henüz doğrulanmadı) ya da null. */
+  function deleteBlocked() {
+    const blocked = sendBlocked();
+    if (blocked) return blocked;
+    const info = mInfo();
+    return info?.deleteAllowed === false ? (info.deleteBlockedReason ?? 'Tornadan silme kapalı') : null;
+  }
+
   function render() {
     const info = mInfo();
     const actions = host.querySelector('[data-role="actions"]');
@@ -530,6 +522,9 @@ export function renderMachinePrograms(host, machine) {
     const blocked = sendBlocked();
     actions.innerHTML =
       '<button type="button" class="icon-btn" data-act="scan">Tezgahtaki programları tara</button>' +
+      '<button type="button" class="icon-btn" data-act="bulk-import" title="Tornadaki tüm programları okuyup kütüphaneye alır (yalnızca okuma)">Tüm programları kütüphaneye al…</button>' +
+      '<button type="button" class="icon-btn" data-act="new-program">Yeni program yaz…</button>' +
+      `<button type="button" class="icon-btn" data-act="new-folder"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Yeni klasör…</button>` +
       `<button type="button" class="icon-btn btn-primary" data-act="send"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Program gönder…</button>` +
       // Özellik genelde açık ama bu kontrolcü modelinde doğrulanmamışsa nedeni göster (üzerine gelmeden de görünsün).
       (blocked && st.cfg.transferEnabled
@@ -594,8 +589,10 @@ export function renderMachinePrograms(host, machine) {
     body_.innerHTML = list.length === 0 ? '<p class="empty">Bu klasörde program yok.</p>' :
       '<table class="tbl"><thead><tr><th>Program</th><th class="num">Boyut</th><th>Tezgah tarihi</th><th>Durum</th><th></th></tr></thead><tbody>' +
       list.map((e) => `<tr><td class="mono"><b>${escapeHtml(e.name)}</b></td><td class="num">${escapeHtml(kb(e.size))}</td><td>${escapeHtml(e.modified ?? '—')}</td>` +
-        `<td>${cell(e)}</td><td>${e.status === 'kutuphanede-yok'
-          ? `<button type="button" class="icon-btn icon-btn-sm" data-act="import" data-customer="${escapeHtml(e.customer)}" data-name="${escapeHtml(e.name)}">Kütüphaneye al</button>` : ''}</td></tr>`).join('') +
+        `<td>${cell(e)}</td><td class="nowrap">${e.status === 'kutuphanede-yok'
+          ? `<button type="button" class="icon-btn icon-btn-sm" data-act="import" data-customer="${escapeHtml(e.customer)}" data-name="${escapeHtml(e.name)}">Kütüphaneye al</button> ` : ''}` +
+        `<button type="button" class="icon-btn icon-btn-sm" data-act="delete" data-customer="${escapeHtml(e.customer)}" data-name="${escapeHtml(e.name)}"` +
+        `${deleteBlocked() ? ` disabled title="${escapeHtml(deleteBlocked())}"` : ' title="Bu dosyayı tornadan siler (geri alınamaz)"'}>Sil…</button></td></tr>`).join('') +
       '</tbody></table>';
   }
 
@@ -606,6 +603,20 @@ export function renderMachinePrograms(host, machine) {
     if (!btn || st.busy) return;
     const act = btn.dataset.act;
     if (act === 'send') { openSendDialog({ machineId: st.id, programId: btn.dataset.program ? Number(btn.dataset.program) : null }); return; }
+    if (act === 'new-program') {
+      // Yazılan program kütüphaneye girer; "Kaydet ve tezgaha gönder" bu tezgahı seçili açar.
+      openEditor({ mode: 'new', onSend: (programId) => openSendDialog({ machineId: st.id, programId }) });
+      return;
+    }
+    if (act === 'new-folder') { openFolderDialog({ machineId: st.id, onDone: () => load() }); return; }
+    if (act === 'bulk-import') {
+      openBulkImport({ machineId: st.id, machineName: machine.name ?? st.id, knownFolders: st.data?.folders ?? [] });
+      return;
+    }
+    if (act === 'delete') {
+      openDeleteDialog({ machineId: st.id, customer: btn.dataset.customer, name: btn.dataset.name, onDone: () => load() });
+      return;
+    }
     st.busy = true;
     btn.disabled = true;
     try {
@@ -740,7 +751,10 @@ function renderDialog() {
       '</label></div>' +
 
       `<div class="dt-actions"><button type="button" class="icon-btn" data-act="precheck"${!sd.machineId || !p || sd.busy || (!sd.scanned && sd.folders.length === 0) ? ' disabled' : ''}>` +
-      `${sd.busy && sd.phase === 'checking' ? 'Kontrol ediliyor…' : 'Ön kontrol yap'}</button></div>` +
+      `${sd.busy && sd.phase === 'checking' ? 'Kontrol ediliyor…' : 'Ön kontrol yap'}</button>` +
+      // Hedef klasör tezgahta yoksa gönderme klasör AÇMAZ; ayrı, onaylı bir işlemle açılır (folder-view.js).
+      `<button type="button" class="icon-btn" data-act="new-folder"${!sd.machineId || sd.busy || sd.transferEnabled === false || machine?.sendAllowed === false ? ' disabled' : ''}` +
+      ` title="${escapeHtml(machine?.sendAllowed === false ? (machine.sendBlockedReason ?? '') : 'Tezgahta yeni, boş bir müşteri klasörü açar')}">＋ Yeni müşteri klasörü…</button></div>` +
       checksHtml +
       (sd.pre ? confirmBlock(machine, canGo) : '')) +
     '</div></div>';
@@ -761,7 +775,7 @@ function confirmBlock(machine, canGo) {
   if (blocked) return '<p class="notice notice-sim"><b>Gönderilemez.</b> Yukarıdaki ✕ ile işaretli engeli giderip ön kontrolü yeniden yapın.</p>';
   return '<div class="confirm-box">' +
     '<label class="fld"><span>Adınız (kayıt için, zorunlu)</span>' +
-    `<input data-key="by" value="${escapeHtml(sd.by)}" maxlength="40" placeholder="ör. Ayşe"${sd.busy ? ' disabled' : ''}></label>` +
+    `<input data-key="by" value="${escapeHtml(sd.by)}" maxlength="40" placeholder="ör. Ayşe"${byLocked()}${sd.busy ? ' disabled' : ''}></label>` +
     `<label class="fld"><span>Onaylamak için tezgahın kimliğini yazın: <b class="mono">${escapeHtml(sd.machineId ?? '')}</b></span>` +
     `<input data-key="confirm" value="${escapeHtml(sd.confirm)}" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(sd.machineId ?? '')}" class="mono"${sd.busy ? ' disabled' : ''}></label>` +
     `<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="send-now"${canGo ? '' : ' disabled'}>` +
@@ -782,9 +796,7 @@ function resultBlock() {
   return `<div class="result result-${s.cls}"><span class="result-ic" aria-hidden="true">${s.icon}</span><div><b>${escapeHtml(headline)}</b>` +
     `${t.error ? `<p>${escapeHtml(t.error)}</p>` : ''}` +
     `${t.status === 'basarili' ? '<p>Çalıştırmak için tezgah panelinden programı seçin. Program kendiliğinden aktif olmaz.</p>' : ''}</div></div>` +
-    '<h4 class="sub">Adımlar</h4><table class="tbl"><thead><tr><th>Adım</th><th>Sonuç</th><th class="num">Süre</th><th>Ayrıntı</th></tr></thead><tbody>' +
-    t.steps.map((x) => `<tr><td>${escapeHtml(STEP_LABEL[x.step] ?? x.step)}</td><td>${x.ok ? chip('guncel', 'tamam') : chip('farkli', 'hata')}</td>` +
-      `<td class="num">${num(x.ms)} ms</td><td class="mono">${escapeHtml(x.detail ?? '')}</td></tr>`).join('') + '</tbody></table>' +
+    stepsTable(t.steps) +
     `<p class="hint">Kayıt no ${t.id} · ${escapeHtml(t.requestedBy ?? '')} · SHA-256 ${escapeHtml((t.shaSent ?? '').slice(0, 16))}…</p>` +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="again">Başka bir program gönder</button>' +
     '<button type="button" class="icon-btn btn-primary" data-act="close">Kapat</button></div>';
@@ -833,6 +845,14 @@ function wireDialog() {
     const act = btn.dataset.act;
     if (act === 'close') { if (!sd.busy) dlg.close(); return; }
     if (act === 'again') { sd.phase = 'form'; sd.result = null; resetPre(); renderDialog(); return; }
+    if (act === 'new-folder') {
+      openFolderDialog({
+        machineId: sd.machineId,
+        // Açılan klasör hedef olarak seçilir; ön kontrol yeniden yapılmalı (resetPre).
+        onDone: async (folder) => { await loadFolders(); sd.customer = folder; resetPre(); renderDialog(); },
+      });
+      return;
+    }
     if (act === 'scan-here') {
       btn.disabled = true;
       btn.textContent = 'Taranıyor…';

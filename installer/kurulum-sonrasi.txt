@@ -1,43 +1,68 @@
-﻿KURULUM TAMAMLANDI
+KURULUM TAMAMLANDI
 
 CNC Telemetri bu bilgisayarda Windows açılışında kendiliğinden başlar.
 Dashboard:  http://localhost:3000
 
 MASAÜSTÜ UYGULAMASI "CNC Telemetri"
 
-  Açınca hizmetlerin (backend + tezgah ajanı) çalıştığına bakar, çalışmıyorsa
-  başlatır ve dashboard'u tarayıcıda açar. Her şey zaten çalışıyorsa doğrudan
-  dashboard açılır, pencere çıkmaz.
+  Açınca hizmetlerin (backend + tezgah ajanları) çalıştığına bakar,
+  çalışmıyorsa başlatır ve dashboard'u tarayıcıda açar. Her şey zaten
+  çalışıyorsa doğrudan dashboard açılır, pencere çıkmaz.
   Hizmetler durmuşsa başlatmak için Windows yönetici onayı (UAC) isteyebilir:
   "Evet" deyin.
 
+İLK GİRİŞ (HESAPLAR)
+
+  Dashboard ilk açıldığında BU BİLGİSAYARDA (http://localhost:3000) yönetici
+  hesabını oluşturma ekranı gelir: kullanıcı adı + şifre (en az 8 karakter).
+  Bu hesap her şeyi görür ve yapar.
+  - İzleme için "izleyici" hesapları sonra Ayarlar > Kullanıcılar bölümünden
+    açılır. İzleyici yalnızca canlı izlemeyi görür; program kütüphanesi,
+    ayarlar ve tezgahlardaki "Programlar" paneli ona kapalıdır.
+  - İlk hesap YALNIZCA bu bilgisayardan oluşturulabilir. Ağdaki başka
+    bilgisayarlar giriş ekranını görür ama kurulumu yapamaz.
+  - Şifre unutulursa (bu bilgisayarda, yönetici PowerShell):
+      cd C:\CNC-Telemetri
+      .\runtime\node.exe backend\auth-cli.js sifre <kullanici>
+    Hesapları listelemek için: .\runtime\node.exe backend\auth-cli.js listele
+
 SIRADAKİ ADIMLAR
 
-1. Tezgahlara IP girin
-   Dashboard > Ayarlar ekranından her tezgahın IP adresini yazın.
-   Ajan listeyi oradan alır ve dakikada bir tazeler; yeni tezgah eklemek için
-   yeniden başlatmak gerekmez.
+1. Tezgah listesini kontrol edin: IP ve KONTROLCÜ MODELİ
+   Dashboard > Ayarlar ekranı. Liste hazır gelir (CNC-01..08, 192.168.88.x).
+   - Bu bilgisayara bağlı OLMAYAN tezgahların IP'sini boşaltabilirsiniz;
+     boş IP'li tezgah okunmaz.
+   - Her tezgahın modelini seçin: SYNTEC 11TB ya da 22TB (panelin sol
+     üstünde yazar). Ayrı iki ajan vardır, her biri yalnız kendi modelindeki
+     tezgahları okur. YANLIŞ MODEL SEÇİLİRSE O TEZGAH HİÇ OKUNMAZ.
+   Ajanlar listeyi dakikada bir tazeler; yeniden başlatmak gerekmez.
 
 2. Bu bilgisayarı tezgahla aynı ağa alın
-   Ethernet kartına tezgahın alt ağından sabit IP verin
-   (örnek: tezgah 192.168.88.99 ise bu PC 192.168.88.100, ağ geçidi boş).
+   Ethernet kartına tezgahın alt ağından SABİT IP verin
+   (örnek: tezgahlar 192.168.88.x ise bu PC 192.168.88.100, ağ geçidi boş).
+   Aynı ağda başka bir izleme bilgisayarı varsa farklı IP verin ve aynı
+   tezgahı iki bilgisayardan birden okutmayın (tezgah oturum yuvaları dolar).
+   Ağ anahtarında (switch) "loop prevention" / "port isolation" açıksa
+   bağlantı kesilebilir; kapatın.
 
 3. Her tezgahın kontrolcüsünde (bir kez)
-   F5 Maintain > Set Kernel Server:
-     - "Start server while boot" ayarı AÇIK olmalı.
-       Kapalıysa tezgah yeniden başladığında API sunucusu çalışmaz.
-     - Statik IP verildiyse tezgahı yeniden başlatın; Syntec 11B ağ ayarını
-       yalnızca açılışta uygular.
+   "Start server while boot" ayarı AÇIK olmalı (Kernel Server ayarları).
+   Kapalıysa tezgah yeniden başladığında API sunucusu çalışmaz.
+   Statik IP verildiyse tezgahı yeniden başlatın; kontrolcü ağ ayarını
+   yalnızca açılışta uygular.
 
 SORUN OLURSA
 
   Günlükler:  C:\CNC-Telemetri\logs
     backend.log   dashboard / veri alma
-    ajan.log      tezgah bağlantısı - bağlantı sorunları burada görünür
+    ajan.log      11TB ajanı: tezgah bağlantısı, bağlantı sorunları burada
+    ajan22.log    22TB ajanı (aynısı, 22TB tezgahlar için)
     kurulum.log   bu kurulumun çıktısı
 
   Ajan bağlanamıyorsa sırasıyla: ping <tezgah-ip>, kontrolcüde Kernel Server,
   güvenlik duvarında 5568 ve 5570 gelen bağlantı (kurulum bunu açtı).
+  Bağlanıp veri gelmiyorsa (kimlik boş, "okuma yanıt vermiyor"): tezgahı
+  yeniden başlatmak çoğu zaman düzeltir.
 
 KALDIRMA
 

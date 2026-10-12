@@ -543,17 +543,52 @@ gönderilir; hangi program hangi tezgahta ve hangi sürümde görünür (matris 
 **İçerik yorumlanmaz**, dosya aynen taşınır. Gönderilen program tezgahta **aktif olmaz**
 (panelden seçilmesi gerekir).
 
+**Program editörü (2026-10-08):** yeni NC programı doğrudan üründe yazılır ("Yeni program yaz…") ya da var olan programın bir
+sürümü düzenlenir ("Düzenle…"); kaydedince kütüphanede **yeni sürüm** olur (eski sürümler aynen kalır), "Kaydet ve tezgaha gönder…"
+gönderme penceresini o programla açar (orada ayrı onay var). Genel amaçlı kod editörü DEĞİL: satır numarası, imleç konumu,
+**kaydetmeden önce değişiklik farkı (diff)**; bul-değiştir yok. **Söz dizimi denetimi/simülasyon yok** (içerik yorumlanmaz ilkesi).
+Satır sonu (CRLF/LF) ve kodlama (UTF-8/Latin-1, BOM korunur) sunucuda uygulanır (`library.js` `decodeText`/`encodeText`/`saveText`);
+dokunulmayan dosya bayt bayt aynı çıkar (`preview().roundTrip`, karışık satır sonu bildirilir). Aynı (müşteri, ad) ile "yeni program"
+409; editör açılırken başka sürüm oluştuysa 409 `newer-version` (arayüz "yine de kaydet" sunar).
+
+**Tezgahta yeni müşteri klasörü (2026-10-08):** gönderme klasör AÇMAZ; klasör ayrı, onaylı bir işlemle açılır
+(`MachineFiles.createFolder`, FTP `MKD`; tek tezgah, tezgah kimliğini yazarak onay, denetim kaydı `kind='klasor'`). Ad: yalnız
+ASCII `[A-Za-z0-9_.-]` ≤40 (Türkçe karakter yok: CE kod sayfası doğrulanmadı). Var olan klasör/dosya adıyla açılmaz; açılan klasör
+LIST + CWD ile doğrulanır. **Klasör silme (RMD) üründe YOKTUR.** Gönderme ile aynı kapılar: `TRANSFER_DISABLED`, model kapısı (22TB).
+**Yalnız sahte FTP sunucusunda denendi (MKD yanıtı 257 varsayımı); gerçek tornada henüz denenmedi.**
+
+**Toplu içeri alma (2026-10-12):** tezgah panelinde "Tüm programları kütüphaneye al…" bir tornadaki TÜM programları tek akışla alır;
+tornaya **yalnız okuma** yapılır (TRANSFER_DISABLED ve 22TB kapısı engellemez). İki aşama (`backend/programs/bulk-import.js`,
+`MachineFiles.startImportPlan/getImportPlan/importPlanDiff/applyImport`): (1) **Plan** arka planda çalışır (ilerleme gösterilir, tezgah kilitli,
+dosyalar sıralı ve `pauseMs` aralıklı okunur): her dosya indirilir ve kütüphaneye göre sınıflanır — **yeni** (kütüphanede yok), **ayni** (içerik bir
+sürümle aynı), **çakışma** (aynı ad, hiçbir sürümle tutmayan içerik; yalnız CRLF/LF farkıysa `eolOnlyVersion` işaretlenir; tarih ipucu
+`modifiedHint`), **alınamayan** (ad kuralına uymayan, >1 MB, boş, ikili, `ZZUP/ZZRB` artığı). İndirilen içerik bellekte 30 dk tutulur (en fazla 100 MB,
+15 dk). Plan sonunda tezgah envanteri de tazelenir. (2) **Uygula**: yeniler alınır (klasör bazında çıkarılabilir); **çakışmalar OTOMATİK alınmaz** —
+her biri için fark gösterilir ve "yeni sürüm olarak al" / "atla" seçilir (toplu düğmeler: hepsini al / hepsini atla / yalnız satır sonu farklıları al).
+İçerik plandan gelir (kullanıcının farkını gördüğü baytlar AYNEN), uygulama tornaya bağlanmaz, aynı plan tekrar uygulanırsa yeni sürüm açılmaz.
+Alınan sürümlerin `source=tezgah-tarama`, `created_by` = kullanıcı, `note` = "<tezgah> toplu alım".
+
+**Tornadan program silme (2026-10-12, FTP `DELE`):** tezgah panelinde dosya satırında "Sil…". **Geri dönüşsüz**, bu yüzden: (a) **silme kapısı** — yazma kapısından
+(`sendPolicy`) geçer VE modelin `fileTransfer.deleteEnabled` değeri true olmalı (şu an **false**: `DELE` gerçek tornada hiç denenmedi) ya da sunucu
+`DELETE_ENABLED=1` ile başlatılmış (yalnız doğrulama denemesi; `scripts/demo-programlar.js` sahte tornalar için verir); (b) onay metni = **program adı** (birebir);
+(c) ön kontrol (tornaya yalnız okuma): çalışan/seçili program silinmez, sistem dosyası (`MDIBlock`) ve klasör silinmez, kök dizin dosyası `root-target` onayı ister,
+canlı veri yoksa `unknown-state`, **kütüphanede aynı içerikli (SHA) kopya yoksa `no-backup` onayı** (kopya varsa sorusuz: silinen dosya oradan yeniden gönderilebilir);
+(d) `DELE`'den hemen önce dosyanın hâlâ aynı boyutta olduğu yeniden doğrulanır (operatör panelden değiştirmiş olabilir), sonra listeden kalktığı doğrulanır;
+(e) her deneme (reddedilenler dahil) `transfers` tablosuna `kind='silme'` ile, silinen içeriğin SHA-256'sıyla yazılır; (f) yalnız tek dosya, **klasör silinmez**.
+Uçlar: `POST /api/machines/:id/programs/delete-precheck` · `/delete`.
+
 **Ekranlar:** sol menü "Program kütüphanesi" (`#/programlar`, `#/programlar/<id>`): yükleme,
 program × tezgah matrisi (✓ güncel, ▼ eski, ≠ farklı, ? doğrulanmadı, — yok, · taranmadı),
 sürümler/önizleme/indirme, gönderme geçmişi. Tezgah detayında "Programlar" paneli: tara,
 klasörlere göre liste, "Kütüphaneye al", "Program gönder…". Gönderme penceresi:
 program/sürüm/hedef klasör → **ön kontrol** → (uyarılar için onay) → **tezgah kimliğini yazarak
-onay** → sonuç ve adım adım kayıt.
+onay** → sonuç ve adım adım kayıt. Kütüphane ekranında "Yeni program yaz…", program ayrıntısında "Düzenle…" (editör);
+gönderme penceresinde ve tezgah panelinde "Yeni klasör…" (hedef klasör tezgahta yoksa).
 
-**Dosyalar:** `ftp-client.js` (`node:net`, sıfır bağımlılık; yalnızca gereken FTP komutları;
-komut enjeksiyonu/yol gezinmesi reddedilir) · `list-parse.js` (DOS ve UNIX LIST) ·
-`library-db.js` (SQLite) · `library.js` (doğrulama, karşılaştırma, matris) ·
-`machine-files.js` (**tüm güvenlik denetimi burada**: tarama, içeri alma, ön kontrol, gönderme)
+**Dosyalar:** `ftp-client.js` (`node:net`, sıfır bağımlılık; yalnızca gereken FTP komutları, `MKD` var, klasör silme
+`RMD` bilerek YOK; komut enjeksiyonu/yol gezinmesi reddedilir) · `list-parse.js` (DOS ve UNIX LIST) ·
+`library-db.js` (SQLite; `transfers.kind`) · `library.js` (doğrulama, karşılaştırma, matris, editör metin çevirisi) ·
+`machine-files.js` (**tüm güvenlik denetimi burada**: tarama, içeri alma, ön kontrol, gönderme, klasör açma)
 · `routes.js` (HTTP) · `test/mock-ftp.js` (Windows CE FTP'yi taklit eden **sahte sunucu**;
 gerçek torna 8'in 2026-10-07 protokol diyaloğundan) · `test/harness.js`.
 
@@ -568,31 +603,90 @@ gerçek torna 8'in 2026-10-07 protokol diyaloğundan) · `test/harness.js`.
 4. Önce **geçici adla** (`ZZUP` + 6 rakam) yüklenir → boyut ve **geri okunup SHA-256** doğrulanır →
    `RNFR/RNTO` ile nihai ada çevrilir → yine doğrulanır. Yarım dosya nihai adla görünmez.
 5. Doğrulama tutmazsa kendi oluşturduğumuz dosya silinir; **başkasının dosyasına dokunulmaz**
-   (`DELE` yalnızca `ZZUP…` geçici adı ve SHA'sı tutmayan kendi nihai dosyamız için; testle denetlenir).
+   (`DELE` yalnızca `ZZUP…` geçici adı ve SHA'sı tutmayan kendi nihai dosyamız için; testle denetlenir. **İstisna: kullanıcının
+   açıkça başlattığı "Tornadan program silme"**, yukarıdaki kapılarla; silme akışı `transfer.test.js`'in bu kuralından ayrı `delete.test.js`'te sınanır.)
 6. **Onay metni = tezgah kimliği** (`CNC-08`); sunucu da denetler. Genel "onaylıyorum" kabul edilmez.
 7. Her gönderme (reddedilenler dahil) `transfers` tablosuna yazılır: kim (`by` + istemci IP), ne zaman,
    hangi program/sürüm/tezgah/klasör, SHA, adımlar, sonuç.
 8. Bir tezgaha aynı anda **tek işlem** (tarama/gönderme/içeri alma); ikincisi `409`.
-9. Yeni **müşteri klasörü açılmaz** (`MKD` kullanılmıyor): klasör tezgahta olmalı (panelden açılır).
+9. **Gönderme klasör açmaz**: hedef klasör tezgahta yoksa ön kontrol engeller. Yeni müşteri klasörü yalnızca `createFolder` ile
+   (ayrı, tezgah kimliğiyle onaylı işlem, bkz. yukarıdaki "Tezgahta yeni müşteri klasörü"); klasör SİLME yoktur.
 10. Kütüphaneye ad: `[A-Za-z0-9_.-]{1,40}`, `ZZUP`/`ZZRB` ile başlamaz; dosya ≤ 1 MB, metin (NUL yok).
 11. **Kontrolcü modeline göre kapı:** sürücü kaydında modelin `fileTransfer.sendEnabled` değeri açıkça `false` ise
     (şu an **22TB**: gerçek tezgahta hiç denenmedi) ön kontrol "engel" verir, `send` 422 ile reddeder ve **FTP'ye hiç
     bağlanılmaz**; tarama/içeri alma (salt okunur) çalışır. Gerçek tezgahta doğrulanınca `true` yapılır
-    (`sendPolicy()` in `machine-files.js`; testi `backend/models.test.js`).
+    (`sendPolicy()` in `machine-files.js`; testi `backend/models.test.js`). Aynı kapı **klasör açmayı** da kapatır (tornaya yazma).
 
-**Ayarlar / ortam değişkenleri:** `TRANSFER_DISABLED=1` gönderme tamamen kapanır (kütüphane,
+**Ayarlar / ortam değişkenleri:** `AUTH_DB_FILE` (varsayılan `data/auth.db`, **ayrıca yedeklenmeli**) · `AUTH_DISABLED=1` (aşağıda) · `TRANSFER_DISABLED=1` gönderme tamamen kapanır (kütüphane,
 tarama, ön kontrol çalışır) · `LIBRARY_DB_FILE` (varsayılan `data/library.db`; telemetri DB'sinden
 **ayrı**, budanmaz, **ayrıca yedeklenmeli**) · `MACHINES_FILE` (envanter dosyasını değiştirir:
 demo/test) · tezgah başına isteğe bağlı `ftpPort` (envanter) · sürücü kaydında `fileTransfer`
 (`config/drivers.json`: protokol, port, kullanıcı, kök).
 
-**KİMLİK DOĞRULAMA YOK** (karar: şimdilik ofis ağındaki herkes kullanabilir). Koruma: tezgah
-kimliğini yazma + denetim kaydı + `TRANSFER_DISABLED`. Ağdan dışarı açılacaksa önce giriş sistemi.
+### Üretim adedi ve vardiya raporu (0.7.0, 2026-10-12)
+
+Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, kaç saniyede** üretildiği sayılır ve gösterilir. Telemetri yolunun parçasıdır
+(salt okunur; ajan/protokol değişmedi, backend mevcut `partCount/partTotal/cycleTimeSec/program` alanlarını kullanır).
+- **Üretim olayı** (`backend/production.js` `PartTracker`, tablo `production` in `telemetry.db`): her mesajda sayaç izlenir, **sayaç arttığında bir satır**
+  (zaman, program, adet, durum, çevrim süresi). Örnekler 7 günde silinir, bu satırlar **400 gün** saklanır; raporlar buradan gelir. Gerçek kayıtla doğrulandı:
+  26 olay / 30 adet = tezgah sayacı farkı (18104 → 18134).
+  - Adet = `partTotal` farkı (o kıpırdamadıysa `partCount`). **Fabrikada operatör vardiya başında "Parça"yı 0'a çeker** (ÖMÜR BOYU sayaç `ToplamParça` akmaya devam eder, 2026-10-12 kullanıcı teyidi): sıfırlamanın kendisi üretim sayılmaz ve ToplamParça farkı sıfırlamayla aynı saniyede biten parçayı ve veri kopukluğunda yapılanları da sayar (kayıp yok; simülasyonla sınandı). Ömür boyu sayaç okunamıyorsa/durmuşsa sayaç geri gidince görülen yeni değer "sıfırlamadan beri yapılan parça" sayılır (makul sınırı aşarsa `suspect`); taban her durumda yenilenir.
+  - **Program** = ana program (`mainProgram`, yoksa `program`); alt program geçici geçişi parçayı bölmez. Aynı mesajda program değiştiyse parça ESKİ programındır.
+  - **Çevrim süresi** (`cycle_sec`) = kontrolcünün çevrim sayacının parça artmadan önceki **tepe değeri** (gerçek tezgahta 22–27 sn, temiz). İki parça arası fark KULLANILMAZ:
+    duruşları (157 sn, 43 sn…) içerir ve şişer. Pencere eksik olabilirse (sunucu çevrimin ortasında başladı, veri kopukluğu, program değişti) ya da adet 1'den büyükse
+    **`NULL`** (tahmin yazılmaz); ortalama yalnız süresi bilinen olaylardan hesaplanır, hiç yoksa ekranda süre görünmez.
+  - **Makul olmayan sıçrama** (geçen sürede üretilemeyecek fark: sayaç elle ayarlanmış) `suspect` işaretlenir ve **toplamlara katılmaz**; raporda "N sayaç sıçraması sayılmadı" diye ayrıca yazılır.
+  - **Veri kopukluğundan / sunucu kapalıyken** artan adet gerçektir (tezgah sayacı arttı) ve sayılır, ama **zamanı kesin değildir** (`gap_ms` > 0): raporda `*` ile "vardiyası yaklaşık" notu.
+    Yeniden başlamada taban, tezgahın son kayıtlı örneğidir (`lastCounters`).
+  - **Geriye doldurma:** ilk açılışta (`meta` bayrağı, bir kez) mevcut 7 günlük örneklerden olaylar çıkarılır; böylece güncellemeden hemen sonra "bu vardiya" boş görünmez
+    (bu olayların çevrim süresi yoktur: örnekler seyreltilmiş, uydurulmaz).
+- **Vardiyalar** (`shared/shifts.js`, yerel saat): **Gündüz 07–19, Gece 19–07**. **Üretim günü = vardiyanın başladığı gün** (13 Ekim 03:00 = 12 Ekim gecesi). Vardiya değişirse yalnız `SHIFTS` listesi değişir.
+- **Tezgah detayında "Üretim · vardiya adetleri" paneli** (`dashboard/production-view.js`): seçili üretim günü için program başına Gündüz / Gece / Toplam, **adedin yanında parça süresi**
+  ("120 adet · 24 sn"); ◀ ▶ ile gün gezinmesi; şu an süren vardiya işaretli; viewer de görür.
+- **"Üretim raporu" ekranı** (`#/uretim`, sol menü; viewer de görür): hazır aralıklar (bugün/dün/7/30 gün) ve tarih seçimi (en çok 93 gün), tezgah süzgeci,
+  üç görünüm — **Makine bazlı** (tezgah → program), **Ürün (program) bazlı** (hangi tezgahlarda kaç adet), **Günlük**. Toplamlar sunucuda bir kez hesaplanır
+  (`backend/production-report.js`), ekran ve CSV aynı sayıları kullanır. "Ürün" şimdilik = program adı; program adı ↔ müşteri ürün kodu eşlemesi (Mikro/iş emri) ayrı iştir.
+- **CSV:** tezgah detayında **"CSV indir" artık ÖZET**: saniyelik satırlar yok; yalnız her üretilen parça (zaman, program, adet, sayaçlar, çevrim_sn) ve durum / program / alarm
+  değişimleri (`compactMachineCsv`). Eski her-örnek dökümü **"Ham CSV"** (`export.csv?format=ham`). Üretim raporu CSV'leri: `view=makine|urun|gunluk` (günlük = tarih × vardiya × tezgah × program, Excel özet tablosu için).
+
+### Kimlik doğrulama (0.5.0, 2026-10-12): admin ve viewer
+
+Dashboard ve API giriş ister (`backend/auth/`, ayrı veritabanı `data/auth.db`, bağımlılık yok). İki rol:
+- **admin** — her şey (program kütüphanesi, editör, gönderme, klasör açma, Ayarlar, kullanıcılar).
+- **viewer** — YALNIZ izleme: filo, tezgah detayı, raporlar/CSV. Program kütüphanesi, Ayarlar ve tezgah detayındaki
+  "Programlar" paneli arayüzden gizlenir **ve sunucu bu uçları 403 ile reddeder**. Viewer'a giden veriden tezgah
+  IP/port gibi iç ağ bilgisi çıkarılır (`redactMachine`).
+Uzaktan (şirket dışından, Tailscale ile) girenler de aynı admin/viewer modeliyle girer; ağ kaynağına göre ayrı kısıt YOK.
+
+- **İzin tablosu tek yerde:** `backend/auth/policy.js` `classify()`; kural **varsayılan reddet** — listede olmayan her
+  `/api` yolu admin'dir. viewer'a açık olanlar: `GET /api/stream`, `/api/machines`, `/api/machines/:id[/history|spans|summary|downtimes|export.csv]`, `GET /api/production[/export.csv]` (vardiya adetleri),
+  `POST /api/auth/logout|password`. `public`: statik dosyalar, `/api/session`, `/api/auth/login|setup`, `/api/health` (anonim yalnız `{ok:true}`).
+  `local` (yalnız sunucu bilgisayarı): `POST /api/ingest`, `GET /api/agent/machines` — **ajan ve backend aynı bilgisayarda olmalı**
+  (çok bilgisayarlı ajan için ajan anahtarı henüz YOK). "Yerel" = bağlantı loopback'ten + `Host` localhost + vekil/tünel başlığı yok
+  (`X-Forwarded-For`, `CF-Connecting-IP`…; cloudflared gibi yerel vekil dış isteği yerel gösterir).
+- **İlk kurulum:** hesap yokken dashboard "yönetici hesabını oluştur" ekranı gösterir; `POST /api/auth/setup` yalnız
+  `localhost` üzerinden (başka bilgisayardan 403). Sonra Ayarlar > Kullanıcılar'dan viewer hesapları açılır.
+- **Oturum:** çerez `cnc_sid` (HttpOnly, SameSite=Strict, HTTPS arkasında Secure); veritabanında yalnız SHA-256 özeti.
+  Boşta kalma: admin 12 saat, viewer 30 gün (mutlak sınır 7 / 90 gün). Şifre scrypt. Başarısız giriş: (adres, kullanıcı) başına
+  15 dk'da 5, adres başına 20 deneme → 429 + `Retry-After`. Şifre değişince/hesap silinince o kullanıcının oturumları kapanır;
+  açık SSE akışları da 30 sn'de bir denetlenip kesilir. Durum değiştiren isteklerde `Origin`/`Sec-Fetch-Site` denetimi (CSRF).
+  Tüm yanıtlarda `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`.
+- **Denetim:** işlemi yapan kişi (`transfers.requested_by`, sürüm `created_by`) artık oturumdaki kullanıcı adıdır, istemcinin
+  yazdığı "adınız" alanına güvenilmez. Giriş/çıkış/hesap olayları `audit` tablosunda (Ayarlar > Kullanıcılar'da son 15).
+- **Kurtarma:** `runtime
+ode.exe backendauth-cli.js listele|sifre <kullanici>|ekle <kullanici> <admin|viewer>|sil <kullanici>`
+  (sunucu bilgisayarında; boru ile şifre okur, terminalde gizli sorar). Son yönetici silinemez.
+- **`AUTH_DISABLED=1`** her şeyi açık bırakır (herkes admin). YALNIZ geliştirme/demo: `scripts/dev.js`, `demo.js`, `demo-programlar.js`
+  bunu kendisi verir; gerçek kurulumda ASLA. Başlangıçta konsola uyarı yazar, arayüzde "giriş kapalı" işareti çıkar.
+- **Bilinen sınırlar:** HTTP üzerinde (ofis ağında) şifre düz metin gider (Tailscale tüneli şifreli); HTTPS için `tailscale serve` ya da vekil
+  gerekir. İki adımlı doğrulama (TOTP) yok. Rol değiştirme yok (sil + yeniden aç). `auth-cli`'nin terminal (TTY) kipi elle denenmedi,
+  boru kipi testli.
 
 **Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
 `RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
 gönderme öncesi ve adlandırmadan hemen önce `LIST` ile ikinci çakışma denetimi var, yine de
-milisaniyelik yarış penceresi kalır) · `DELE` (silme) · `MKD` · bu özelliğin **arayüzü** hiç
+milisaniyelik yarış penceresi kalır) · `DELE` (silme) · **`MKD`** (başarı yanıt kodu 257 mi 250 mi,
+ad/uzunluk kısıtı, panelde hemen görünüyor mu; kod yalnız sahte sunucuda sınandı) · bu özelliğin **arayüzü** hiç
 gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de elle doğrulandı) ·
 çok büyük klasörlerde (>200) tarama süresi.
 
@@ -625,14 +719,21 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `shared/drivers.js` · `config/drivers.json` | Sürücü kaydı (hangi protokol destekleniyor) ve kontrolcü modelleri (`models`: 11TB / 22TB). |
 | `shared/inventory.js` · `config/machines.json` | Tezgah envanteri (model çözümü, `agentMachines` süzgeci); ayarlar ekranı buraya yazar. |
 | `backend/db.js` | SQLite: `samples` (detay, 7 gün) + `spans` (durum aralıkları, 400 gün). Raporlar `spans`'ten gelir, satır sayısından bağımsız hızlı. **Yeniden başlamada** (`resumeTimelines`) PC'nin kapalı kaldığı süre `NO_DATA` yazılır — ani kapanışta açık kalan aralık yeniden başlama anında değil, tezgahın son kaydedilen örneğinde biter; testi `backend/restart.test.js`. |
-| `backend/store.js` | Canlı durum (bellek) + aralık yönetimi + veri boşluğu tespiti. |
+| `backend/store.js` | Canlı durum (bellek) + aralık yönetimi + veri boşluğu tespiti; her mesajda `PartTracker` ile üretim olayı yazar. |
+| `backend/production.js` · `production-report.js` · `csv.js` · `shared/shifts.js` | Üretim adedi: parça sayacı izleyicisi (`PartTracker`) · vardiya × tezgah × program raporu ve CSV'ler (özet/ham tezgah dökümü dahil) · ortak CSV biçimi · vardiya tanımı (07–19 / 19–07). Testler: `backend/production.test.js`. |
 | `backend/server.js` | HTTP API + SSE. |
 | `dashboard/app.js` | Yönlendirme, SSE, filo ve detay görünümleri. |
 | `dashboard/charts.js` | SVG çizgi grafiği (imleç + balon), durum şeridi. |
 | `dashboard/format.js` | Alan tanımları ve etiketler — **arayüzün tek kaynağı**. |
 | `dashboard/config-view.js` | Ayarlar ekranı. |
+| `dashboard/production-view.js` | Tezgah detayındaki vardiya adetleri paneli ve "Üretim raporu" ekranı (makine / ürün / günlük görünümü). |
 | `dashboard/library-view.js` | Program kütüphanesi ekranı, tezgah detayındaki "Programlar" paneli ve gönderme penceresi. |
+| `dashboard/editor-view.js` · `diff.js` | Program editörü (satır numaralı metin, inceleme/diff, "kaydet" / "kaydet ve gönder") ve saf satır farkı (`backend/diff.test.js` sınar). |
+| `dashboard/bulk-import-view.js` · `delete-view.js` · `diff-render.js` | Toplu alım penceresi (plan, çakışma kararları, uygula) · tornadan silme penceresi · ortak satır farkı tablosu (editör ve çakışma ekranı kullanır). |
+| `dashboard/folder-view.js` · `lib-common.js` | "Yeni müşteri klasörü" penceresi · kütüphane ekranlarının ortak yardımcıları. **Yeni dashboard dosyası `backend/server.js` `STATIC_FILES` listesine eklenmeli** (`backend/static-files.test.js` unutulursa uyarır). |
 | `backend/programs/` | Program kütüphanesi + FTP ile tezgaha aktarım (yazma yolu; telemetriden ayrı). Bkz. §6. |
+| `backend/auth/` · `backend/auth-cli.js` | Kimlik doğrulama: `policy.js` (izin tablosu, varsayılan reddet), `auth.js` (hesap/oturum/kilitleme), `http.js` (kapı + uçlar), `password.js` (scrypt), `auth-db.js` (SQLite); kurtarma aracı. Testler: `backend/auth/*.test.js` (`e2e.test.js` gerçek backend sürecini başlatır). |
+| `dashboard/auth-view.js` · `users-view.js` | Giriş/ilk kurulum ekranı, oturum, üst çubuk (kullanıcı/çıkış), 401 koruması · Ayarlar > Kullanıcılar (yalnız admin). |
 | `tools/syntec-agent/SyntecReader.cs` | **Okuma + durum eşlemesi (tek kaynak).** |
 | `tools/syntec-agent/Agent.cs` | Sürekli çalışan servis: tezgah başına iş parçacığı, yeniden bağlanma, tamponlama. |
 | `tools/syntec-probe/` | Tek seferlik saha teşhis aracı. |
@@ -646,18 +747,25 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 
 | Uç nokta | İş |
 |---|---|
-| `POST /api/ingest` | Ajandan telemetri (tek mesaj ya da dizi). Kısmi kabul: geçerliler yazılır, geçersizler 207 ile raporlanır. |
+| `GET /api/session` · `POST /api/auth/login` · `/setup` · `/logout` · `/password` | Oturum durumu · giriş · ilk yönetici (yalnız localhost) · çıkış · kendi şifreni değiştir. |
+| `GET/POST /api/users` · `DELETE /api/users/:id` · `PUT /api/users/:id/password` · `GET /api/auth/audit` | **Yalnız admin:** hesap yönetimi ve giriş olayları. |
+| `POST /api/ingest` | **Yalnız sunucu bilgisayarından (giriş gerekmez).** Ajandan telemetri (tek mesaj ya da dizi). Kısmi kabul: geçerliler yazılır, geçersizler 207 ile raporlanır. |
 | `GET /api/stream` | SSE, saniyede bir filo anlık görüntüsü. |
 | `GET /api/machines` | Anlık görüntü. |
 | `GET /api/machines/:id?window=8h` | Detay + vardiya özeti + aralıklar + duruşlar. |
 | `GET /api/machines/:id/history?window=30m` | Seyreltilmiş zaman serisi. |
-| `GET /api/machines/:id/export.csv?window=24h` | Türkçe Excel CSV (BOM + `sep=;` + ondalık virgül). |
-| `GET /api/health` | Durum + **`statusMapping`**: hangi ham değer hangi duruma eşlendi. |
+| `GET /api/machines/:id/export.csv?window=24h[&format=ham]` | Türkçe Excel CSV (BOM + `sep=;` + ondalık virgül). Varsayılan **özet** (üretilen parçalar + durum/program/alarm değişimleri); `format=ham` her kaydedilen örnek. |
+| `GET /api/production?from=&to=&machine=` · `/api/production/export.csv?...&view=makine\|urun\|gunluk` | **Üretim raporu** (izleme verisi: viewer de görür). `from/to` = üretim günü `YYYY-AA-GG` (varsayılan bugünün üretim günü, en çok 93 gün). Yanıt: `rows`, `byMachine`, `byProduct`, `days`, `totals`, `suspect`, `shifts`, `current`, `prevDate/nextDate`, `presets`. |
+| `GET /api/health` | Anonim/viewer: yalnız `{ok:true}`. **Admin:** durum + **`statusMapping`** (hangi ham değer hangi duruma eşlendi). |
 | `GET /api/agent/machines?driver=&model=` | **Ajanın okuduğu tezgah listesi** — IP'si tanımlı olanlar; `model` (11TB / 22TB) verilirse yalnız o modeldekiler (her model kendi ajanıdır). Ajan bunu dakikada bir çeker. |
 | `GET /api/drivers` · `GET /api/config` · `PUT /api/config/machines` | Sürücüler ve yapılandırma. |
 | `GET /api/library/config` · `/customers` · `/matrix` | Özellik durumu (`transferEnabled`…), müşteri klasörleri, program × tezgah matrisi. |
 | `GET/POST /api/library/programs` | Liste (`?customer=&q=`); yükleme: gövde = ham dosya, `?customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik). |
-| `GET /api/library/programs/:id` · `/versions/:no[?download=1]` | Sürümler · önizleme (JSON) ya da ham indirme. |
+| `POST /api/library/programs/text` | **Editör kaydı** (JSON: `text`, `lineEnding`, `encoding`, `bom`, `by`, `note`; yeni program için `customer`+`name`, yeni sürüm için `programId`+`baseVersionNo`, `acceptNewer`). 201 yeni sürüm, 200 aynı içerik, 409 `code: exists` / `newer-version`. |
+| `GET /api/library/programs/:id` · `/versions/:no[?download=1\|full=1]` | Sürümler · önizleme (JSON; `full=1` kesmeden tam metin + `roundTrip`) ya da ham indirme. |
+| `POST /api/machines/:id/programs/import-plan` · `GET .../import-plan/:planId[/diff?key=]` · `POST .../import-apply` | **Toplu alım** (admin; tornaya yalnız okuma): plan başlat (202, arka plan) · durum/ilerleme + plan · bir çakışmanın iki yüzü (fark) · uygula (`decisions: {anahtar: 'al'|'atla'}`, `skipKeys`). |
+| `POST /api/machines/:id/programs/delete-precheck` · `/delete` | **Tornadan silme** (admin; silme kapısı kapalıysa 422): ön kontrol (yazmaz) · sil (`confirm` = program adı, `acks`). Kayıt `kind: 'silme'`. |
+| `POST /api/machines/:id/folders` | **Tezgahta yeni müşteri klasörü** (JSON: `name`, `confirm` = tezgah kimliği, `by`). Kayıt döner (`kind: 'klasor'`); 400/403/404/409/422/502 gönderme ile aynı. |
 | `GET /api/machines/:id/programs` | Son taramanın envanteri + kütüphaneye göre durum. |
 | `POST /api/machines/:id/programs/scan` · `/import` | Tezgahı FTP ile tara (yalnız okuma) · tezgahtaki programı kütüphaneye al. |
 | `POST /api/transfers/precheck` · `POST /api/transfers` · `GET /api/transfers` | Ön kontrol (yazmaz) · gönder (`confirm` = tezgah kimliği, `acks`) · denetim kaydı. Hata kodları: 400 doğrulama, 403 kapalı, 404, 409 meşgul, 413 büyük, 422 desteklenmiyor, 502 tezgah/FTP. |
@@ -684,15 +792,27 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       → `statusMapping` listesine bak, tanınmayan değer çıkıyor mu.
 - [ ] 7 tezgaha statik IP + `Start server while boot` (tek ziyarette, bkz. §5).
 - [ ] CNC-03…07 kimlik bilgileri (seri no, üretim yılı) — panel başında toplanacak.
-- [ ] **Kimlik doğrulama yok.** Ayarlar ekranı ve **program gönderme** ofis ağındaki herkese
-      açık. Ofis ağı dışına açılacaksa önce bu çözülmeli; geçici olarak `CONFIG_READONLY=1`
-      yapılandırma yazımını, `TRANSFER_DISABLED=1` program göndermeyi kapatır.
+- [x] ~~Kimlik doğrulama~~ — yapıldı (0.5.0): admin/viewer, bkz. §6. **Gerçek kurulumda henüz denenmedi** (Setup ile yükseltme, ilk
+      hesap, alt PC'de oturum). Açık: uzaktan erişim için **Tailscale** kurulumu (alt PC + 2 dış kişi), HTTPS (`tailscale serve`),
+      iki adımlı doğrulama, çok bilgisayarlı ajan için ajan anahtarı.
 - [ ] **Program aktarımının ilk gerçek tornada denemesi** (§6 "doğrulanmayanlar"): önce
       "Tezgahtaki programları tara" (salt okunur), sonra yeni bir test adıyla tek program; `library.db`
       yedeği; Setup.exe ile kurulu PC'de FTP erişimi (güvenlik duvarı çıkış kuralı yeterli).
 - [ ] Üzerine yazma (yeni sürümü aynı adla gönderme): `RNTO`/`DELE` ezme semantiği gerçek
       tornada ölçüldükten sonra, mevcut içeriği önce kütüphaneye yedekleyerek.
-- [ ] Yeni müşteri klasörü açma (`MKD`) ve program silme: gerçek tornada denenmedi.
+- [ ] **Yeni müşteri klasörü açma (`MKD`) — gerçek tornada (11TB ve 22TB) denenecek.** Kod ve arayüz hazır, sahte FTP'de sınandı
+      (2026-10-08). Plan: `ZZTEST…` adlı boş klasör aç (ürünün kendi akışıyla) → LIST/CWD doğrula → panelde göründüğüne bak →
+      `curl.exe -Q "RMD ZZTEST…"` ile sil (ürün klasör silmez). Sonra 22TB'de tek kontrollü gönderme ve `sendEnabled: true`.
+      Program/klasör silme üründe yok.
+- [ ] **Tornadan silme (`DELE`) gerçek tornada doğrulanacak.** Plan: kendi gönderdiğimiz `ZZTEST…` adlı bir test dosyasını (önce `Program gönder`) sunucu `DELETE_ENABLED=1` ile
+      başlatılmışken UI'dan sil → tornada gerçekten kalktığını panelden ve tazeleme taramasıyla doğrula → sonra `config/drivers.json`'da 11TB için `deleteEnabled: true`.
+      22TB için önce gönderme (`sendEnabled`) doğrulanmalı. Denenecekler: DELE yanıt kodu (250?), çalışan/açık dosyada davranış, büyük/küçük harf.
+- [ ] **Toplu alım gerçek tornada denenecek** (yalnız okuma): büyük klasörde (200+ dosya) süre ve FTP'nin üretim sırasında davranışı; plan 15 dk / 100 MB sınırları yeterli mi.
+- [ ] **Üretim adedi gerçek tezgahlarda doğrulanacak:** bir vardiya sonunda raporun toplamı ile tezgahın `ToplamParca` farkını karşılaştır; çevrim süresinin parça başına
+      gerçek süreyle uyumunu panelden kontrol et; sayaç elle sıfırlanınca / tezgah kapanıp açılınca davranış (`suspect`, `*` notu). Birden çok programı art arda çalıştıran tezgahta program atfı.
+- [ ] Vardiya saatleri sabit (`shared/shifts.js`: 07–19 / 19–07); fabrika değiştirirse Ayarlar'dan düzenlenebilir hâle getirilebilir. Üç vardiya gerekirse yalnız liste uzar.
+- [ ] Program adı ↔ müşteri ürün kodu eşlemesi (üretim raporunda "ürün" şimdilik program adı; ikinci ürün: Mikro / iş emri ile birlikte ele alınacak).
+- [ ] Program editörü gerçek kullanımda: yazılan programın tornada çalışıp çalışmadığı (söz dizimi) bizim kontrolümüzde değil.
 - [ ] Backend, olay zamanını mesajın `ts`'inden değil geliş anından alır (`store.js ingest`):
       ajan tamponu geri yükleyince kesinti aralığı `NO_DATA` kalır.
 

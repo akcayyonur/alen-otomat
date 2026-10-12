@@ -6,6 +6,8 @@
  * surucu listede gorunur ama SECILEMEZ - musteriye tutulamayacak soz verilmesin.
  */
 import { escapeHtml, num } from './format.js';
+import { authDisabled } from './auth-view.js';
+import { renderUsers } from './users-view.js';
 
 const STATUS_META = {
   supported: { label: 'Destekleniyor', cls: 'ok', icon: '✓' },
@@ -52,9 +54,10 @@ export async function renderConfig(host, onSaved) {
     (config.readOnly
       ? '<p class="notice">Yapılandırma yazımı kapalı (<code>CONFIG_READONLY=1</code>). ' +
         'Değişiklikler kaydedilemez.</p>'
-      : '<p class="notice">Bu ekranda kimlik doğrulama <b>yok</b> — ofis ağındaki herkes ' +
-        'tezgah tanımlarını değiştirebilir. Dashboard ofis ağı dışına açılacaksa ' +
-        '<code>CONFIG_READONLY=1</code> ile yazımı kapatın.</p>') +
+      : authDisabled()
+        ? '<p class="notice notice-sim"><b>Giriş sistemi kapalı</b> (<code>AUTH_DISABLED=1</code>, yalnızca geliştirme/demo): ' +
+          'ağdaki herkes tezgah tanımlarını değiştirebilir.</p>'
+        : '<p class="notice">Bu ekranı yalnızca <b>yönetici</b> hesabı görür.</p>') +
 
     (message
       ? `<p class="notice ${message.ok ? '' : 'notice-sim'}">${escapeHtml(message.text)}</p>`
@@ -77,9 +80,13 @@ export async function renderConfig(host, onSaved) {
     '<div class="table-wrap">' + machineTable(draft, config.drivers, defaultDriver) + '</div>' +
     '<p class="hint">Sürücüsü boş bırakılan tezgah <code>defaults.driverId</code> ' +
     `(<b>${escapeHtml(defaultDriver)}</b>) kullanır. IP\'ler kablo çekimi sırasında doldurulacak.</p>` +
-    '</section>';
+    '</section>' +
+
+    // Hesaplar (yonetici / izleyici). Giris sistemi kapaliysa (gelistirme) hesap yonetimi anlamsiz.
+    (authDisabled() ? '' : '<section class="dt-block" data-role="users"></section>');
 
   wire(host, onSaved);
+  if (!authDisabled()) renderUsers(host.querySelector('[data-role="users"]'));
 }
 
 function driverCard(d) {

@@ -27,7 +27,7 @@ const run = (ad, goreli, env = {}) => {
   return child;
 };
 
-const backend = run('backend', '../backend/server.js', { DB_FILE: DEMO_DB });
+const backend = run('backend', '../backend/server.js', { DB_FILE: DEMO_DB, AUTH_DISABLED: '1' });
 setTimeout(() => run('oynat', '../simulator/replay.js'), 700);
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

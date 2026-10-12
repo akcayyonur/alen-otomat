@@ -382,6 +382,16 @@ export class FtpClient {
     this.#expect(await this.#command(`DELE ${name}`), [250], 'DELE');
   }
 
+  /**
+   * Bulunulan klasorde YENI alt klasor acar (tek segment). Sunucu ayni adli klasor/dosya varsa reddeder
+   * (550); varligi cagiran LIST ile ayrica denetler. Basari 257 (RFC 959); 250 de kabul edilir.
+   * RMD (klasor silme) bu istemcide BILEREK yoktur.
+   */
+  async mkd(name) {
+    assertFileName(name);
+    this.#expect(await this.#command(`MKD ${name}`), [257, 250], 'MKD');
+  }
+
   async quit() {
     try {
       if (this.socket && !this.closedError) {

@@ -52,7 +52,7 @@ InfoAfterFile=kurulum-sonrasi.txt
 Name: "tr"; MessagesFile: "compiler:Languages\Turkish.isl"
 
 [Tasks]
-Name: "agaac"; Description: "Dashboard'a ağdaki diğer bilgisayarlardan erişime izin ver (güvenlik duvarında {#Port} portunu açar). Giriş şifresi yok: yalnızca güvenilir ofis ağında kullanın."; GroupDescription: "Ağ erişimi:"
+Name: "agaac"; Description: "Dashboard'a ağdaki diğer bilgisayarlardan erişime izin ver (güvenlik duvarında {#Port} portunu açar). Dashboard giriş ister (yönetici / izleyici hesapları); ilk hesap bu bilgisayarda oluşturulur."; GroupDescription: "Ağ erişimi:"
 Name: "masaustu"; Description: "Masaüstüne CNC Telemetri uygulamasını koy (açınca hizmetleri başlatır ve dashboard'u açar)"; GroupDescription: "Kısayollar:"
 
 [Dirs]

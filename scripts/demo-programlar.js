@@ -74,6 +74,8 @@ const env = {
   DB_FILE: join(tmp, 'telemetry.db'),
   LIBRARY_DB_FILE: join(tmp, 'library.db'),
   MACHINES_FILE: machinesFile,
+  AUTH_DISABLED: '1', // demo: giris sistemi kapali (gercek kurulumda ASLA)
+  DELETE_ENABLED: '1', // demo: SAHTE tornalarda silme denenebilsin (gercek tornada dogrulanana dek kapali)
 };
 const child = (ad, dosya, e = env) => {
   const c = spawn(process.execPath, [join(kok, dosya)], { stdio: 'inherit', env: e, cwd: kok });
@@ -123,4 +125,6 @@ for (const id of ['CNC-07', 'CNC-08']) {
 console.log('');
 console.log(`[demo] Program kütüphanesi demosu hazır -> http://localhost:${PORT}/#/programlar`);
 console.log('[demo] Sahte tornalar: CNC-08 (FTP :2121), CNC-07 (FTP :2122). Gerçek tornaya DOKUNULMAZ.');
+console.log('[demo] Denenebilecekler: "Yeni program yaz…" / program ayrıntısında "Düzenle…" (editör + değişiklik farkı),');
+console.log('[demo]   gönderme penceresinde ve tezgah panelinde "Yeni klasör…" (sahte tornada klasör açar).');
 console.log('[demo] Durdurmak için Ctrl+C.');

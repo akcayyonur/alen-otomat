@@ -63,7 +63,7 @@ test('ekle / sil: izleyici hesabi acilir ve silinir; kisa sifre ve gecersiz rol 
   assert.match(kisa.stderr, /en az 8/);
   const rol = cli(['ekle', 'izleyici', 'root'], 'uzun-sifre-123\n');
   assert.equal(rol.status, 1);
-  assert.match(rol.stderr, /admin" ya da "viewer/);
+  assert.match(rol.stderr, /admin", "viewer" ya da "operator/);
 
   const ok = cli(['ekle', 'izleyici', 'viewer'], 'uzun-sifre-123\n');
   assert.equal(ok.status, 0, ok.stderr);

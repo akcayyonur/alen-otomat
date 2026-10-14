@@ -1,12 +1,16 @@
 /**
- * CNC Telemetri - dashboard uygulamasi.
+ * Dashboard kabugu: giristen sonra iki AYRI uygulama (apps.js): CNC Telemetri ve Planlama.
+ *   #/uygulamalar      uygulama secimi (birden cok uygulamasi olan kullanici; adres bos ise de burasi acilir)
  *
- * Gorunumler, kalici bir tezgah secici:
+ * CNC Telemetri - gorunumler, kalici bir tezgah secici:
  *   #/filo             filo geneli (KPI + kartlar)
  *   #/tezgah/CNC-01    tek tezgah ayrintisi
  *   #/uretim           uretim raporu (vardiya x tezgah x program adetleri)
  *   #/programlar       program kutuphanesi   (#/programlar/12: program ayrintisi)
  *   #/ayarlar          tezgah ve surucu ayarlari
+ *
+ * Planlama (yan menusu ve ust cubugu ayri; tezgah listesi yok) - yalniz yonetici:
+ *   #/planlama         is emirleri; #/planlama/urunler | siparisler | programlar
  *
  * Canli degerler SSE ile saniyede bir gelir ve YALNIZCA metin dugumleri
  * yamanir - grafikler ve seritler kendi yavas donguleriyle yenilenir, boylece
@@ -16,7 +20,9 @@ import { lineChart, timeline, ribbonHtml } from './charts.js';
 import { renderConfig, resetConfigView } from './config-view.js';
 import { renderLibrary, resetLibraryView, renderMachinePrograms } from './library-view.js';
 import { renderProduction, resetProductionView, initMachineProduction, refreshMachineProduction } from './production-view.js';
-import { initAuth, isAdmin, checkSessionAfterStreamError } from './auth-view.js';
+import { renderPlanning, renderPlanningNav, planningTabsFor, defaultPlanningTab } from './planning-view.js';
+import { appsFor, renderApps } from './apps.js';
+import { initAuth, isAdmin, getSession, checkSessionAfterStreamError } from './auth-view.js';
 import {
   STATES, stateOf, num, pct, dur, clock, dateTime, ago,
   FIELD_GROUPS, escapeHtml,
@@ -40,7 +46,8 @@ const HISTORY_REFRESH_MS = 10_000;
 
 const state = {
   /** @type {object|null} */ snapshot: null,
-  /** @type {'fleet'|'machine'|'config'|'library'|'production'} */ view: 'fleet',
+  /** @type {'fleet'|'machine'|'config'|'library'|'production'|'planning'|'apps'} */ view: 'fleet',
+  /** @type {'tezgahbasi'|'paketleme'|'isemirleri'|'verimlilik'|'hammadde'|'urunler'|'siparisler'|'programlar'} planlama ekraninda secili sekme */ planningTab: 'isemirleri',
   /** @type {string|null} */ selected: null,
   /** @type {number|null} kutuphane ekraninda secili program */ programId: null,
   window: '30m',
@@ -55,10 +62,20 @@ const refs = {};
 
 /* ------------------------------------------------------------------ yonlendirme */
 
-function readRoute() {
+/** Rolun giris adresi: birden cok uygulamasi varsa secim ekrani, tek uygulamasi varsa dogrudan o (izleyici: filo, operator: tezgah basi). */
+function homeHash(role) {
+  const apps = appsFor(role);
+  if (apps.length >= 2) return '#/uygulamalar';
+  if (apps.length === 1) return apps[0].key === 'planlama' ? `#/planlama/${defaultPlanningTab(role)}` : apps[0].entry;
+  return '#/filo';
+}
+
+function readRoute(depth = 0) {
   const hash = location.hash.replace(/^#/, '');
+  const role = getSession()?.user?.role;
   const m = /^\/tezgah\/(.+)$/.exec(hash);
   const lm = /^\/programlar(?:\/(\d+))?$/.exec(hash);
+  const pm = /^\/planlama(?:\/(tezgahbasi|paketleme|isemirleri|verimlilik|hammadde|urunler|siparisler|programlar))?$/.exec(hash);
   if (m) {
     state.view = 'machine';
     state.selected = decodeURIComponent(m[1]);
@@ -72,17 +89,35 @@ function readRoute() {
   } else if (hash === '/uretim') {
     state.view = 'production';
     state.selected = null;
+  } else if (pm) {
+    state.view = 'planning';
+    state.selected = null;
+    state.planningTab = pm[1] ?? defaultPlanningTab(role);
+  } else if (hash === '/uygulamalar' || hash === '' || hash === '/') {
+    state.view = 'apps';
+    state.selected = null;
   } else {
     state.view = 'fleet';
     state.selected = null;
   }
-  // Izleyici (viewer) program kutuphanesini ve ayarlari goremez: adres cubuguna yazsa bile filoya doner.
-  // (Sunucu bu uclari zaten reddeder; burasi yalniz bos/hatali bir ekran gostermemek icin.)
-  if (!isAdmin() && (state.view === 'library' || state.view === 'config')) {
-    state.view = 'fleet';
-    state.selected = null;
-    history.replaceState(null, '', '#/filo');
+
+  // Yetkisiz ekrana (adres cubuguna yazilsa bile) girilmez: kendi giris adresine doner. Sunucu bu uclari zaten reddeder;
+  // burasi yalniz bos/hatali bir ekran gostermemek icindir.
+  const allowed = new Set(appsFor(role).map((a) => a.key));
+  const appKey = state.view === 'planning' ? 'planlama' : state.view === 'apps' ? 'apps' : 'telemetri';
+  const adminOnlyTelemetry = state.view === 'library' || state.view === 'config'; // viewer'a kapali telemetri ekranlari
+  const denied = appKey === 'apps' ? allowed.size < 2 : !allowed.has(appKey) || (adminOnlyTelemetry && role !== 'admin');
+  if (denied) {
+    const home = homeHash(role);
+    if (location.hash !== home) history.replaceState(null, '', home);
+    if (depth < 2 && hash !== home.replace(/^#/, '')) return readRoute(depth + 1); // en cok iki kez: yetkisiz rolde sonsuz dongu olmasin
   }
+  // planlama bolumu rolun gorebildigi bolumlerden degilse (operator: yalniz tezgah basi) varsayilana doner
+  if (state.view === 'planning' && !planningTabsFor(role).includes(state.planningTab)) {
+    state.planningTab = defaultPlanningTab(role);
+    history.replaceState(null, '', `#/planlama/${state.planningTab}`);
+  }
+  if (state.view === 'apps' && hash !== '/uygulamalar') history.replaceState(null, '', '#/uygulamalar');
 }
 
 function go(machineId) {
@@ -550,7 +585,49 @@ function drawTable(h) {
 
 /* ----------------------------------------------------------------------- cizim */
 
+/** Uygulamaya gore kabuk: hangi yan menu, ust cubuk yazisi, baglanti gostergesi ve alt bilgi gorunur. */
+function syncChrome(view) {
+  const app = view === 'apps' ? 'apps' : view === 'planning' ? 'planlama' : 'telemetri';
+  const tele = app === 'telemetri';
+  refs.app.dataset.app = app;
+  refs.sidebar.hidden = !tele;
+  // tek bolumlu kullanicida (operator: yalniz tezgah basi) yan menu gereksiz
+  refs.planNav.hidden = app !== 'planlama' || (planningTabsFor(getSession()?.user?.role).length < 2 && !isAdmin());
+  refs.conn.hidden = !tele;
+  refs.footer.hidden = !tele;
+  refs.appsView.hidden = app !== 'apps';
+  refs.planningView.hidden = app !== 'planlama';
+  if (!tele) {
+    for (const el of [refs.fleetView, refs.detail, refs.configView, refs.libraryView, refs.productionView]) el.hidden = true;
+  }
+  refs.eyebrow.textContent = app === 'planlama' ? 'Planlama · iş emri ve verimlilik' : app === 'apps' ? 'CNC-TLM-001' : 'CNC-TLM-001 · Canlı Telemetri';
+  if (app === 'planlama') refs.title.textContent = 'Planlama';
+  else if (app === 'apps') refs.title.textContent = 'Uygulama Seçimi';
+  document.title = app === 'planlama' ? 'Planlama' : app === 'apps' ? 'CNC Telemetri Platformu' : 'CNC Filo Telemetrisi';
+  refs.appsBtn.hidden = app === 'apps' || appsFor(getSession()?.user?.role).length < 2;
+}
+
 function render() {
+  syncChrome(state.view);
+  // Telemetri verisine bagli olmayan iki ekran: SSE'nin ilk karesini beklemeden cizilir.
+  if (state.view === 'apps') {
+    if (state.prevView !== 'apps') renderApps(refs.appsView, appsFor(getSession()?.user?.role), getSession()?.authDisabled ? undefined : getSession()?.user);
+    state.prevView = 'apps';
+    return;
+  }
+  if (state.view === 'planning') {
+    // Planlama kendi verisini ceker; yalnizca rota/bolum degisince (ya da ekrana ilk girilince) cizilir, SSE karelerinde dokunulmaz.
+    const key = state.planningTab;
+    if (state.prevView !== 'planning') delete refs.planningView.dataset.key;
+    if (refs.planningView.dataset.key !== key) {
+      refs.planningView.dataset.key = key;
+      renderPlanningNav(refs.planNav, key);
+      renderPlanning(refs.planningView, key);
+    }
+    state.prevView = 'planning';
+    return;
+  }
+
   const snap = state.snapshot;
   if (!snap) return;
   renderSidebar();
@@ -692,6 +769,13 @@ async function init() {
   refs.libraryBtn = $('#library-btn');
   refs.libraryView = $('#library-view');
   refs.productionBtn = $('#production-btn');
+  refs.planningView = $('#planning-view');
+  refs.planNav = $('#plan-sidebar');
+  refs.appsView = $('#apps-view');
+  refs.appsBtn = $('#apps-btn');
+  refs.app = $('.app');
+  refs.eyebrow = $('#eyebrow');
+  refs.footer = $('.footnote');
   refs.productionView = $('#production-view');
   refs.sidebar = $('#sidebar');
   refs.kpis = $('#kpis');
@@ -708,6 +792,11 @@ async function init() {
   refs.configBtn.addEventListener('click', () => { location.hash = '#/ayarlar'; });
   refs.libraryBtn.addEventListener('click', () => { location.hash = '#/programlar'; });
   refs.productionBtn.addEventListener('click', () => { location.hash = '#/uretim'; });
+  refs.appsBtn.addEventListener('click', () => { location.hash = '#/uygulamalar'; });
+  refs.planNav.addEventListener('click', (ev) => {
+    const tab = ev.target.closest('[data-tab]')?.dataset.tab;
+    if (tab) location.hash = `#/planlama/${tab}`;
+  });
   // Izleyici: program kutuphanesi ve ayarlar menuden de kalkar.
   refs.libraryBtn.hidden = !isAdmin();
   refs.configBtn.hidden = !isAdmin();

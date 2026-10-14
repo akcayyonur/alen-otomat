@@ -15,7 +15,7 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="eyebrow">CNC-TLM-001 · Canlı Telemetri</span>
+        <span class="eyebrow" id="eyebrow">CNC-TLM-001 · Canlı Telemetri</span>
         <h1 id="view-title">Filo Genel Bakış</h1>
       </div>
       <div class="topbar-right">
@@ -23,6 +23,7 @@
           <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-text">bağlanıyor…</span>
         </div>
+        <button class="icon-btn" id="apps-btn" type="button" hidden title="Telemetri ve Planlama arasında geç">Uygulamalar</button>
         <button class="user-chip" id="user-chip" type="button" hidden></button>
         <button class="icon-btn" id="logout-btn" type="button" hidden>Çıkış</button>
         <button class="icon-btn" id="theme-toggle" type="button">Tema</button>
@@ -64,7 +65,11 @@
         </button>
       </nav>
 
+      <!-- Planlama uygulamasinin yan menusu (Telemetri'nin tezgah listesi yerine); app.js doldurur -->
+      <nav class="sidebar" id="plan-sidebar" aria-label="Planlama bölümleri" hidden></nav>
+
       <main class="content">
+        <section id="apps-view" class="apps-view" aria-live="polite" hidden></section>
         <section id="fleet-view">
           <div class="kpis" id="kpis" aria-label="Filo özeti"></div>
           <div class="fleet-grid" id="fleet-grid"></div>
@@ -74,6 +79,7 @@
         <section class="detail" id="config-view" hidden></section>
         <section class="detail" id="library-view" hidden></section>
         <section class="detail" id="production-view" hidden></section>
+        <section class="detail" id="planning-view" hidden></section>
       </main>
     </div>
 

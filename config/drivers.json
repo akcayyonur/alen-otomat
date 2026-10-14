@@ -52,8 +52,8 @@
           "verifiedAgainst": "Gerçek tezgahlar (yazılım 10.116.54S) ve Syntec W32 PC Simulator 10.116.56Q",
           "fileTransfer": {
             "sendEnabled": true,
-            "deleteEnabled": false,
-            "deleteReason": "Tornadan program silme (FTP DELE) gerçek tezgahta henüz denenmedi. Önce kendi gönderdiğimiz bir test dosyasıyla doğrulanır; sonra bu modelin fileTransfer.deleteEnabled değeri true yapılır (ya da doğrulama için sunucu DELETE_ENABLED=1 ile başlatılır)."
+            "deleteEnabled": true,
+            "deleteNote": "Tornadan program silme (FTP DELE) 2026-10-13'te fabrika sahibi kararıyla AÇILDI. DELE gerçek tezgahta henüz denenmedi: ilk silme, kendi gönderdiğimiz bir test dosyasıyla yapılmalı. Acil kapatma: sunucuyu DELETE_DISABLED=1 ile başlatın."
           }
         },
         {

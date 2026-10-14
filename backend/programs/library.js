@@ -18,6 +18,8 @@ import { createHash } from 'node:crypto';
 import { LibraryDb } from './library-db.js';
 
 export const MAX_PROGRAM_BYTES = 1_000_000;
+/** Kutuphaneden tek seferde silinebilecek en fazla program (yanlis "hepsini sec" riskini sinirlar). */
+export const MAX_DELETE_BATCH = 500;
 /** Aktarim sirasinda kullanilan gecici ad oneki; kullanici bu adla program yukleyemez. */
 export const TEMP_PREFIX = 'ZZUP';
 /** Kok dizinde program olmayan sistem dosyalari: envanterden ve karsilastirmadan haric. */
@@ -231,6 +233,29 @@ export class Library {
       latest: { versionNo: latest.versionNo, size: latest.size, createdAt: latest.createdAt, sha256: latest.sha256 },
       eolOnlyVersion,
     };
+  }
+
+  /**
+   * Programlari KUTUPHANEDEN siler (tum surumleri). Geri donusuzdur; tezgahlardaki dosyalar silinmez ama kutuphane
+   * yedegi kalmaz (tornadan silerken "kutuphanede kopyasi var" kontrolu bu kopyaya dayanir).
+   * Onay metni: tek programda programin ADI, birden cok programda program SAYISI (yanlis secimi onler).
+   * @param {{ids: number[], confirm: string, by?: string|null, clientIp?: string|null}} p
+   */
+  deletePrograms({ ids, confirm, by = null, clientIp = null }) {
+    if (!Array.isArray(ids) || ids.length === 0) throw new ValidationError('Silinecek program seçilmedi.');
+    const uniq = [...new Set(ids.map(Number))];
+    if (uniq.some((n) => !Number.isInteger(n) || n <= 0)) throw new ValidationError('Program kimliği geçersiz.');
+    if (uniq.length > MAX_DELETE_BATCH) throw new ValidationError(`Tek seferde en fazla ${MAX_DELETE_BATCH} program silinebilir.`);
+    const programs = uniq.map((id) => this.db.getProgram(id));
+    if (programs.some((p) => p === null)) throw new ValidationError('Program kütüphanede bulunamadı (başka biri silmiş olabilir). Listeyi yenileyin.', 404);
+    const expected = programs.length === 1 ? programs[0].name : String(programs.length);
+    if (String(confirm ?? '') !== expected) {
+      throw new ValidationError(programs.length === 1
+        ? `Onay için silinecek programın adını yazın: "${expected}".`
+        : `Onay için silinecek program sayısını yazın: ${expected}.`);
+    }
+    const deleted = this.db.deletePrograms(uniq, { by, clientIp });
+    return { deleted, programs: deleted.length, versions: deleted.reduce((n, d) => n + d.versions, 0) };
   }
 
   #add({ customer, name, content, note, createdBy, originalName, source, sourceMachine = null }) {

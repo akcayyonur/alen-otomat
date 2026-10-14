@@ -2,6 +2,8 @@
  * Uretim adetleri: (1) tezgah detayindaki "vardiya adetleri" paneli, (2) "Uretim raporu" ekrani.
  *
  * Her ikisi de /api/production'dan gelir; toplamlar sunucuda hesaplanir (ekran ve CSV ayni sayilari gosterir).
+ * Program gecisleri (hangi program hangi saatte devreye girdi, ne zaman bitti) /api/production/runs'tan gelir.
+ * Panelde ve raporda tarih secimi: tek gun (takvim ya da onceki/sonraki dugmeleri) ya da aralik (baslangic-bitis, hazir secimler).
  * "Urun" = kontrolcunun calistirdigi program adi. Yanindaki sure, parca basina ORTALAMA cevrim suresidir
  * (kontrolcunun cevrim sayacinin parca artmadan onceki tepe degeri); bilinmiyorsa yazilmaz.
  * Izleyici (viewer) rolu de gorur: tezgah ag bilgisi icermez.
@@ -35,6 +37,37 @@ function qtyCell(s, { time = true } = {}) {
     (s.approxQty > 0 ? ` <span class="prod-approx" title="${num(s.approxQty)} adedi veri kopukluğundan sonra sayıldı; hangi vardiyaya düştüğü yaklaşık">*</span>` : '');
 }
 
+const stampText = (ms) => {
+  const d = new Date(ms);
+  return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)} ${hh(d.getHours())}:${hh(d.getMinutes())}`;
+};
+
+/** Program gecisleri tablosu (panelde tek tezgah, raporda tum tezgahlar). */
+function runsTable(runs, { machine = false } = {}) {
+  if (runs.length === 0) return '<p class="empty">Bu aralıkta program kaydı yok.</p>';
+  const sorted = runs.slice().sort((a, b) => (machine ? a.machineId.localeCompare(b.machineId, 'tr', { numeric: true }) : 0) || a.startedAt - b.startedAt);
+  const shiftText = (r) => {
+    const a = r.startShift.label;
+    if (!r.endShift || (r.endShift.id === r.startShift.id && r.endShift.date === r.startShift.date)) return escapeHtml(a);
+    return `${escapeHtml(a)} → ${escapeHtml(r.endShift.label)}`;
+  };
+  const rows = sorted.map((r) =>
+    `<tr>${machine ? `<td><a href="#/tezgah/${encodeURIComponent(r.machineId)}">${escapeHtml(r.machineId)}</a></td>` : ''}` +
+    `<td class="mono"><b>${escapeHtml(r.program)}</b></td>` +
+    `<td class="num">${escapeHtml(stampText(r.startedAt))}${r.startsBefore ? ' <span class="prod-approx" title="Bu program seçilen aralıktan önce başlamış; adet yalnız seçilen aralıktaki parçaları sayar">◂</span>' : ''}</td>` +
+    `<td class="num">${r.ongoing ? '<span class="prod-live">devam ediyor</span>' : escapeHtml(stampText(r.endedAt))}${!r.ongoing && r.endsAfter ? ' <span class="prod-approx" title="Bu program seçilen aralıktan sonra bitmiş">▸</span>' : ''}</td>` +
+    `<td class="num">${escapeHtml(dur(r.durationMs / 1000))}</td>` +
+    `<td class="num">${r.qty > 0 ? `<b>${num(r.qty)}</b> adet` : '<span class="is-null" aria-label="parça sayılmadı">—</span>'}</td>` +
+    `<td>${shiftText(r)}</td></tr>`).join('');
+  return '<div class="table-wrap table-wrap-tall"><table class="tbl tbl-prod"><thead><tr>' +
+    (machine ? '<th>Tezgah</th>' : '') +
+    '<th>Program</th><th class="num">Başladı</th><th class="num">Bitti</th><th class="num">Süre</th><th class="num">Adet</th><th>Vardiya</th>' +
+    `</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+const RUNS_HINT = 'Her satır, programın tezgahta çalışmaya başladığı ve bittiği saattir (bir sonraki programın başladığı an). ' +
+  'Tezgah kapalıyken ya da veri yokken (10 dk üzeri) aralık biter; ◂ ▸ işaretli aralıklar seçilen tarihlerin dışına taşar.';
+
 const rangeText = (s) => (s.cycleMin == null ? '<span class="is-null">—</span>'
   : s.cycleMin === s.cycleMax ? escapeHtml(cycleText(s.cycleMin)) : `${escapeHtml(cycleText(s.cycleMin))} – ${escapeHtml(cycleText(s.cycleMax))}`);
 
@@ -55,22 +88,58 @@ const shiftHead = (d, s, date) => {
 
 /* ============================================================ tezgah paneli */
 
-/** @type {{host: HTMLElement, machineId: string, date: string|null, sig: string, seq: number, data: any}|null} */
+const QUICK = [
+  { key: 'today', label: 'Bugün' },
+  { key: 'yesterday', label: 'Dün' },
+  { key: 'last7', label: 'Son 7 gün' },
+  { key: 'last30', label: 'Son 30 gün' },
+];
+
+/** @type {{host: HTMLElement, machineId: string, from: string|null, to: string|null, sig: string, seq: number, data: any, runs: any}|null} */
 let panel = null;
 
 /** Tezgah detayindaki "Uretim" bolumunu kurar (host her tezgah degisiminde yenidir). */
 export function initMachineProduction(host, machineId) {
-  const p = { host, machineId, date: null, sig: '', seq: 0, data: null };
+  const p = { host, machineId, from: null, to: null, sig: '', seq: 0, data: null, runs: null };
   panel = p;
-  host.innerHTML = '<h3>Üretim · vardiya adetleri</h3><p class="empty">Yükleniyor…</p>';
+  // Denetimler (tarih kutulari) bir kez kurulur; yalniz govde yenilenir: periyodik tazeleme secim yaparken kutuyu bozmasin.
+  host.innerHTML =
+    '<div class="dt-block-head"><h3>Üretim · vardiya adetleri</h3>' +
+    '<div class="dt-actions prod-nav">' +
+    '<button type="button" class="icon-btn" data-prod="prev" aria-label="Önceki aralık">◀</button>' +
+    '<span class="prod-date" data-role="label">…</span>' +
+    '<button type="button" class="icon-btn" data-prod="next" aria-label="Sonraki aralık" disabled>▶</button>' +
+    '</div></div>' +
+    '<div class="prod-controls">' +
+    '<div class="seg" data-role="quick" role="group" aria-label="Hazır aralık"></div>' +
+    '<label class="fld-inline">Başlangıç <input type="date" data-role="from"></label>' +
+    '<label class="fld-inline">Bitiş <input type="date" data-role="to"></label>' +
+    '</div>' +
+    '<div data-role="body" aria-live="polite"><p class="empty">Yükleniyor…</p></div>';
+  const $ = (role) => host.querySelector(`[data-role="${role}"]`);
+
   host.onclick = (ev) => {
     const btn = ev.target.closest('[data-prod]');
-    if (!btn || btn.disabled || !p.data) return;
-    const act = btn.dataset.prod;
-    if (act === 'prev') p.date = p.data.prevDate;
-    else if (act === 'next') p.date = p.data.nextDate;
-    else if (act === 'today') p.date = null;
-    else return;
+    if (btn && !btn.disabled && p.data) {
+      const r = btn.dataset.prod === 'prev' ? p.data.prevRange : btn.dataset.prod === 'next' ? p.data.nextRange : null;
+      if (r) { p.from = r.from; p.to = r.to; loadPanel(true); }
+      return;
+    }
+    const quick = ev.target.closest('[data-quick]')?.dataset.quick;
+    if (quick && p.data) {
+      const r = p.data.presets[quick];
+      p.from = r.from; p.to = r.to;
+      loadPanel(true);
+    }
+  };
+  host.onchange = (ev) => {
+    const role = ev.target.dataset?.role;
+    if (role !== 'from' && role !== 'to') return;
+    const f = $('from').value;
+    const t = $('to').value;
+    if (!f && !t) return;
+    p.from = f || t; p.to = t || f;
+    if (p.from > p.to) { if (role === 'from') p.to = p.from; else p.from = p.to; }
     loadPanel(true);
   };
   loadPanel(true);
@@ -84,56 +153,95 @@ async function loadPanel(force) {
   if (!p || !p.host.isConnected) return;
   const seq = ++p.seq;
   const q = new URLSearchParams({ machine: p.machineId });
-  if (p.date) { q.set('from', p.date); q.set('to', p.date); }
+  if (p.from) { q.set('from', p.from); q.set('to', p.to); }
   let data;
+  let runs;
   try {
-    data = await api(`/api/production?${q}`);
+    [data, runs] = await Promise.all([api(`/api/production?${q}`), api(`/api/production/runs?${q}`)]);
   } catch (err) {
     if (panel === p && seq === p.seq && force) {
-      p.host.innerHTML = `<h3>Üretim · vardiya adetleri</h3><p class="empty">Üretim verisi alınamadı: ${escapeHtml(err.message)}</p>`;
+      p.host.querySelector('[data-role="body"]').innerHTML = `<p class="empty">Üretim verisi alınamadı: ${escapeHtml(err.message)}</p>`;
       p.sig = '';
     }
     return;
   }
-  if (panel !== p || seq !== p.seq || !p.host.isConnected) return; // bu arada baska tezgaha/gune gecildi
+  if (panel !== p || seq !== p.seq || !p.host.isConnected) return; // bu arada baska tezgaha/tarihe gecildi
   p.data = data;
-  const sig = JSON.stringify([data.from, data.rows, data.suspect, data.current, data.nextDate]);
+  p.runs = runs;
+  p.from = data.from; p.to = data.to;
+  const sig = JSON.stringify([data.from, data.to, data.rows, data.suspect, data.current, data.nextRange, runs.runs]);
   if (!force && sig === p.sig) return;
   p.sig = sig;
-  p.host.innerHTML = panelHtml(data);
+  drawPanelControls(p);
+  p.host.querySelector('[data-role="body"]').innerHTML = panelBody(data, runs);
 }
 
-function panelHtml(d) {
+function drawPanelControls(p) {
+  const d = p.data;
+  const $ = (role) => p.host.querySelector(`[data-role="${role}"]`);
+  const single = d.from === d.to;
+  const today = d.from === d.current.date && single;
+  $('label').textContent = single
+    ? `${dayLabel(d.from)}${today ? ' · bugün' : ''}`
+    : `${shortDay(d.from)} – ${shortDay(d.to)} · ${daysIn(d)} gün`;
+  p.host.querySelector('[data-prod="prev"]').disabled = !d.prevRange;
+  p.host.querySelector('[data-prod="next"]').disabled = !d.nextRange;
+  const from = $('from');
+  const to = $('to');
+  if (document.activeElement !== from) from.value = d.from;
+  if (document.activeElement !== to) to.value = d.to;
+  from.max = to.max = d.current.date;
+  $('quick').innerHTML = QUICK.map((x) => {
+    const r = d.presets[x.key];
+    const on = r.from === d.from && r.to === d.to;
+    return `<button type="button" data-quick="${x.key}" aria-pressed="${on}"${on ? ' class="is-on"' : ''}>${escapeHtml(x.label)}</button>`;
+  }).join('');
+}
+
+const keyMs = (key) => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+const daysIn = (d) => Math.round((keyMs(d.to) - keyMs(d.from)) / 86_400_000) + 1;
+
+function panelBody(d, runsReport) {
   const m = d.byMachine[0];
   const programs = m?.programs ?? [];
-  const today = d.from === d.current.date;
-  let html =
-    '<div class="dt-block-head"><h3>Üretim · vardiya adetleri</h3>' +
-    '<div class="dt-actions prod-nav">' +
-    '<button type="button" class="icon-btn" data-prod="prev" aria-label="Önceki üretim günü">◀</button>' +
-    `<span class="prod-date">${escapeHtml(dayLabel(d.from))}${today ? ' · bugün' : ''}</span>` +
-    `<button type="button" class="icon-btn" data-prod="next" aria-label="Sonraki üretim günü"${d.nextDate ? '' : ' disabled'}>▶</button>` +
-    (today ? '' : '<button type="button" class="icon-btn" data-prod="today">Bugüne dön</button>') +
-    '</div></div>';
+  const multi = d.from !== d.to;
+  let html = '';
 
   if (programs.length === 0) {
-    return html + '<p class="empty">Bu üretim gününde bu tezgahta sayılan parça yok.</p>' + notesHtml(d);
+    html += '<p class="empty">Bu aralıkta bu tezgahta sayılan parça yok.</p>';
+  } else {
+    html += '<div class="table-wrap"><table class="tbl tbl-prod"><thead><tr><th>Program</th>' +
+      d.shifts.map((s) => shiftHead(d, s, d.from)).join('') +
+      '<th class="num">Toplam</th></tr></thead><tbody>' +
+      programs.map((p) =>
+        `<tr><td class="mono">${escapeHtml(programText(p.program))}</td>` +
+        d.shifts.map((s) => `<td class="num">${qtyCell(p.shifts[s.id])}</td>`).join('') +
+        `<td class="num">${qtyCell(p.total)}</td></tr>`).join('') +
+      '</tbody>' +
+      (programs.length > 1
+        ? '<tfoot><tr class="prod-total"><td>Toplam</td>' +
+          d.shifts.map((s) => `<td class="num">${qtyCell(m.shifts[s.id], { time: false })}</td>`).join('') +
+          `<td class="num">${qtyCell(m.total, { time: false })}</td></tr></tfoot>`
+        : '') +
+      '</table></div>';
   }
 
-  html += '<div class="table-wrap"><table class="tbl tbl-prod"><thead><tr><th>Program</th>' +
-    d.shifts.map((s) => shiftHead(d, s, d.from)).join('') +
-    '<th class="num">Toplam</th></tr></thead><tbody>' +
-    programs.map((p) =>
-      `<tr><td class="mono">${escapeHtml(programText(p.program))}</td>` +
-      d.shifts.map((s) => `<td class="num">${qtyCell(p.shifts[s.id])}</td>`).join('') +
-      `<td class="num">${qtyCell(p.total)}</td></tr>`).join('') +
-    '</tbody>' +
-    (programs.length > 1
-      ? '<tfoot><tr class="prod-total"><td>Toplam</td>' +
-        d.shifts.map((s) => `<td class="num">${qtyCell(m.shifts[s.id], { time: false })}</td>`).join('') +
-        `<td class="num">${qtyCell(m.total, { time: false })}</td></tr></tfoot>`
-      : '') +
-    '</table></div>';
+  // Cok gunluk secimde gun gun dokum (en yeni gun uste).
+  if (multi && d.days.length > 0) {
+    html += '<h4 class="prod-sub-h">Gün gün</h4><div class="table-wrap"><table class="tbl tbl-prod"><thead><tr><th>Üretim günü</th>' +
+      d.shifts.map((s) => `<th class="num">${escapeHtml(s.label)} <span class="prod-hours">${hours(s)}</span></th>`).join('') +
+      '<th class="num">Toplam</th></tr></thead><tbody>' +
+      d.days.slice().reverse().map((day) =>
+        `<tr><td>${escapeHtml(shortDay(day.date))}</td>` +
+        d.shifts.map((s) => `<td class="num">${qtyCell(day.shifts[s.id], { time: false })}</td>`).join('') +
+        `<td class="num">${qtyCell(day.total, { time: false })}</td></tr>`).join('') +
+      '</tbody></table></div>';
+  }
+
+  const qs = new URLSearchParams({ from: d.from, to: d.to, machine: d.machineId ?? '' });
+  html += '<div class="dt-block-head prod-runs-head"><h4 class="prod-sub-h">Program geçişleri</h4>' +
+    `<div class="dt-actions"><a class="icon-btn" href="/api/production/runs.csv?${qs}" download>CSV indir</a></div></div>` +
+    `<p class="hint prod-note">${escapeHtml(RUNS_HINT)}</p>` + runsTable(runsReport.runs);
   return html + notesHtml(d);
 }
 
@@ -143,6 +251,7 @@ const MODES = [
   { key: 'makine', label: 'Makine bazlı' },
   { key: 'urun', label: 'Ürün (program) bazlı' },
   { key: 'gunluk', label: 'Günlük' },
+  { key: 'programlar', label: 'Program geçişleri' },
 ];
 const PRESETS = [
   { key: 'today', label: 'Bugün' },
@@ -151,7 +260,7 @@ const PRESETS = [
   { key: 'last30', label: 'Son 30 gün' },
 ];
 
-/** @type {{host: HTMLElement, from: string|null, to: string|null, machine: string, mode: string, data: any, sig: string, seq: number, timer: any}|null} */
+/** @type {{host: HTMLElement, from: string|null, to: string|null, machine: string, mode: string, data: any, runs: any, sig: string, seq: number, timer: any}|null} */
 let view = null;
 
 /** Rapor ekranindan cikilinca zamanlayici durur ve sonraki giriste taze kurulur. */
@@ -162,7 +271,7 @@ export function resetProductionView() {
 
 export function renderProduction(host) {
   resetProductionView();
-  const v = { host, from: null, to: null, machine: '', mode: 'makine', data: null, sig: '', seq: 0, timer: null };
+  const v = { host, from: null, to: null, machine: '', mode: 'makine', data: null, runs: null, sig: '', seq: 0, timer: null };
   view = v;
   host.innerHTML =
     '<section class="dt-block">' +
@@ -186,7 +295,7 @@ export function renderProduction(host) {
 
   host.onclick = (ev) => {
     const mode = ev.target.closest('[data-mode]')?.dataset.mode;
-    if (mode && mode !== v.mode) { v.mode = mode; drawModes(); drawBody(); return; }
+    if (mode && mode !== v.mode) { v.mode = mode; drawModes(); if (mode === 'programlar') load(true); else drawBody(); return; }
     const preset = ev.target.closest('[data-preset]')?.dataset.preset;
     if (preset && v.data) {
       const r = v.data.presets[preset];
@@ -230,8 +339,10 @@ async function load(force) {
   if (v.from) { q.set('from', v.from); q.set('to', v.to); }
   if (v.machine) q.set('machine', v.machine);
   let data;
+  let runs = null;
   try {
-    data = await api(`/api/production?${q}`);
+    // Program gecisleri yalniz o gorunum seciliyken istenir (tum tezgahlar x uzun aralikta buyuk olabilir).
+    [data, runs] = await Promise.all([api(`/api/production?${q}`), v.mode === 'programlar' ? api(`/api/production/runs?${q}`) : null]);
   } catch (err) {
     if (view === v && seq === v.seq && force) {
       v.host.querySelector('[data-role="body"]').innerHTML = `<p class="empty">Üretim raporu alınamadı: ${escapeHtml(err.message)}</p>`;
@@ -241,8 +352,9 @@ async function load(force) {
   }
   if (view !== v || seq !== v.seq) return;
   v.data = data;
+  v.runs = runs;
   v.from = data.from; v.to = data.to;
-  const sig = JSON.stringify([data.from, data.to, data.machineId, data.rows, data.suspect, data.current, data.machines]);
+  const sig = JSON.stringify([data.from, data.to, data.machineId, data.rows, data.suspect, data.current, data.machines, runs?.runs]);
   if (!force && sig === v.sig) return;
   v.sig = sig;
   drawControls();
@@ -273,7 +385,7 @@ function drawControls() {
   const qs = new URLSearchParams({ from: d.from, to: d.to });
   if (d.machineId) qs.set('machine', d.machineId);
   const base = `/api/production/export.csv?${qs}`;
-  $('csv').href = `${base}&view=${v.mode}`;
+  $('csv').href = v.mode === 'programlar' ? `/api/production/runs.csv?${qs}` : `${base}&view=${v.mode}`;
   $('csv-detail').href = `${base}&view=gunluk`;
 }
 
@@ -282,13 +394,16 @@ function drawBody() {
   if (!v?.data) return;
   const d = v.data;
   const body = v.host.querySelector('[data-role="body"]');
-  const csv = v.host.querySelector('[data-role="csv"]');
-  if (csv) csv.href = csv.href.replace(/view=\w+/, `view=${v.mode}`);
+  drawControls(); // CSV baglantisi secili gorunume gore
 
   const summary =
     `<p class="hint">${escapeHtml(d.from === d.to ? dayLabel(d.from) : `${dayLabel(d.from)} – ${dayLabel(d.to)}`)} · ` +
     `<b>${num(d.totals.qty)}</b> adet${d.machineId ? ` · ${escapeHtml(d.machineId)}` : ''}</p>`;
 
+  if (v.mode === 'programlar') {
+    body.innerHTML = summary + `<p class="hint prod-note">${escapeHtml(RUNS_HINT)}</p>` + (v.runs ? runsTable(v.runs.runs, { machine: true }) : '<p class="empty">Yükleniyor…</p>');
+    return;
+  }
   if (d.totals.qty === 0) {
     body.innerHTML = summary + '<p class="empty">Bu aralıkta sayılan parça yok.</p>' + notesHtml(d);
     return;

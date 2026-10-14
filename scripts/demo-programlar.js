@@ -73,6 +73,7 @@ const env = {
   PORT,
   DB_FILE: join(tmp, 'telemetry.db'),
   LIBRARY_DB_FILE: join(tmp, 'library.db'),
+  PLANNING_DB_FILE: join(tmp, 'planlama.db'),
   MACHINES_FILE: machinesFile,
   AUTH_DISABLED: '1', // demo: giris sistemi kapali (gercek kurulumda ASLA)
   DELETE_ENABLED: '1', // demo: SAHTE tornalarda silme denenebilsin (gercek tornada dogrulanana dek kapali)

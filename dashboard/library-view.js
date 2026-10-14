@@ -20,6 +20,7 @@ import { openEditor } from './editor-view.js';
 import { openFolderDialog } from './folder-view.js';
 import { openBulkImport } from './bulk-import-view.js';
 import { openDeleteDialog } from './delete-view.js';
+import { openLibraryDelete } from './library-delete-view.js';
 
 /* ------------------------------------------------------------------ ortak */
 
@@ -73,6 +74,8 @@ const lib = {
   host: null, ready: false, config: null, programs: [], matrix: null, customers: [],
   transfers: [], query: '', customer: '', selectedId: null, detail: null, previewNo: null,
   preview: null, pending: [], seq: 0,
+  // klasor gruplari: acik klasorler, toplu secim, silme kaydi
+  openGroups: new Set(), groupsInit: false, selected: new Set(), log: [],
 };
 
 export function resetLibraryView() {
@@ -116,16 +119,20 @@ function buildLibrarySkeleton() {
 
     '<section class="dt-block"><div class="dt-block-head"><h3>Programlar ve tezgahlardaki durumu</h3>' +
     '<div class="dt-actions">' +
-    '<input type="search" data-role="q" placeholder="Program ya da müşteri ara…" aria-label="Program ara" class="fld-sm">' +
-    '<select data-role="cust" aria-label="Müşteri filtresi" class="fld-sm"></select></div></div>' +
-    '<div class="table-wrap" data-role="table"></div>' +
+    '<input type="search" data-role="q" placeholder="Program ya da klasör ara…" aria-label="Program ara" class="fld-sm">' +
+    '<select data-role="cust" aria-label="Klasör filtresi" class="fld-sm"></select></div></div>' +
+    '<div data-role="selbar" aria-live="polite"></div>' +
+    '<div data-role="table"></div>' +
     '<ul class="legend legend-chips" data-role="legend"></ul></section>' +
 
     '<section class="dt-block" data-role="detail" hidden></section>' +
 
     '<section class="dt-block"><div class="dt-block-head"><h3>Gönderme geçmişi</h3>' +
     '<button type="button" class="icon-btn" data-act="refresh-history">Yenile</button></div>' +
-    '<div class="table-wrap" data-role="history"></div></section>';
+    '<div class="table-wrap" data-role="history"></div></section>' +
+
+    '<section class="dt-block"><div class="dt-block-head"><h3>Kütüphaneden silinenler</h3></div>' +
+    '<div class="table-wrap" data-role="liblog"></div></section>';
 
   const userInput = lib.host.querySelector('[data-role="user"]');
   userInput.value = userName.get();
@@ -133,14 +140,15 @@ function buildLibrarySkeleton() {
 
 async function loadLibrary() {
   try {
-    const [config, programs, matrix, customers, transfers] = await Promise.all([
+    const [config, programs, matrix, customers, transfers, log] = await Promise.all([
       api('/api/library/config'),
       api('/api/library/programs'),
       api('/api/library/matrix'),
       api('/api/library/customers'),
       api('/api/transfers?limit=15'),
+      api('/api/library/log?limit=15'),
     ]);
-    Object.assign(lib, { config, programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers });
+    Object.assign(lib, { config, programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers, log: log.log });
   } catch (err) {
     toast(lib.host, `Kütüphane yüklenemedi: ${err.message}`, false);
     return;
@@ -149,6 +157,7 @@ async function loadLibrary() {
   renderPending();
   renderTable();
   renderHistory();
+  renderLibLog();
   lib.host.querySelector('[data-role="max"]').textContent = maxLabel(lib.config.maxProgramBytes);
 }
 
@@ -159,16 +168,20 @@ document.addEventListener(CHANGED, () => {
 
 async function reloadLists() {
   try {
-    const [programs, matrix, customers, transfers] = await Promise.all([
-      api('/api/library/programs'), api('/api/library/matrix'), api('/api/library/customers'), api('/api/transfers?limit=15'),
+    const [programs, matrix, customers, transfers, log] = await Promise.all([
+      api('/api/library/programs'), api('/api/library/matrix'), api('/api/library/customers'), api('/api/transfers?limit=15'), api('/api/library/log?limit=15'),
     ]);
-    Object.assign(lib, { programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers });
+    Object.assign(lib, { programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers, log: log.log });
   } catch (err) {
     toast(lib.host, `Liste yenilenemedi: ${err.message}`, false);
   }
+  // Silinen / artik olmayan programlar secimden dusurulur.
+  const alive = new Set(lib.programs.map((p) => p.id));
+  for (const id of [...lib.selected]) if (!alive.has(id)) lib.selected.delete(id);
   renderPending();
   renderTable();
   renderHistory();
+  renderLibLog();
   if (lib.selectedId != null) await selectProgram(lib.selectedId, true);
 }
 
@@ -256,48 +269,107 @@ async function uploadPending() {
 
 /* ---- liste + matris ---- */
 
+/** Programin su an kopyasi bulunan tezgahlar (matristen): silme penceresi bunu gosterir. */
+function holdersOf(programId) {
+  const row = (lib.matrix?.rows ?? []).find((r) => r.programId === programId);
+  if (!row) return [];
+  return (lib.matrix.machines ?? []).filter((m) => {
+    const c = row.cells[m.id];
+    return c && c.status !== 'tezgahta-yok' && c.status !== 'taranmadi';
+  }).map((m) => m.id);
+}
+
+function selectedPrograms() {
+  return lib.programs.filter((p) => lib.selected.has(p.id)).map((p) => ({ id: p.id, customer: p.customer, name: p.name, versionCount: p.versionCount }));
+}
+
+function renderSelBar() {
+  const el = lib.host.querySelector('[data-role="selbar"]');
+  const n = lib.selected.size;
+  el.innerHTML = n === 0
+    ? '<p class="hint lib-selhint">Programlar, çekildikleri klasörün altında listelenir; kök (ortak alan) yalnızca tezgahın kök dizinindeki programlardır. ' +
+      'Silmek için satırın başındaki kutuyu işaretleyin.</p>'
+    : `<div class="lib-selbar"><b>${num(n)} program seçili</b>` +
+      '<button type="button" class="icon-btn btn-danger" data-act="delete-selected">Seçilenleri kütüphaneden sil…</button>' +
+      '<button type="button" class="icon-btn" data-act="clear-sel">Seçimi temizle</button></div>';
+}
+
 function renderTable() {
   const machines = lib.matrix?.machines ?? [];
   const sel = lib.host.querySelector('[data-role="cust"]');
-  const filterOptions = ['<option value="">Tüm müşteriler</option>', '<option value="__root">Kök (ortak alan)</option>']
+  const filterOptions = ['<option value="">Tüm klasörler</option>', '<option value="__root">Kök (ortak alan)</option>']
     .concat([...new Set(lib.programs.map((p) => p.customer).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr'))
       .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`));
   sel.innerHTML = filterOptions.join('');
   sel.value = lib.customer;
 
   const q = lib.query.trim().toLowerCase();
+  const searching = q !== '';
   const rows = lib.programs.filter((p) => {
     if (lib.customer === '__root' ? p.customer !== '' : lib.customer && p.customer !== lib.customer) return false;
     return q === '' || p.name.toLowerCase().includes(q) || p.customer.toLowerCase().includes(q);
   });
 
   const host = lib.host.querySelector('[data-role="table"]');
-  if (lib.programs.length === 0) {
-    host.innerHTML = '<p class="empty">Kütüphane boş. Yukarıdan bir program dosyası sürükleyip bırakın ya da bir tezgahtaki programları kütüphaneye alın.</p>';
-  } else {
-    const byId = new Map((lib.matrix?.rows ?? []).map((r) => [r.programId, r]));
-    host.innerHTML =
-      '<table class="tbl tbl-lib"><thead><tr><th>Müşteri</th><th>Program</th><th>Sürüm</th><th class="num">Boyut</th><th>Eklenme</th>' +
-      machines.map((m) =>
-        `<th class="mx-h" title="${escapeHtml(m.name)}"><span class="mono">${escapeHtml(m.id)}</span>` +
-        `<small>${m.scannedAt ? `tarama ${escapeHtml(clock(m.scannedAt))}` : 'taranmadı'}</small>` +
-        `<button type="button" class="icon-btn icon-btn-sm" data-act="scan" data-machine="${escapeHtml(m.id)}" aria-label="${escapeHtml(m.id)} tezgahını tara">⟳ tara</button></th>`).join('') +
-      '</tr></thead><tbody>' +
-      (rows.length === 0 ? `<tr><td colspan="${5 + machines.length}" class="empty">Aramaya uyan program yok.</td></tr>` :
-        rows.map((p) => {
-          const mx = byId.get(p.id);
-          return `<tr data-program="${p.id}" class="is-click${p.id === lib.selectedId ? ' is-selected' : ''}" tabindex="0" aria-label="${escapeHtml(programLabel(p.customer, p.name))} ayrıntısı">` +
-            `<td>${p.customer === '' ? '<span class="chip chip-none">kök</span>' : escapeHtml(p.customer)}</td>` +
-            `<td class="mono"><b>${escapeHtml(p.name)}</b></td>` +
-            `<td>v${p.latest.versionNo}${p.versionCount > 1 ? ` <small class="hint">(${p.versionCount} sürüm)</small>` : ''}</td>` +
-            `<td class="num">${escapeHtml(kb(p.latest.size))}</td><td>${escapeHtml(dateTime(p.latest.createdAt))}</td>` +
-            machines.map((m) => `<td>${cell(mx?.cells[m.id])}</td>`).join('') + '</tr>';
-        }).join('')) +
-      '</tbody></table>';
-  }
-
+  renderSelBar();
   lib.host.querySelector('[data-role="legend"]').innerHTML = ['guncel', 'eski', 'farkli', 'belirsiz', 'tezgahta-yok', 'taranmadi']
     .map((k) => `<li>${chip(k)}</li>`).join('');
+  if (lib.programs.length === 0) {
+    host.innerHTML = '<p class="empty">Kütüphane boş. Yukarıdan bir program dosyası sürükleyip bırakın ya da bir tezgahtaki programları kütüphaneye alın.</p>';
+    return;
+  }
+  if (rows.length === 0) { host.innerHTML = '<p class="empty">Aramaya uyan program yok.</p>'; return; }
+
+  const byId = new Map((lib.matrix?.rows ?? []).map((r) => [r.programId, r]));
+  const groups = new Map();
+  for (const p of rows) {
+    if (!groups.has(p.customer)) groups.set(p.customer, []);
+    groups.get(p.customer).push(p);
+  }
+  // Klasörler adıyla sıralı; kök (ortak alan) EN SONDA: çekilen programlar kendi klasöründe görünür.
+  const names = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'tr')));
+  if (!lib.groupsInit) {
+    lib.groupsInit = true;
+    if (names.length <= 3) for (const n of names) lib.openGroups.add(n);
+  }
+  const forceOpen = searching || names.length === 1;
+
+  const tableOf = (list) =>
+    '<div class="table-wrap"><table class="tbl tbl-lib"><thead><tr><th class="sel-col"></th><th>Program</th><th>Sürüm</th><th class="num">Boyut</th><th>Eklenme</th>' +
+    machines.map((m) =>
+      `<th class="mx-h" title="${escapeHtml(m.name)}"><span class="mono">${escapeHtml(m.id)}</span>` +
+      `<small>${m.scannedAt ? `tarama ${escapeHtml(clock(m.scannedAt))}` : 'taranmadı'}</small>` +
+      `<button type="button" class="icon-btn icon-btn-sm" data-act="scan" data-machine="${escapeHtml(m.id)}" aria-label="${escapeHtml(m.id)} tezgahını tara">⟳ tara</button></th>`).join('') +
+    '</tr></thead><tbody>' +
+    list.map((p) => {
+      const mx = byId.get(p.id);
+      return `<tr data-program="${p.id}" class="is-click${p.id === lib.selectedId ? ' is-selected' : ''}" tabindex="0" aria-label="${escapeHtml(programLabel(p.customer, p.name))} ayrıntısı">` +
+        `<td class="sel-col"><input type="checkbox" data-sel="${p.id}" aria-label="${escapeHtml(programLabel(p.customer, p.name))} seç"${lib.selected.has(p.id) ? ' checked' : ''}></td>` +
+        `<td class="mono"><b>${escapeHtml(p.name)}</b></td>` +
+        `<td>v${p.latest.versionNo}${p.versionCount > 1 ? ` <small class="hint">(${p.versionCount} sürüm)</small>` : ''}</td>` +
+        `<td class="num">${escapeHtml(kb(p.latest.size))}</td><td>${escapeHtml(dateTime(p.latest.createdAt))}</td>` +
+        machines.map((m) => `<td>${cell(mx?.cells[m.id])}</td>`).join('') + '</tr>';
+    }).join('') +
+    '</tbody></table></div>';
+
+  host.innerHTML = names.map((c) => {
+    const list = groups.get(c);
+    const open = forceOpen || lib.openGroups.has(c);
+    return `<details class="grp lib-grp" data-folder="${escapeHtml(c)}"${open ? ' open' : ''}>` +
+      `<summary><b>${escapeHtml(folderLabel(c))}</b> · ${num(list.length)} program${c === '' ? ' <span class="chip chip-none">ortak alan</span>' : ''}</summary>` +
+      `<div class="grp-body"><div class="dt-actions lib-grp-actions"><button type="button" class="icon-btn icon-btn-sm" data-act="select-folder">Bu klasörün tümünü seç</button></div>${tableOf(list)}</div></details>`;
+  }).join('');
+}
+
+/** Kütüphaneden silinenlerin kaydı (kim, ne zaman). */
+function renderLibLog() {
+  const el = lib.host.querySelector('[data-role="liblog"]');
+  if (!el) return;
+  el.innerHTML = lib.log.length === 0 ? '<p class="empty">Kütüphaneden silinmiş program yok.</p>' :
+    '<table class="tbl"><thead><tr><th>Zaman</th><th>Program</th><th class="num">Sürüm</th><th>Kim</th></tr></thead><tbody>' +
+    lib.log.map((l) => `<tr><td>${escapeHtml(dateTime(l.at))}</td><td><span class="chip chip-bad">− silindi</span> <span class="mono">${escapeHtml(programLabel(l.customer ?? '', l.name ?? ''))}</span></td>` +
+      `<td class="num">${num(l.versions)}</td><td>${escapeHtml(l.by ?? '—')}${l.clientIp ? ` <small class="hint">${escapeHtml(l.clientIp)}</small>` : ''}</td></tr>`).join('') +
+    '</tbody></table>';
 }
 
 /* ---- program ayrintisi ---- */
@@ -340,6 +412,7 @@ function renderDetail() {
     '<div class="dt-actions">' +
     `<button type="button" class="icon-btn btn-primary" data-act="send" data-program="${program.id}">Tezgaha gönder…</button>` +
     `<button type="button" class="icon-btn" data-act="edit" data-no="${lib.previewNo ?? versions[0].versionNo}">Düzenle… (v${lib.previewNo ?? versions[0].versionNo})</button>` +
+    `<button type="button" class="icon-btn btn-danger" data-act="delete-program" data-program="${program.id}" title="Programı tüm sürümleriyle kütüphaneden siler (tezgahlardaki dosyalar silinmez)">Kütüphaneden sil…</button>` +
     '<button type="button" class="icon-btn" data-act="close-detail">Kapat</button></div></div>' +
 
     '<h4 class="sub">Sürümler</h4><div class="table-wrap"><table class="tbl"><thead><tr><th>Sürüm</th><th class="num">Boyut</th><th>SHA-256</th><th>Eklenme</th><th>Kaynak</th><th>Kim</th><th>Not</th><th></th></tr></thead><tbody>' +
@@ -417,10 +490,23 @@ function wireLibrary() {
     if (p.state === 'hata') { p.state = 'bekliyor'; p.msg = ''; }
   });
 
+  // Klasör grupları: açık/kapalı durumu hatırlanır (liste yenilense de kapanmaz). Arama sırasında açılanlar kalıcı sayılmaz.
+  host.addEventListener('toggle', (ev) => {
+    const d = ev.target;
+    if (!d.matches?.('details.lib-grp') || lib.query.trim() !== '') return;
+    if (d.open) lib.openGroups.add(d.dataset.folder); else lib.openGroups.delete(d.dataset.folder);
+  }, true);
+  host.addEventListener('change', (ev) => {
+    const id = ev.target.dataset?.sel;
+    if (!id) return;
+    if (ev.target.checked) lib.selected.add(Number(id)); else lib.selected.delete(Number(id));
+    renderSelBar();
+  });
+
   host.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-act]');
     const row = ev.target.closest('tr[data-program]');
-    if (!btn && row && !ev.target.closest('a,button')) { location.hash = `#/programlar/${row.dataset.program}`; return; }
+    if (!btn && row && !ev.target.closest('a,button,input,label')) { location.hash = `#/programlar/${row.dataset.program}`; return; }
     if (!btn) return;
     const act = btn.dataset.act;
     try {
@@ -429,6 +515,25 @@ function wireLibrary() {
       else if (act === 'upload') { btn.disabled = true; await uploadPending(); }
       else if (act === 'refresh-history') { lib.transfers = (await api('/api/transfers?limit=15')).transfers; renderHistory(); }
       else if (act === 'close-detail') { location.hash = '#/programlar'; }
+      else if (act === 'select-folder') {
+        for (const cb of btn.closest('details').querySelectorAll('input[data-sel]')) { cb.checked = true; lib.selected.add(Number(cb.dataset.sel)); }
+        renderSelBar();
+      } else if (act === 'clear-sel') {
+        lib.selected.clear();
+        for (const cb of host.querySelectorAll('input[data-sel]')) cb.checked = false;
+        renderSelBar();
+      } else if (act === 'delete-selected') {
+        const programs = selectedPrograms();
+        openLibraryDelete({ programs, holders: new Map(programs.map((p) => [p.id, holdersOf(p.id)])), onDone: () => lib.selected.clear() });
+      } else if (act === 'delete-program') {
+        const p = lib.detail?.program;
+        if (!p) return;
+        openLibraryDelete({
+          programs: [{ id: p.id, customer: p.customer, name: p.name, versionCount: lib.detail.versions.length }],
+          holders: new Map([[p.id, holdersOf(p.id)]]),
+          onDone: () => { lib.selected.delete(p.id); location.hash = '#/programlar'; },
+        });
+      }
       else if (act === 'preview') { await previewVersion(Number(btn.dataset.no)); }
       else if (act === 'send') { openSendDialog({ programId: Number(btn.dataset.program), machineId: btn.dataset.machine ?? null }); }
       else if (act === 'new-program') {
@@ -476,7 +581,7 @@ function wireLibrary() {
  * @param {{machineId: string, name?: string}} machine
  */
 export function renderMachinePrograms(host, machine) {
-  const st = { id: machine.machineId, data: null, cfg: null, filter: '', busy: false };
+  const st = { id: machine.machineId, data: null, cfg: null, filter: '', q: '', busy: false };
   host.innerHTML =
     '<div class="dt-block-head"><h3>Programlar</h3><div class="dt-actions" data-role="actions"></div></div>' +
     '<p data-role="msg" class="notice" hidden></p><div data-role="body"><p class="empty">Yükleniyor…</p></div>';
@@ -542,34 +647,75 @@ export function renderMachinePrograms(host, machine) {
       .filter((k) => counts[k]).map((k) => chip(k, `${num(counts[k])} ${STATUS[k].label.toLowerCase()}`)).join(' ');
     const stale = d.scan.status === 'hata' ? `<p class="notice notice-sim">Son tarama başarısız (${escapeHtml(d.scan.error ?? '')}); aşağıdaki liste eski taramadan.</p>` : '';
 
-    const groups = new Map();
-    for (const e of d.entries) {
-      if (e.system) continue;
-      if (st.filter && e.status !== st.filter) continue;
-      if (!groups.has(e.customer)) groups.set(e.customer, []);
-      groups.get(e.customer).push(e);
-    }
-    for (const f of d.folders ?? []) if (!st.filter && !groups.has(f)) groups.set(f, []);
-    const names = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b, 'tr')));
-
     body().innerHTML = stale +
       `<p class="hint">Son tarama: ${escapeHtml(dateTime(d.scan.finishedAt))} · ${num(d.scan.entries)} program · ${num((d.folders ?? []).length)} klasör</p>` +
       `<div class="mx-list">${summary || '<span class="hint">Karşılaştırılacak program yok.</span>'}` +
       `<label class="fld-inline">Göster <select data-role="filter" class="fld-sm"><option value="">Tümü</option>` +
       ['farkli', 'eski', 'belirsiz', 'kutuphanede-yok', 'guncel'].map((k) => `<option value="${k}"${st.filter === k ? ' selected' : ''}>${escapeHtml(STATUS[k].label)}</option>`).join('') +
-      '</select></label></div>' +
-      (names.length === 0 ? '<p class="empty">Bu filtreye uyan program yok.</p>' :
-        names.map((c) => {
-          const list = groups.get(c);
-          const bad = list.filter((e) => e.status === 'farkli').length;
-          const old = list.filter((e) => e.status === 'eski').length;
-          const noLib = list.filter((e) => e.status === 'kutuphanede-yok').length;
-          return `<details class="grp" data-customer="${escapeHtml(c)}"><summary><b>${escapeHtml(folderLabel(c))}</b> · ${num(list.length)} program` +
-            `${bad ? ` ${chip('farkli', `${bad} farklı`)}` : ''}${old ? ` ${chip('eski', `${old} eski`)}` : ''}${noLib ? ` ${chip('kutuphanede-yok', `${noLib} kütüphanede yok`)}` : ''}` +
-            `</summary><div class="grp-body"></div></details>`;
-        }).join('')) +
-      ((d.missing ?? []).length === 0 ? '' :
-        `<details class="grp" data-missing="1"><summary><b>Kütüphanede var, bu tezgahta yok</b> · ${num(d.missing.length)} program</summary><div class="grp-body"></div></details>`);
+      '</select></label>' +
+      `<input type="search" data-role="q" class="fld-sm pg-search" value="${escapeHtml(st.q)}" placeholder="Program kodu ara (hangi klasörde?)" aria-label="Bu tezgahta program ara"></div>` +
+      '<div data-role="groups" aria-live="polite"></div>';
+    renderGroups();
+  }
+
+  /** Arama: program adında (ya da "klasör\\ad"ında) geçen metin; büyük/küçük harf duyarsız. */
+  const searchRe = () => {
+    const q = st.q.trim();
+    return q === '' ? null : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  };
+  const hit = (re, customer, name) => re === null || re.test(name) || re.test(`${customer}\\${name}`);
+  /** Eşleşen kısmı vurgular (metin kaçışlanır). */
+  const hl = (text) => {
+    const s = String(text);
+    const re = searchRe();
+    const m = re ? re.exec(s) : null;
+    if (!m) return escapeHtml(s);
+    return `${escapeHtml(s.slice(0, m.index))}<mark>${escapeHtml(m[0])}</mark>${escapeHtml(s.slice(m.index + m[0].length))}`;
+  };
+
+  /** Klasör listesi (arama/filtre uygulanır). Yalnız bu kap yenilenir: yazarken kutunun odağı kaybolmaz. */
+  function renderGroups() {
+    const box = body().querySelector('[data-role="groups"]');
+    if (!box) return;
+    const d = st.data;
+    const re = searchRe();
+    const searching = re !== null;
+    const groups = new Map();
+    for (const e of d.entries) {
+      if (e.system) continue;
+      if (st.filter && e.status !== st.filter) continue;
+      if (!hit(re, e.customer, e.name)) continue;
+      if (!groups.has(e.customer)) groups.set(e.customer, []);
+      groups.get(e.customer).push(e);
+    }
+    // Arama sırasında boş klasörler gizlenir (sonuç dışı).
+    for (const f of d.folders ?? []) if (!st.filter && !searching && !groups.has(f)) groups.set(f, []);
+    // Klasörler adıyla sıralı; kök (ortak alan) en sonda.
+    const names = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'tr')));
+    const missing = (d.missing ?? []).filter((m) => hit(re, m.customer, m.name));
+    const found = [...groups.values()].reduce((n, l) => n + l.length, 0);
+
+    let html = '';
+    if (searching) {
+      html += found + missing.length === 0
+        ? `<p class="empty">Bu tezgahta "${escapeHtml(st.q.trim())}" ile eşleşen program yok.${st.filter ? ' (Durum filtresi açık: "Göster: Tümü" ile tekrar deneyin.)' : ''}</p>`
+        : `<p class="hint"><b>${num(found)}</b> program bulundu${names.length ? ` · ${escapeHtml(names.map((c) => folderLabel(c)).join(', '))}` : ''}${missing.length ? ` · kütüphanede olup bu tezgahta olmayan: <b>${num(missing.length)}</b>` : ''}</p>`;
+    }
+    html += names.length === 0 ? (searching || missing.length ? '' : '<p class="empty">Bu filtreye uyan program yok.</p>') :
+      names.map((c) => {
+        const list = groups.get(c);
+        const bad = list.filter((e) => e.status === 'farkli').length;
+        const old = list.filter((e) => e.status === 'eski').length;
+        const noLib = list.filter((e) => e.status === 'kutuphanede-yok').length;
+        return `<details class="grp" data-customer="${escapeHtml(c)}"${searching ? ' open' : ''}><summary><b>${escapeHtml(folderLabel(c))}</b> · ${num(list.length)} program` +
+          `${bad ? ` ${chip('farkli', `${bad} farklı`)}` : ''}${old ? ` ${chip('eski', `${old} eski`)}` : ''}${noLib ? ` ${chip('kutuphanede-yok', `${noLib} kütüphanede yok`)}` : ''}` +
+          `</summary><div class="grp-body"></div></details>`;
+      }).join('');
+    html += missing.length === 0 ? '' :
+      `<details class="grp" data-missing="1"${searching ? ' open' : ''}><summary><b>Kütüphanede var, bu tezgahta yok</b> · ${num(missing.length)} program</summary><div class="grp-body"></div></details>`;
+    box.innerHTML = html;
+    // Arama sonuçları açık gelir: içerikleri hemen doldur (toggle olayı eşzamansızdır).
+    if (searching) for (const det of box.querySelectorAll('details.grp[open]')) fillGroup(det);
   }
 
   function fillGroup(details) {
@@ -578,17 +724,19 @@ export function renderMachinePrograms(host, machine) {
     body_.dataset.filled = '1';
     const d = st.data;
     if (details.dataset.missing) {
+      const re = searchRe();
       body_.innerHTML = '<table class="tbl"><thead><tr><th>Müşteri</th><th>Program</th><th>Sürüm</th><th class="num">Boyut</th><th></th></tr></thead><tbody>' +
-        d.missing.map((m) => `<tr><td>${escapeHtml(folderLabel(m.customer))}</td><td class="mono"><b>${escapeHtml(m.name)}</b></td><td>v${m.latestVersion}</td>` +
+        d.missing.filter((m) => hit(re, m.customer, m.name)).map((m) => `<tr><td>${escapeHtml(folderLabel(m.customer))}</td><td class="mono"><b>${hl(m.name)}</b></td><td>v${m.latestVersion}</td>` +
           `<td class="num">${escapeHtml(kb(m.size))}</td><td><button type="button" class="icon-btn icon-btn-sm" data-act="send" data-program="${m.programId}"${sendBlocked() ? ` disabled title="${escapeHtml(sendBlocked())}"` : ''}>Gönder…</button></td></tr>`).join('') +
         '</tbody></table>';
       return;
     }
     const customer = details.dataset.customer;
-    const list = d.entries.filter((e) => !e.system && e.customer === customer && (!st.filter || e.status === st.filter));
+    const re = searchRe();
+    const list = d.entries.filter((e) => !e.system && e.customer === customer && (!st.filter || e.status === st.filter) && hit(re, e.customer, e.name));
     body_.innerHTML = list.length === 0 ? '<p class="empty">Bu klasörde program yok.</p>' :
       '<table class="tbl"><thead><tr><th>Program</th><th class="num">Boyut</th><th>Tezgah tarihi</th><th>Durum</th><th></th></tr></thead><tbody>' +
-      list.map((e) => `<tr><td class="mono"><b>${escapeHtml(e.name)}</b></td><td class="num">${escapeHtml(kb(e.size))}</td><td>${escapeHtml(e.modified ?? '—')}</td>` +
+      list.map((e) => `<tr><td class="mono"><b>${hl(e.name)}</b></td><td class="num">${escapeHtml(kb(e.size))}</td><td>${escapeHtml(e.modified ?? '—')}</td>` +
         `<td>${cell(e)}</td><td class="nowrap">${e.status === 'kutuphanede-yok'
           ? `<button type="button" class="icon-btn icon-btn-sm" data-act="import" data-customer="${escapeHtml(e.customer)}" data-name="${escapeHtml(e.name)}">Kütüphaneye al</button> ` : ''}` +
         `<button type="button" class="icon-btn icon-btn-sm" data-act="delete" data-customer="${escapeHtml(e.customer)}" data-name="${escapeHtml(e.name)}"` +
@@ -598,6 +746,7 @@ export function renderMachinePrograms(host, machine) {
 
   host.addEventListener('toggle', (ev) => { if (ev.target.matches?.('details.grp') && ev.target.open) fillGroup(ev.target); }, true);
   host.addEventListener('change', (ev) => { if (ev.target.matches('[data-role="filter"]')) { st.filter = ev.target.value; render(); } });
+  host.addEventListener('input', (ev) => { if (ev.target.matches('[data-role="q"]')) { st.q = ev.target.value; renderGroups(); } });
   host.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-act]');
     if (!btn || st.busy) return;

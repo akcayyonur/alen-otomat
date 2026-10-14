@@ -6,10 +6,13 @@
  *   admin   herseyi gorur ve yapar (kutuphane, editor, gonderme, ayarlar, kullanicilar)
  *   viewer  yalniz izleme (filo, tezgah detayi, raporlar); program kutuphanesi, ayarlar ve
  *           tezgahlardaki "Programlar" paneli YOK (sunucu da bu uclari reddeder, bkz. policy.js)
+ *   operator fabrika PC'sinin ORTAK hesabi (planlama T asamasi): izleme okuma + is emri baslat/bitir + durus nedeni girisi;
+ *           planlama ayarlari, siparis/urun duzenleme, program kutuphanesi, ayarlar YOK (bkz. policy.js)
  *
  * Guvenlik kararlari:
  *   - Sifreler scrypt ile; belirtec rastgele 32 bayt, veritabaninda yalniz SHA-256 ozeti.
- *   - Oturum bosta kalma suresi role gore: admin 12 saat, viewer 30 gun (mutlak ust sinir 7 / 90 gun).
+ *   - Oturum bosta kalma suresi role gore: admin 12 saat, viewer ve operator 30 gun (mutlak ust sinir 7 / 90 / 90 gun;
+ *     operator: fabrika PC'si surekli acik kalir, ortak hesap yetkisi dardir).
  *   - Basarisiz giris: (adres, kullanici) basina 15 dakikada 5, adres basina 20 deneme; sonra kilit.
  *   - Kullanici bulunamasa da sifre dogrulamasi kadar sure harcanir (kullanici adi sizdirilmasin).
  *   - Son yonetici silinemez; kimse kendi hesabini silemez. Sifre degisince diger oturumlar kapanir.
@@ -27,9 +30,9 @@ export class AuthError extends Error {
   }
 }
 
-export const ROLES = Object.freeze(['admin', 'viewer']);
-export const IDLE_MS = Object.freeze({ admin: 12 * 3_600_000, viewer: 30 * 86_400_000 });
-export const ABSOLUTE_MS = Object.freeze({ admin: 7 * 86_400_000, viewer: 90 * 86_400_000 });
+export const ROLES = Object.freeze(['admin', 'viewer', 'operator']);
+export const IDLE_MS = Object.freeze({ admin: 12 * 3_600_000, viewer: 30 * 86_400_000, operator: 30 * 86_400_000 });
+export const ABSOLUTE_MS = Object.freeze({ admin: 7 * 86_400_000, viewer: 90 * 86_400_000, operator: 90 * 86_400_000 });
 
 const USERNAME_RE = /^[A-Za-z0-9._-]{3,32}$/;
 const TOUCH_EVERY_MS = 60_000;
@@ -100,7 +103,7 @@ export class Auth {
     if (!USERNAME_RE.test(String(username ?? ''))) {
       throw new AuthError('Kullanıcı adı 3-32 karakter olmalı (harf, rakam, ".", "_", "-").', 400);
     }
-    if (!ROLES.includes(role)) throw new AuthError(`Rol geçersiz: "${role}" (admin ya da viewer).`, 400);
+    if (!ROLES.includes(role)) throw new AuthError(`Rol geçersiz: "${role}" (admin, viewer ya da operator).`, 400);
     const bad = validatePassword(password);
     if (bad) throw new AuthError(bad, 400);
   }

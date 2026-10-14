@@ -1,7 +1,8 @@
-import { MachineStatus, TimelineState } from '../shared/schema.js';
+import { TimelineState } from '../shared/schema.js';
 import { loadInventory } from '../shared/inventory.js';
 import { TelemetryDb, GAP_THRESHOLD_MS } from './db.js';
-import { PartTracker } from './production.js';
+import { PartTracker, programOf } from './production.js';
+import { ProgramRunTracker } from './program-runs.js';
 
 const RIBBON_CHAR = Object.freeze({
   [TimelineState.RUNNING]: 'R',
@@ -80,6 +81,8 @@ export class TelemetryStore {
     // taban, tezgahin son kayitli ornegidir; boylece kapali kalinan surede artan adet kaybolmaz (zamani isaretlenir).
     this.tracker = new PartTracker({ seed: (id) => this.db.lastCounters(id), gapMs: GAP_THRESHOLD_MS });
     this.productionErrors = 0;
+    // Program calisma araliklari (hangi program hangi saatte devreye girdi): kalici, program degisiminde bir satir.
+    this.runs = new ProgramRunTracker(this.db.runSink, { seed: (id) => this.db.lastProgramRun(id) });
 
     for (const info of loadInventory()) {
       this.machines.set(info.id, this.#blank(info));
@@ -196,6 +199,15 @@ export class TelemetryStore {
       if (this.productionErrors <= 3) console.error('[uretim] olay yazilamadi:', err.message);
     }
 
+    // Program araliklari da telemetriyi bozmamali. Zaman: mesajin kendi zamani (gelecege tasmasin).
+    try {
+      const ts = Date.parse(msg.ts);
+      this.runs.observe(msg.machineId, Number.isFinite(ts) ? Math.min(ts, now) : now, programOf(msg));
+    } catch (err) {
+      this.productionErrors += 1;
+      if (this.productionErrors <= 3) console.error('[program] aralik yazilamadi:', err.message);
+    }
+
     // Durum eslemesi henuz dogrulanmamis ham degerleri topla (RUNNING metni
     // gercek tezgahta hala bilinmiyor - bkz. SYNTEC-REMOTEAPI.md).
     const raw = msg.controller?.rawStatus;
@@ -222,6 +234,7 @@ export class TelemetryStore {
    * bosluk aninda gorunsun diye periyodik olarak cagrilir.
    */
   sweep(now = Date.now()) {
+    this.runs.sweep(now);
     for (const entry of this.machines.values()) {
       if (entry.lastSeenAt == null) continue;
       if (now - entry.lastSeenAt > GAP_THRESHOLD_MS) {
@@ -291,6 +304,9 @@ export class TelemetryStore {
       state: connected ? entry.latest?.status ?? null : TimelineState.NO_DATA,
       program: connected ? entry.latest?.program ?? null : null,
       mainProgram: connected ? entry.latest?.mainProgram ?? null : null,
+      // omur boyu ve vardiya parca sayaclari (planlama: is emri baslat/bitir anindaki makine sayaci)
+      partTotal: connected ? entry.latest?.partTotal ?? null : null,
+      partCount: connected ? entry.latest?.partCount ?? null : null,
       lastSeenAt: entry.lastSeenAt,
     };
   }
@@ -313,6 +329,7 @@ export class TelemetryStore {
 
   close() {
     const now = Date.now();
+    this.runs.closeAll();
     for (const entry of this.machines.values()) {
       if (entry.spanId != null) this.db.closeSpan(entry.spanId, now);
     }

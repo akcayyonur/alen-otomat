@@ -10,7 +10,8 @@
  *   machine_programs  son taramada tezgahta GORULENLER (envanter)
  *   machine_scans     tezgah basina son tarama bilgisi
  *   transfers         tezgaha YAZMA denetim kaydi (kim, ne zaman, hangi tezgaha, sonuc);
- *                     kind = 'gonderme' (program) | 'klasor' (yeni musteri klasoru)
+ *                     kind = 'gonderme' (program) | 'klasor' (yeni musteri klasoru) | 'silme' (tornadan silme)
+ *   library_log       KUTUPHANEDEN silme kaydi (kim, ne zaman, hangi program, kac surum, surum SHA'lari)
  *
  * Ad karsilastirmalari buyuk/kucuk harfe DUYARSIZ (COLLATE NOCASE): tornanin
  * Windows CE dosya sistemi de oyle; "ornek" ile "ORNEK" ayni dosyadir.
@@ -93,6 +94,21 @@ CREATE TABLE IF NOT EXISTS transfers (
   acks         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_transfers_machine ON transfers (machine_id, started_at);
+
+-- Kutuphaneden program silme kaydi: silinen icerik geri gelmez, ama kimin neyi ne zaman sildigi (ve silinen
+-- surumlerin SHA-256'lari) kalir. Tezgahtaki dosyalara dokunulmaz.
+CREATE TABLE IF NOT EXISTS library_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  action     TEXT    NOT NULL,
+  program_id INTEGER,
+  customer   TEXT,
+  name       TEXT,
+  versions   INTEGER,
+  detail     TEXT,
+  by_user    TEXT,
+  client_ip  TEXT
+);
 `;
 
 function toBuffer(blob) {
@@ -243,6 +259,46 @@ export class LibraryDb {
            FROM programs p JOIN program_versions v ON v.program_id = p.id`,
       )
       .all();
+  }
+
+  /**
+   * Programlari (tum surumleriyle) kutuphaneden siler ve her biri icin denetim kaydi yazar. Tek islemde: ya hepsi ya hicbiri.
+   * Tezgahtaki dosyalara ve gonderme gecmisine dokunulmaz.
+   * @returns {{id: number, customer: string, name: string, versions: number}[]}
+   */
+  deletePrograms(ids, { by = null, clientIp = null } = {}) {
+    return this.#tx(() => {
+      const out = [];
+      const delVersions = this.db.prepare('DELETE FROM program_versions WHERE program_id = ?');
+      const delProgram = this.db.prepare('DELETE FROM programs WHERE id = ?');
+      const log = this.db.prepare(
+        `INSERT INTO library_log (at, action, program_id, customer, name, versions, detail, by_user, client_ip)
+         VALUES (?, 'program-silme', ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const id of ids) {
+        const program = this.getProgram(id);
+        if (!program) continue;
+        const versions = this.listVersions(id);
+        delVersions.run(id);
+        delProgram.run(id);
+        log.run(Date.now(), id, program.customer, program.name, versions.length,
+          JSON.stringify(versions.map((v) => ({ versionNo: v.versionNo, sha256: v.sha256, size: v.size, createdAt: v.createdAt, source: v.source }))),
+          by, clientIp);
+        out.push({ id, customer: program.customer, name: program.name, versions: versions.length });
+      }
+      return out;
+    });
+  }
+
+  /** Kutuphane denetim kaydi (en yeni uste). */
+  listLog({ limit = 50 } = {}) {
+    return this.db
+      .prepare('SELECT * FROM library_log ORDER BY id DESC LIMIT ?')
+      .all(limit)
+      .map((r) => ({
+        id: r.id, at: r.at, action: r.action, programId: r.program_id, customer: r.customer, name: r.name,
+        versions: r.versions, by: r.by_user, clientIp: r.client_ip, detail: r.detail ? JSON.parse(r.detail) : [],
+      }));
   }
 
   customers() {

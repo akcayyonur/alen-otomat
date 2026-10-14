@@ -87,12 +87,16 @@ export function sendPolicy(machine) {
 
 /**
  * Tornadan program SILME acik mi. Silme geri donusuz oldugu icin once YAZMA kapisindan (sendPolicy) gecer, sonra
- * ayrica acilmis olmalidir: modelin `fileTransfer.deleteEnabled` degeri true (gercek tezgahta `DELE` denendikten
- * sonra config/drivers.json'da acilir) YA DA sunucu `DELETE_ENABLED=1` ile baslatilmis (yalniz dogrulama denemesi icin).
+ * ayrica acilmis olmalidir: modelin `fileTransfer.deleteEnabled` degeri true (config/drivers.json; 11TB icin
+ * 2026-10-13'te fabrika sahibi karariyla acildi) YA DA sunucu `DELETE_ENABLED=1` ile baslatilmis (yalniz dogrulama).
+ * `DELETE_DISABLED=1` (flags.deleteDisabled) her durumda silmeyi KAPATAN acil anahtardir (yapilandirmayi degistirmeden).
  */
 export function deletePolicy(machine, flags = {}) {
   const send = sendPolicy(machine);
   if (!send.allowed) return send;
+  if (flags.deleteDisabled === true) {
+    return { allowed: false, model: send.model, reason: 'Tornadan silme kapatıldı (DELETE_DISABLED=1).' };
+  }
   if (flags.deleteEnabled === true) return { allowed: true, model: send.model, reason: null };
   const driver = getDriver(machine.driverId);
   const model = resolveModel(driver, machine.controllerModel);
@@ -132,7 +136,7 @@ export class MachineFiles {
    *   getMachine: (id: string) => object|null,
    *   liveInfo?: (id: string) => ({connected:boolean, state?:string, program?:string|null, mainProgram?:string|null}|null),
    *   ftpOptionsFor?: (machine: object) => object,
-   *   flags?: {transferDisabled?: boolean},
+   *   flags?: {transferDisabled?: boolean, deleteEnabled?: boolean, deleteDisabled?: boolean},
    *   pauseMs?: number}} deps
    */
   constructor({ library, getMachine, liveInfo = () => null, ftpOptionsFor = driverFtpOptions, flags = {}, pauseMs = 150 }) {

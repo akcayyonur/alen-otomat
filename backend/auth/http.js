@@ -139,6 +139,10 @@ export function createGate({ auth, disabled = false }) {
       send(res, 403, { error: 'Bu işlem için yönetici yetkisi gerekir.' });
       return false;
     }
+    if (kind === 'operator' && req.user.role !== 'admin' && req.user.role !== 'operator') {
+      send(res, 403, { error: 'Bu işlem için operatör ya da yönetici yetkisi gerekir.' });
+      return false;
+    }
     return true;
   };
 }

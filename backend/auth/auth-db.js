@@ -2,7 +2,7 @@
  * Kimlik dogrulama veritabani - AYRI dosya (data/auth.db). Telemetri ve kutuphane
  * veritabanlarindan bagimsiz; sifre ozetleri ve oturumlar burada. node:sqlite, bagimlilik yok.
  *
- *   users     kullanici + rol (admin | viewer) + sifre ozeti (scrypt)
+ *   users     kullanici + rol (admin | viewer | operator) + sifre ozeti (scrypt)
  *   sessions  oturumlar; tarayiciya giden belirtecin YALNIZCA SHA-256 ozeti saklanir
  *   audit     giris/cikis/hesap olaylari (kim, ne zaman, hangi adresten)
  */
@@ -14,7 +14,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   username      TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-  role          TEXT    NOT NULL CHECK (role IN ('admin', 'viewer')),
+  role          TEXT    NOT NULL CHECK (role IN ('admin', 'viewer', 'operator')),
   password_hash TEXT    NOT NULL,
   created_at    INTEGER NOT NULL,
   last_login_at INTEGER
@@ -54,6 +54,37 @@ export class AuthDb {
     this.db.exec('PRAGMA synchronous = FULL');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
+    this.#migrate();
+  }
+
+  /**
+   * "operator" rolunden ONCE olusmus veritabani: users tablosunun CHECK kisiti 'operator'u kabul etmez ve SQLite kisiti degistiremez;
+   * SQLite'in onerdigi yontemle tablo yeniden kurulur (kayitlar ve oturumlar korunur).
+   */
+  #migrate() {
+    const sql = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql ?? '';
+    if (sql.includes("'operator'")) return;
+    this.db.exec('PRAGMA foreign_keys = OFF'); // islem icinde degistirilemez; oturumlar users silinirken CASCADE ile gitmesin
+    try {
+      this.db.exec('BEGIN');
+      this.db.exec(`CREATE TABLE users_new (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        username      TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        role          TEXT    NOT NULL CHECK (role IN ('admin', 'viewer', 'operator')),
+        password_hash TEXT    NOT NULL,
+        created_at    INTEGER NOT NULL,
+        last_login_at INTEGER
+      )`);
+      this.db.exec('INSERT INTO users_new (id, username, role, password_hash, created_at, last_login_at) SELECT id, username, role, password_hash, created_at, last_login_at FROM users');
+      this.db.exec('DROP TABLE users');
+      this.db.exec('ALTER TABLE users_new RENAME TO users');
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
+    }
   }
 
   /* ----------------------------------------------------------------- kullanicilar */

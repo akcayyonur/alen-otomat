@@ -13,7 +13,12 @@ import { fileURLToPath } from 'node:url';
 const yol = (goreli) => fileURLToPath(new URL(goreli, import.meta.url));
 
 const DEMO_DB = 'data/demo.db';
-for (const ek of ['', '-wal', '-shm']) rmSync(yol(`../${DEMO_DB}${ek}`), { force: true });
+// Planlama (urun karti/siparis) de demoda AYRI dosyada: gercek planlama verisi (data/planlama.db) kirlenmesin. Her baslatmada sifirlanir.
+const DEMO_PLANNING_DB = 'data/demo-planlama.db';
+for (const ek of ['', '-wal', '-shm']) {
+  rmSync(yol(`../${DEMO_DB}${ek}`), { force: true });
+  rmSync(yol(`../${DEMO_PLANNING_DB}${ek}`), { force: true });
+}
 
 const run = (ad, goreli, env = {}) => {
   const child = spawn(process.execPath, [yol(goreli), ...(ad === 'oynat' ? process.argv.slice(2) : [])], {
@@ -27,7 +32,7 @@ const run = (ad, goreli, env = {}) => {
   return child;
 };
 
-const backend = run('backend', '../backend/server.js', { DB_FILE: DEMO_DB, AUTH_DISABLED: '1' });
+const backend = run('backend', '../backend/server.js', { DB_FILE: DEMO_DB, PLANNING_DB_FILE: DEMO_PLANNING_DB, AUTH_DISABLED: '1' });
 setTimeout(() => run('oynat', '../simulator/replay.js'), 700);
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

@@ -75,7 +75,7 @@ before(async () => {
     env: {
       ...process.env,
       PORT: String(port), HOST: '127.0.0.1',
-      DB_FILE: join(dizin, 'telemetri.db'), LIBRARY_DB_FILE: join(dizin, 'kutuphane.db'), AUTH_DB_FILE: join(dizin, 'auth.db'),
+      DB_FILE: join(dizin, 'telemetri.db'), LIBRARY_DB_FILE: join(dizin, 'kutuphane.db'), AUTH_DB_FILE: join(dizin, 'auth.db'), PLANNING_DB_FILE: join(dizin, 'planlama.db'),
       MACHINES_FILE: join(dizin, 'machines.json'), AUTH_DISABLED: '', TRANSFER_DISABLED: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -106,7 +106,7 @@ test('hesap yokken: veri uclari kapali, statik sayfa acik, saglik yalniz "ok", k
 
   assert.equal((await istek('GET', '/')).status, 200, 'giris sayfasi icin statik dosyalar acik');
   assert.equal((await istek('GET', '/app.js')).status, 200);
-  for (const yol of ['/api/machines', '/api/stream', '/api/library/config', '/api/config', '/api/machines/CNC-01', '/api/transfers', '/api/production', '/api/production/export.csv']) {
+  for (const yol of ['/api/machines', '/api/stream', '/api/library/config', '/api/config', '/api/machines/CNC-01', '/api/transfers', '/api/production', '/api/production/export.csv', '/api/planning/products']) {
     assert.equal((await istek('GET', yol)).status, 401, `${yol} giris olmadan 401 vermeli`);
   }
   const saglik = await istek('GET', '/api/health');
@@ -198,6 +198,13 @@ test('viewer: yalniz izleme; kutuphane, ayarlar, tezgah programlari/klasorleri, 
   assert.equal((await istek('GET', '/api/production?from=abc', { cerez: viewer })).status, 400);
   assert.equal((await istek('GET', '/api/production/export.csv?view=yok', { cerez: viewer })).status, 400);
   assert.equal((await istek('GET', '/api/production?machine=YOK-99', { cerez: viewer })).status, 404);
+  // program gecisleri (hangi program hangi saatte devreye girdi): izleme verisi, viewer gorur
+  const gecis = await istek('GET', `/api/production/runs?machine=${id}`, { cerez: viewer });
+  assert.equal(gecis.status, 200, gecis.text);
+  assert.ok(Array.isArray(gecis.json.runs));
+  assert.equal((await istek('GET', '/api/production/runs.csv', { cerez: viewer })).status, 200);
+  assert.equal((await istek('GET', '/api/production/runs?from=abc', { cerez: viewer })).status, 400);
+  assert.equal((await istek('GET', '/api/production/runs?machine=YOK-99', { cerez: viewer })).status, 404);
 
   // yonetici uclari: 403 (giris var ama yetki yok)
   const yasak = [
@@ -207,14 +214,115 @@ test('viewer: yalniz izleme; kutuphane, ayarlar, tezgah programlari/klasorleri, 
     ['GET', '/api/config'], ['PUT', '/api/config/machines'], ['GET', '/api/drivers'],
     ['GET', '/api/users'], ['POST', '/api/users'], ['DELETE', '/api/users/1'], ['PUT', '/api/users/1/password'], ['GET', '/api/auth/audit'],
     ['POST', '/api/library/programs'], ['POST', '/api/library/programs/text'],
+    ['POST', '/api/library/programs/delete'], ['GET', '/api/library/log'],
     ['POST', `/api/machines/${id}/programs/import-plan`], ['GET', `/api/machines/${id}/programs/import-plan/abc123`],
     ['GET', `/api/machines/${id}/programs/import-plan/abc123/diff`], ['POST', `/api/machines/${id}/programs/import-apply`],
     ['POST', `/api/machines/${id}/programs/delete-precheck`], ['POST', `/api/machines/${id}/programs/delete`],
+    ['GET', '/api/planning/summary'], ['GET', '/api/planning/products'], ['POST', '/api/planning/products'], ['POST', '/api/planning/import'],
+    ['GET', '/api/planning/orders'], ['GET', '/api/planning/programs'], ['PUT', '/api/planning/programs/map'],
+    ['GET', '/api/planning/work-orders'], ['POST', '/api/planning/work-orders'], ['PUT', '/api/planning/work-orders/2026001055'],
   ];
   for (const [m, yol] of yasak) {
     const r = await istek(m, yol, { cerez: viewer, govde: m === 'GET' ? null : {} });
     assert.equal(r.status, 403, `${m} ${yol} viewer icin 403 olmali (geldi: ${r.status})`);
   }
+});
+
+test('operator (fabrika PC\'sinin ortak hesabi): is emri baslat/bitir ve durus nedeni acik; planlama/ayar/kutuphane/kullanici 403; IP gormez; viewer operator uclarini goremez', async () => {
+  const admin = await girisYap('admin', SIFRE_ADMIN);
+  const viewer = await girisYap('izleyici', SIFRE_VIEWER);
+  const olustur = await istek('POST', '/api/users', { cerez: admin, govde: { username: 'fabrika', password: 'fabrika-sifre-1', role: 'operator' } });
+  assert.equal(olustur.status, 201, olustur.text);
+  assert.equal(olustur.json.user.role, 'operator');
+  const op = await girisYap('fabrika', 'fabrika-sifre-1');
+  assert.equal((await istek('GET', '/api/session', { cerez: op })).json.user.role, 'operator');
+
+  // yonetici bir urun karti ve is emri acar
+  const kart = await istek('POST', '/api/planning/products', { cerez: admin, govde: { stockCode: 'OP-001', name: 'OPERATOR DENEME', material: 'HM-1', grossKg: 0.05, netKg: 0.04, plannedSec: 20 } });
+  assert.equal(kart.status, 201, kart.text);
+  const emri = await istek('POST', '/api/planning/work-orders', { cerez: admin, govde: { stockCode: 'OP-001', targetQty: 10, machineId: 'CNC-01' } });
+  assert.equal(emri.status, 201, emri.text);
+  const no = emri.json.no;
+
+  // operatorun acik uclari
+  for (const yol of ['/api/planning/summary', '/api/planning/work-orders', `/api/planning/work-orders/${no}`, '/api/planning/downtime-codes', '/api/planning/shop/overview', '/api/planning/shop/stops?machine=CNC-01', '/api/machines']) {
+    const r = await istek('GET', yol, { cerez: op });
+    assert.equal(r.status, 200, `${yol} operator icin 200 olmali (geldi: ${r.status} ${r.text.slice(0, 120)})`);
+    assert.ok(!r.text.includes('192.168.88.'), `${yol}: operator tezgah IP'si gormez`);
+  }
+  assert.equal((await istek('GET', '/api/planning/downtime-codes', { cerez: op })).json.codes.length, 48);
+  // is emri: operator alan siniri (hedef adet degisemez), izinli alanlarla baslatir, sonra bitirir
+  const yasak = await istek('POST', `/api/planning/work-orders/${no}/start`, { cerez: op, govde: { fields: { targetQty: 1 } } });
+  assert.equal(yasak.status, 403);
+  const basla = await istek('POST', `/api/planning/work-orders/${no}/start`, { cerez: op, govde: { person: 'Ayşe', fields: { gkkReportNo: '26-1' } } });
+  assert.equal(basla.status, 200, basla.text);
+  assert.equal(basla.json.status, 'uretimde');
+  assert.equal(basla.json.startedBy, 'fabrika', 'islemi yapan hesap oturumdan gelir; "Ayse" yalniz serbest metin');
+  assert.equal(basla.json.startedPerson, 'Ayşe');
+  assert.equal((await istek('POST', '/api/planning/shop/downtime-reasons', { cerez: op, govde: { machineId: 'CNC-01', from: Date.now() - 600_000, to: Date.now() - 300_000, code: 'D1' } })).json.code, 'no-stop', 'uc acik, dogrulama calisir');
+  assert.equal((await istek('DELETE', '/api/planning/shop/downtime-reasons/99999', { cerez: op })).status, 404);
+  // kasa (Urun Tanitim Karti): operator acar, kapatir, paketleme adedini girer; kart numarasi sirasini YALNIZ yonetici ayarlar
+  const kasaAc = await istek('POST', `/api/planning/work-orders/${no}/crates`, { cerez: op, govde: { person: 'Ayşe' } });
+  assert.equal(kasaAc.status, 201, kasaAc.text);
+  assert.match(kasaAc.json.cardNo, /^K\d{6}$/);
+  assert.equal(kasaAc.json.openedBy, 'fabrika');
+  assert.equal((await istek('POST', `/api/planning/crates/${kasaAc.json.id}/close`, { cerez: op, govde: {} })).json.state, 'kapali');
+  assert.equal((await istek('POST', `/api/planning/crates/${kasaAc.json.id}/pack`, { cerez: op, govde: { qty: 5 } })).json.packedQty, 5);
+  assert.equal((await istek('GET', '/api/planning/crates?state=paketlendi', { cerez: op })).json.total, 1);
+  // tek adimli kart basma (kasa doldu): operator iş emrinden kart basar; kayit islemi yapan hesaba yazilir
+  const kartBas = await istek('POST', `/api/planning/work-orders/${no}/cards`, { cerez: op, govde: { person: 'Ayşe', gkkReportNo: 'GKK-1' } });
+  assert.equal(kartBas.status, 201, kartBas.text);
+  assert.match(kartBas.json.cardNo, /^K\d{6}$/);
+  assert.deepEqual([kartBas.json.state, kartBas.json.closedBy, kartBas.json.gkkReportNo], ['kapali', 'fabrika', 'GKK-1']);
+  // is emri alani duzenleme (Tezgah basi): ilk onay rapor no / olculen net gramaj; planlama alanlari yoneticiye ozel
+  const duz = await istek('POST', `/api/planning/work-orders/${no}/fields`, { cerez: op, govde: { fields: { firstApprovalNo: 'IO-1', measuredNetKg: 0.0079 } } });
+  assert.equal(duz.status, 200, duz.text);
+  assert.deepEqual([duz.json.firstApprovalNo, duz.json.updatedBy], ['IO-1', 'fabrika']);
+  assert.equal((await istek('POST', `/api/planning/work-orders/${no}/fields`, { cerez: op, govde: { fields: { targetQty: 5 } } })).status, 403);
+  // olcu kontrolu (EYS.FR.005): operator plani tanimlar, saatlik olcum girer, kartin foyunu gorur
+  const plan = await istek('PUT', `/api/planning/work-orders/${no}/measure-plan`, { cerez: op, govde: { rows: [{ label: 'Ø34,2', nominal: 34.2, lower: -0.1, upper: 0 }] } });
+  assert.equal(plan.status, 200, plan.text);
+  const olcum = await istek('POST', `/api/planning/work-orders/${no}/measurements`, { cerez: op, govde: { values: { 1: '34,13' }, checks: { gorsel: true }, person: 'Ayşe' } });
+  assert.equal(olcum.status, 200, olcum.text);
+  assert.equal(olcum.json.saved.by, 'fabrika');
+  assert.equal((await istek('GET', `/api/planning/work-orders/${no}/measurements`, { cerez: op })).json.slots.length, 1);
+  assert.equal((await istek('GET', `/api/planning/crates/${kartBas.json.id}/sheet`, { cerez: op })).status, 200);
+  assert.equal((await istek('PUT', '/api/planning/crates/sequence', { cerez: op, govde: { last: 10 } })).status, 403, 'kart sirasi tabani yoneticiye ozel');
+  assert.equal((await istek('PUT', '/api/planning/crates/sequence', { cerez: admin, govde: { last: 10 } })).status, 200);
+  const bitir = await istek('POST', `/api/planning/work-orders/${no}/finish`, { cerez: op, govde: {} });
+  assert.equal(bitir.status, 200, bitir.text);
+  assert.equal(bitir.json.status, 'bitti');
+
+  // operatorun KAPALI uclari
+  const kapali = [
+    ['GET', '/api/users'], ['POST', '/api/users'], ['GET', '/api/auth/audit'], ['GET', '/api/config'], ['PUT', '/api/config/machines'], ['GET', '/api/drivers'],
+    ['GET', '/api/library/config'], ['GET', '/api/library/programs'], ['POST', '/api/transfers'], ['GET', '/api/machines/CNC-01/programs'],
+    ['GET', '/api/planning/products'], ['POST', '/api/planning/products'], ['POST', '/api/planning/import'], ['GET', '/api/planning/orders'],
+    ['GET', '/api/planning/programs'], ['PUT', '/api/planning/programs/map'], ['POST', '/api/planning/work-orders'], ['GET', '/api/planning/work-orders/next'],
+    ['PUT', '/api/planning/work-orders/sequence'], ['PUT', `/api/planning/work-orders/${no}`], ['POST', `/api/planning/work-orders/${no}/cancel`], ['POST', `/api/planning/work-orders/${no}/reopen`],
+    ['GET', '/api/planning/material/need'], ['GET', '/api/planning/material/consumption'], ['GET', '/api/planning/material/consumption.csv'], ['POST', '/api/planning/material/fis'],
+    ['GET', '/api/planning/efficiency'], ['GET', '/api/planning/downtime-report'], ['GET', '/api/planning/efficiency.csv'],
+  ];
+  for (const [m, yol] of kapali) {
+    const r = await istek(m, yol, { cerez: op, govde: m === 'GET' ? null : {} });
+    assert.equal(r.status, 403, `${m} ${yol} operator icin 403 olmali (geldi: ${r.status})`);
+  }
+  assert.deepEqual((await istek('GET', '/api/health', { cerez: op })).json, { ok: true }, 'operator saglik ayrintisini gormez');
+
+  // viewer (izleyici) operator uclarini kullanamaz; anonim 401
+  for (const [m, yol] of [
+    ['GET', '/api/planning/downtime-codes'], ['GET', '/api/planning/shop/overview'], ['GET', '/api/planning/shop/stops?machine=CNC-01'], ['POST', '/api/planning/shop/downtime-reasons'],
+    ['POST', `/api/planning/work-orders/${no}/start`], ['POST', `/api/planning/work-orders/${no}/finish`],
+    ['GET', '/api/planning/crates'], ['POST', `/api/planning/work-orders/${no}/crates`], ['POST', `/api/planning/work-orders/${no}/cards`], ['POST', `/api/planning/work-orders/${no}/fields`],
+    ['GET', `/api/planning/work-orders/${no}/measurements`], ['PUT', `/api/planning/work-orders/${no}/measure-plan`], ['POST', `/api/planning/work-orders/${no}/measurements`], ['GET', '/api/planning/crates/1/sheet'],
+    ['POST', '/api/planning/crates/1/close'], ['POST', '/api/planning/crates/1/pack'],
+  ]) {
+    assert.equal((await istek(m, yol, { cerez: viewer, govde: m === 'GET' ? null : {} })).status, 403, `viewer: ${m} ${yol}`);
+    assert.equal((await istek(m, yol, { govde: m === 'GET' ? null : {} })).status, 401, `anonim: ${m} ${yol}`);
+  }
+
+  // sonraki testler (CSRF: hesap sayisi) etkilenmesin
+  assert.equal((await istek('DELETE', `/api/users/${olustur.json.user.id}`, { cerez: admin })).status, 200);
 });
 
 test('viewer canli akisi (SSE): kareler gelir ama tezgah IP\'si icermez; admin akisi icerir', async () => {
@@ -336,4 +444,33 @@ test('guvenlik basliklari her yanitta; bozuk/buyuk govde kontrollu hata verir', 
   assert.equal(bozuk.status, 400);
   const buyuk = await istek('POST', '/api/auth/login', { govde: { username: 'x'.repeat(20_000), password: 'y' } });
   assert.equal(buyuk.status, 413);
+});
+
+test('ingest: uzun kesintiden sonra ajanin tamponu (1 MB\'tan buyuk toplu paket) kabul edilir', async () => {
+  // Ajan, backend kapaliyken mesajlari tamponlar ve geri gelince HEPSINI tek istekte yollar. 1 MB sinir bu paketi reddederdi
+  // (ajan sonsuza dek ayni paketi yeniden denerdi). Sinir ingest icin ayri ve buyuk.
+  const t0 = Date.now() - 6000 * 1000;
+  const mesajlar = Array.from({ length: 6000 }, (_, i) => ({
+    machineId: 'CNC-07', ts: new Date(t0 + i * 1000).toISOString(), status: 'RUNNING', source: 'syntec-remoteapi', mode: 'AUTO',
+    program: 'P-TEST', mainProgram: 'P-TEST', partTotal: 100 + Math.floor(i / 25), partCount: Math.floor(i / 25), cycleTimeSec: i % 25, spindleRpm: 1800, feedRate: 120,
+    controller: { vendor: 'SYNTEC', cncType: '11B', ncVersion: '10.116.54.19', seriesNo: 'M4L0007', rawStatus: 'START', platform: 'AM335x-H' },
+  }));
+  const govde = JSON.stringify(mesajlar);
+  assert.ok(Buffer.byteLength(govde) > 1_000_000, 'paket 1 MB sinirini asmali');
+  const r = await istek('POST', '/api/ingest', { govde });
+  assert.equal(r.status, 202, r.text.slice(0, 200));
+  assert.equal(r.json.accepted, 6000);
+});
+
+test('bozuk istekler 500 degil 400 verir: bozuk yuzde kodlamasi, nesne olmayan JSON govdesi (null/dizi/metin/sayi)', async () => {
+  const admin = await girisYap('admin', SIFRE_ADMIN);
+  assert.equal((await istek('GET', '/api/machines/%', { cerez: admin })).status, 400);
+  assert.equal((await istek('GET', '/api/machines/%E0%A4%A/programs', { cerez: admin })).status, 400);
+  const yollar = ['/api/library/programs/delete', '/api/library/programs/text', '/api/transfers', '/api/transfers/precheck', '/api/machines/CNC-01/programs/import', '/api/machines/CNC-01/folders'];
+  for (const yol of yollar) {
+    for (const govde of ['null', '[]', '"x"', '7']) {
+      const r = await istek('POST', yol, { cerez: admin, govde, headers: { 'content-type': 'application/json' } });
+      assert.ok(r.status >= 400 && r.status < 500, `${yol} govde=${govde}: 4xx beklenir, geldi ${r.status} ${r.text.slice(0, 100)}`);
+    }
+  }
 });

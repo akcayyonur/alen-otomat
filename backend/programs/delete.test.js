@@ -5,7 +5,9 @@
  *   - calisan program, sistem dosyasi, klasor silinmez; kok dizin ve kutuphane kopyasi yoksa ek onay
  *   - DELE'den hemen once boyut yeniden dogrulanir (yaris), sonra listeden kalktigi dogrulanir
  *   - her deneme (reddedilenler dahil) `transfers` tablosuna kind='silme' ile yazilir
- * Sahte Windows CE FTP sunucusuna karsi; gercek tornada `DELE` HENUZ DENENMEDI (bu yuzden varsayilan KAPALI).
+ * Sahte Windows CE FTP sunucusuna karsi; gercek tornada `DELE` HENUZ DENENMEDI. 11TB'de silme 2026-10-13'te fabrika
+ * sahibi karariyla ACILDI (config/drivers.json); `DELETE_DISABLED=1` acil kapatma anahtaridir. Kapali durum testleri
+ * bu anahtarla (flags.deleteDisabled) kurulur, boylece yapilandirma dosyasinin degerinden bagimsizdir.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -40,25 +42,28 @@ const sil = (t, ad, ek = {}) => t.files.deleteProgram({ machineId: 'CNC-08', cus
 
 /* ------------------------------------------------------------------------- kapilar */
 
-test('deletePolicy: varsayilan KAPALI (11TB dahil), bayrakla acilir, 22TB bayrakla bile kapali', () => {
+test('deletePolicy: 11TB acik (yapilandirma), acil anahtar her durumda kapatir, 22TB yazmaya kapali oldugu icin kapali', () => {
   const m11 = { id: 'A', driverId: 'syntec-remoteapi', controllerModel: '11TB' };
   const m22 = { id: 'B', driverId: 'syntec-remoteapi', controllerModel: '22TB' };
-  const kapali = deletePolicy(m11, {});
+  assert.equal(deletePolicy(m11, {}).allowed, true, '11TB: config/drivers.json deleteEnabled=true');
+  const kapali = deletePolicy(m11, { deleteDisabled: true });
   assert.equal(kapali.allowed, false);
-  assert.match(kapali.reason, /DELE\) gerçek tezgahta henüz denenmedi/);
-  assert.equal(deletePolicy(m11, { deleteEnabled: true }).allowed, true);
+  assert.match(kapali.reason, /DELETE_DISABLED=1/);
+  assert.equal(deletePolicy(m11, { deleteDisabled: true, deleteEnabled: true }).allowed, false, 'acil anahtar bayraktan ustun');
   const p22 = deletePolicy(m22, { deleteEnabled: true });
   assert.equal(p22.allowed, false, 'once yazma kapisindan gecmeli: 22TB yazmaya kapali');
   assert.match(p22.reason, /22TB|doğrulanmadı/);
+  assert.equal(deletePolicy(m22, {}).allowed, false);
 });
 
 test('kapali silme: on kontrol "engel" verir, deleteProgram 422; tornaya HIC baglanilmaz', async () => {
   const t = await kur({ seed: (s) => s.put('MUSTERI_B/OLD-1', ESKI) });
+  t.files.flags.deleteDisabled = true; // acil kapatma (DELETE_DISABLED=1)
   try {
     const pre = await t.files.deletePrecheck({ machineId: 'CNC-08', customer: 'MUSTERI_B', name: 'OLD-1' });
     assert.equal(pre.canDelete, false);
     assert.equal(pre.checks[0].id, 'model');
-    assert.match(pre.checks[0].title, /tornadan silme kapalı/);
+    assert.match(pre.checks[0].title, /silme kapat|silme kapalı/i);
     await assert.rejects(() => sil(t, 'OLD-1'), UnsupportedError);
     assert.equal(t.server.sessions, 0, 'kapida durdu: FTP oturumu acilmadi');
     assert.ok(t.server.exists('MUSTERI_B/OLD-1'));
@@ -315,11 +320,14 @@ test('HTTP: on kontrol/silme uclari, 400 onay, 422 kapali, config\'te deleteAllo
   const post = (path, obj) => j(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
   try {
     ekle(t.library, 'MUSTERI_B', 'OLD-1', ESKI);
+    assert.equal((await j('/api/library/config')).body.machines[0].deleteAllowed, true, 'yapilandirmada 11TB icin acik');
+    t.files.flags.deleteDisabled = true; // acil kapatma
     assert.equal((await j('/api/library/config')).body.machines[0].deleteAllowed, false);
     const kapali = await post('/api/machines/CNC-08/programs/delete', { customer: 'MUSTERI_B', name: 'OLD-1', confirm: 'OLD-1' });
     assert.equal(kapali.status, 422);
-    assert.match(kapali.body.error, /silme|DELE/);
+    assert.match(kapali.body.error, /silme|DELE/i);
 
+    t.files.flags.deleteDisabled = false;
     t.files.flags.deleteEnabled = true;
     const cfg = (await j('/api/library/config')).body.machines[0];
     assert.equal(cfg.deleteAllowed, true);

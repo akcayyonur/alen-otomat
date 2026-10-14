@@ -54,7 +54,7 @@ export async function renderUsers(host) {
     '<form class="fld-grid" data-role="new-user" autocomplete="off">' +
     '<label class="fld"><span>Kullanıcı adı</span><input name="username" required minlength="3" maxlength="32" autocomplete="off" placeholder="ör. izleyici1"></label>' +
     '<label class="fld"><span>Şifre (en az 8 karakter)</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>' +
-    '<label class="fld"><span>Rol</span><select name="role"><option value="viewer">İzleyici (yalnızca izleme)</option><option value="admin">Yönetici (her şey)</option></select></label>' +
+    '<label class="fld"><span>Rol</span><select name="role"><option value="viewer">İzleyici (yalnızca izleme)</option><option value="operator">Operatör (fabrika bilgisayarı: iş emri başlat/bitir, duruş nedeni)</option><option value="admin">Yönetici (her şey)</option></select></label>' +
     '<div class="fld" style="justify-content:flex-end"><button type="submit" class="icon-btn btn-primary">Hesap ekle</button></div></form>' +
 
     '<h4 class="sub">Son giriş olayları</h4>' +

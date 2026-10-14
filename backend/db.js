@@ -23,6 +23,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { TimelineState } from '../shared/schema.js';
 import { PartTracker, programOf } from './production.js';
+import { ProgramRunTracker } from './program-runs.js';
 
 /** Bu sureden uzun sessizlik veri boslugu sayilir. */
 export const GAP_THRESHOLD_MS = 10_000;
@@ -95,6 +96,17 @@ CREATE TABLE IF NOT EXISTS production (
 CREATE INDEX IF NOT EXISTS idx_production_machine_ts ON production (machine_id, ts);
 CREATE INDEX IF NOT EXISTS idx_production_ts ON production (ts);
 
+-- Program calisma araliklari: hangi program hangi saatte devreye girdi, ne zaman bitti (backend/program-runs.js).
+-- ended_at NULL = su an suruyor. Ornekler 7 gunde silinir; bunlar 400 gun saklanir.
+CREATE TABLE IF NOT EXISTS program_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  machine_id TEXT    NOT NULL,
+  program    TEXT    NOT NULL,
+  started_at INTEGER NOT NULL,
+  ended_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_program_runs_machine_start ON program_runs (machine_id, started_at);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT
@@ -155,6 +167,9 @@ export class TelemetryDb {
     this.insertProduction = this.db.prepare(
       `INSERT INTO production (${PRODUCTION_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?)`,
     );
+    this.insertRun = this.db.prepare('INSERT INTO program_runs (machine_id, program, started_at) VALUES (?, ?, ?)');
+    this.closeRunStmt = this.db.prepare('UPDATE program_runs SET ended_at = ? WHERE id = ?');
+    this.reopenRunStmt = this.db.prepare('UPDATE program_runs SET ended_at = NULL WHERE id = ?');
 
     /** @type {object[]} yazilmayi bekleyen ornekler */
     this.pending = [];
@@ -171,6 +186,104 @@ export class TelemetryDb {
       // Gecmisi doldurmak bir kolaylik: basarisizsa sunucu yine acilir, bir sonraki acilista yeniden denenir.
       console.error('[db] uretim gecmisi orneklerden doldurulamadi:', err.message);
     }
+    try {
+      this.backfillProgramRuns();
+      this.closeStaleProgramRuns();
+    } catch (err) {
+      console.error('[db] program araliklari hazirlanamadi:', err.message);
+    }
+  }
+
+  /* ----------------------------------------------------- program calisma araliklari */
+
+  /** ProgramRunTracker'in yazma arayuzu. */
+  get runSink() {
+    return {
+      open: (machineId, program, startedAt) => Number(this.insertRun.run(machineId, program, startedAt).lastInsertRowid),
+      close: (id, endedAt) => { this.closeRunStmt.run(endedAt, id); },
+      reopen: (id) => { this.reopenRunStmt.run(id); },
+    };
+  }
+
+  /** Tezgahin en son kayitli araligi (yeniden baslamada devam mi yeni mi karari icin). */
+  lastProgramRun(machineId) {
+    const r = this.db
+      .prepare('SELECT id, program, started_at, ended_at FROM program_runs WHERE machine_id = ? ORDER BY started_at DESC, id DESC LIMIT 1')
+      .get(machineId);
+    return r ? { id: Number(r.id), program: r.program, startedAt: Number(r.started_at), endedAt: r.ended_at == null ? null : Number(r.ended_at) } : null;
+  }
+
+  /**
+   * Sunucu kapaniken acik kalmis araliklari tezgahin SON KAYITLI ornegiyle bitirir (ani kapanista bile bitis
+   * yeniden baslama ani degil, tezgahin son bilinen ani olur).
+   * @returns {number} kapatilan aralik sayisi
+   */
+  closeStaleProgramRuns() {
+    const open = this.db.prepare('SELECT id, machine_id, started_at FROM program_runs WHERE ended_at IS NULL').all();
+    const last = this.db.prepare('SELECT MAX(ts) AS ts FROM samples WHERE machine_id = ?');
+    for (const r of open) {
+      const ts = last.get(r.machine_id).ts;
+      const startedAt = Number(r.started_at);
+      this.closeRunStmt.run(ts == null ? startedAt : Math.max(startedAt, Number(ts)), r.id);
+    }
+    return open.length;
+  }
+
+  /**
+   * Ilk acilista (tablo eklenmeden onceki) ornekleri tarar ve program araliklarini cikarir; boylece guncellemeden
+   * hemen sonra "bugun hangi programlar calisti" bos gorunmez. Bir kez calisir (`meta`).
+   * @returns {number} eklenen aralik sayisi
+   */
+  backfillProgramRuns() {
+    if (this.db.prepare("SELECT 1 AS x FROM meta WHERE key = 'program_runs_backfill'").get()) return 0;
+    const machines = this.db.prepare('SELECT DISTINCT machine_id AS id FROM samples').all();
+    const rowsOf = this.db.prepare('SELECT ts, program, main_program FROM samples WHERE machine_id = ? ORDER BY ts');
+    let inserted = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const { id } of machines) {
+        const tracker = new ProgramRunTracker({
+          open: (m, program, startedAt) => { inserted += 1; return this.runSink.open(m, program, startedAt); },
+          close: (rid, endedAt) => this.runSink.close(rid, endedAt),
+        });
+        for (const r of rowsOf.all(id)) tracker.observe(id, Number(r.ts), programOf({ mainProgram: r.main_program, program: r.program }));
+        tracker.closeAll();
+      }
+      this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('program_runs_backfill', ?)").run(String(Date.now()));
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return inserted;
+  }
+
+  /**
+   * [fromMs, toMs) ile kesisen program araliklari (zaman sirasiyla). Her aralik icin `qty`: aralikla pencerenin
+   * KESISIMINDE o programdan uretilen adet (supheli sayac sicramalari haric); `approxQty`: veri kopuklugundan sonra
+   * sayilan kismi. Acik aralik (`endedAt` null) `now`'a kadar sayilir.
+   * @returns {{id: number, machineId: string, program: string, startedAt: number, endedAt: number|null, qty: number, approxQty: number}[]}
+   */
+  programRuns(machineId, fromMs, toMs, now = Date.now()) {
+    const runs = this.db
+      .prepare(
+        `SELECT id, machine_id, program, started_at, ended_at FROM program_runs
+          WHERE started_at < ? AND (ended_at IS NULL OR ended_at > ?) ${machineId ? 'AND machine_id = ?' : ''}
+          ORDER BY started_at, machine_id, id`,
+      )
+      .all(...(machineId ? [toMs, fromMs, machineId] : [toMs, fromMs]));
+    const qtyOf = this.db.prepare(
+      `SELECT COALESCE(SUM(qty), 0) AS qty, COALESCE(SUM(CASE WHEN gap_ms > 0 THEN qty ELSE 0 END), 0) AS approx
+         FROM production WHERE machine_id = ? AND program = ? AND ts >= ? AND ts < ? AND suspect = 0`,
+    );
+    return runs.map((r) => {
+      const startedAt = Number(r.started_at);
+      const endedAt = r.ended_at == null ? null : Number(r.ended_at);
+      // Bitis anindaki parca eski programindir (program sonra secilir): kapali aralikta bitis DAHIL sayilir.
+      const hi = Math.min((endedAt ?? now) + 1, toMs);
+      const q = qtyOf.get(r.machine_id, r.program, Math.max(startedAt, fromMs), hi);
+      return { id: Number(r.id), machineId: r.machine_id, program: r.program, startedAt, endedAt, qty: Number(q.qty), approxQty: Number(q.approx) };
+    });
   }
 
   /**
@@ -286,6 +399,23 @@ export class TelemetryDb {
       )
       .get(...(machineId ? [fromMs, toMs, machineId] : [fromMs, toMs]));
     return { events: Number(r.n), qty: Number(r.qty) };
+  }
+
+  /**
+   * Uretim olaylarinda gorulen program adlari (planlama modulu: program <-> urun eslemesi icin). Supheli olaylar sayilmaz.
+   * @returns {{program: string, parts: number, machines: string[], lastTs: number}[]}
+   */
+  productionPrograms() {
+    return this.db
+      .prepare(
+        `SELECT program, SUM(qty) AS parts, GROUP_CONCAT(DISTINCT machine_id) AS machines, MAX(ts) AS last_ts
+           FROM production WHERE program IS NOT NULL AND program <> '' AND suspect = 0
+          GROUP BY program ORDER BY parts DESC`,
+      )
+      .all()
+      .map((r) => ({
+        program: r.program, parts: Number(r.parts), machines: r.machines ? String(r.machines).split(',') : [], lastTs: Number(r.last_ts),
+      }));
   }
 
   /** Ham uretim olaylari (CSV icin), zaman sirasiyla. */
@@ -547,13 +677,15 @@ export class TelemetryDb {
     this.db.prepare('DELETE FROM samples WHERE ts < ?').run(sampleCut);
     this.db.prepare('DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?').run(spanCut);
     this.db.prepare('DELETE FROM production WHERE ts < ?').run(now - PRODUCTION_RETENTION_DAYS * 86_400_000);
+    this.db.prepare('DELETE FROM program_runs WHERE ended_at IS NOT NULL AND ended_at < ?').run(now - PRODUCTION_RETENTION_DAYS * 86_400_000);
   }
 
   stats() {
     const samples = this.db.prepare('SELECT COUNT(*) AS n FROM samples').get().n;
     const spans = this.db.prepare('SELECT COUNT(*) AS n FROM spans').get().n;
     const production = this.db.prepare('SELECT COUNT(*) AS n FROM production').get().n;
-    return { samples: Number(samples), spans: Number(spans), production: Number(production), pending: this.pending.length };
+    const programRuns = this.db.prepare('SELECT COUNT(*) AS n FROM program_runs').get().n;
+    return { samples: Number(samples), spans: Number(spans), production: Number(production), programRuns: Number(programRuns), pending: this.pending.length };
   }
 
   close() {

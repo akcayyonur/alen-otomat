@@ -6,7 +6,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hashPassword, verifyPassword, validatePassword } from './password.js';
 import { AuthDb } from './auth-db.js';
-import { Auth, AuthError, IDLE_MS, ABSOLUTE_MS } from './auth.js';
+import { Auth, AuthError, IDLE_MS, ABSOLUTE_MS, ROLES } from './auth.js';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function kur() {
   const clock = { t: 1_700_000_000_000 };
@@ -173,6 +177,56 @@ test('oturum suresi: admin 12 saat bosta kalinca, viewer 30 gun; kullanim suresi
   clock.t += 20 * 86_400_000; // girisin uzerinden ~101 gun
   assert.equal(auth.authenticate(v.token), null, 'mutlak ust sinir (90 gun) asildi, bosta kalmamis olsa da');
   assert.equal(ABSOLUTE_MS.viewer, 90 * 86_400_000);
+});
+
+test('operator rolu: hesap acilir, oturum suresi viewer gibi uzun (30 gun / 90 gun), gecersiz rol reddedilir', async () => {
+  const { auth, clock } = kur();
+  const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
+  assert.deepEqual([...ROLES], ['admin', 'viewer', 'operator']);
+  const op = await auth.createUser({ username: 'fabrika', password: 'sifre-12345', role: 'operator' }, { actor: admin });
+  assert.equal(op.role, 'operator');
+  await rejects(auth.createUser({ username: 'baska', password: 'sifre-12345', role: 'ustayonetici' }, { actor: admin }), 400, /admin, viewer ya da operator/);
+  const o = await auth.login('fabrika', 'sifre-12345');
+  assert.equal(o.maxAgeSec, 30 * 86_400, 'fabrika PC\'si surekli acik: cerez omru 30 gun');
+  clock.t += 25 * 86_400_000;
+  assert.ok(auth.authenticate(o.token), 'bosta 25 gun: acik');
+  assert.equal(ABSOLUTE_MS.operator, 90 * 86_400_000);
+  assert.equal(IDLE_MS.operator, 30 * 86_400_000);
+  assert.equal(auth.listUsers().find((u) => u.username === 'fabrika').role, 'operator');
+});
+
+test('veritabani gecisi: "operator"den once olusmus auth.db (CHECK yalniz admin/viewer) acilinca tablo yeniden kurulur, hesap ve oturum korunur', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'auth-gecis-'));
+  const file = join(dir, 'auth.db');
+  try {
+    const eski = new DatabaseSync(file);
+    eski.exec(`
+      CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE, role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+        password_hash TEXT NOT NULL, created_at INTEGER NOT NULL, last_login_at INTEGER);
+      CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, ip TEXT, user_agent TEXT);
+      CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, username TEXT, event TEXT NOT NULL, ip TEXT, detail TEXT);
+      INSERT INTO users (username, role, password_hash, created_at) VALUES ('yonetici', 'admin', 'x', 1), ('izleyici', 'viewer', 'y', 2);
+      INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at) VALUES ('abc', 2, 5, 6);
+    `);
+    assert.throws(() => eski.exec("INSERT INTO users (username, role, password_hash, created_at) VALUES ('op', 'operator', 'z', 3)"), /CHECK/, 'eski kisit operator\'u reddediyordu');
+    eski.close();
+
+    const db = new AuthDb(file);
+    assert.deepEqual(db.listUsers().map((u) => [u.id, u.username, u.role]), [[2, 'izleyici', 'viewer'], [1, 'yonetici', 'admin']], 'kimlikler ve roller aynen (liste kullanici adina gore)');
+    assert.ok(db.getSession('abc'), 'oturum silinmedi (tablo yeniden kurulurken CASCADE calismadi)');
+    const auth = new Auth({ db });
+    const op = await auth.createUser({ username: 'fabrika', password: 'sifre-12345', role: 'operator' }, { actor: { username: 'yonetici', role: 'admin' } });
+    assert.equal(op.role, 'operator');
+    assert.equal(op.id, 3, 'kimlik sirasi korunur');
+    db.db.close();
+    // ikinci acilis gecis gerektirmez ve veriyi bozmaz
+    const db2 = new AuthDb(file);
+    assert.equal(db2.listUsers().length, 3);
+    db2.db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('acik akis denetimi: isValid sureyi UZATMAZ, cikis ve sifre sifirlama gecersiz kilar', async () => {

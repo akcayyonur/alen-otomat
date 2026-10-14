@@ -2,13 +2,13 @@
  * Giris sistemi (arayuz): giris / ilk kurulum ekrani, oturum durumu, ust cubukta kullanici + cikis,
  * sifre degistirme ve 401 korumasi (oturum bitince sayfa giris ekranina doner).
  *
- * Roller: admin (her sey) ve viewer (yalniz izleme: program kutuphanesi, ayarlar ve tezgahtaki
+ * Roller: admin (her sey), viewer (yalniz izleme: program kutuphanesi, ayarlar ve tezgahtaki
  * "Programlar" paneli GIZLENIR; sunucu bu uclari zaten reddeder, buradaki gizleme yalniz kolaylik).
  * Bu dosya baska dashboard modullerini import etmez (dongu olmasin); herkes buradan oturumu okur.
  */
 import { escapeHtml } from './format.js';
 
-const ROLE_LABEL = Object.freeze({ admin: 'yönetici', viewer: 'izleyici' });
+const ROLE_LABEL = Object.freeze({ admin: 'yönetici', viewer: 'izleyici', operator: 'operatör' });
 
 /** @type {{authenticated: boolean, authDisabled?: boolean, user?: {username: string, role: string}}|null} */
 let session = null;

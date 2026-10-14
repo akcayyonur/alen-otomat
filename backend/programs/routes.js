@@ -55,15 +55,21 @@ function readBuffer(req, max) {
 async function readJson(req, max = MAX_JSON_BYTES) {
   const buf = await readBuffer(req, max);
   if (buf.length === 0) return {};
+  let value;
   try {
-    return JSON.parse(buf.toString('utf8'));
+    value = JSON.parse(buf.toString('utf8'));
   } catch (err) {
     throw new ValidationError(`Gövde JSON olarak okunamadı: ${err.message}`);
   }
+  // `null`, dizi ya da düz değer: uçlar `body.alan` okur; nesne olmayan gövde 500 yerine 400 olmalı.
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new ValidationError('Gövde bir JSON nesnesi olmalı.');
+  return value;
 }
 
 /** Hata -> HTTP yaniti. FTP hatalari 502 (tezgah tarafi), dogrulama 400... */
 function sendError(res, err) {
+  // Bozuk yüzde kodlaması (/api/machines/%E0%A4%A) istemci hatasıdır.
+  if (err instanceof URIError) return sendJson(res, 400, { error: 'Adres geçersiz (bozuk yüzde kodlaması).' });
   const status = err.status ?? (err instanceof FtpError ? 502 : 500);
   const prefix = err instanceof FtpError ? 'Tezgahla FTP konuşulamadı: ' : '';
   if (status >= 500 && !(err instanceof FtpError)) console.error('[programlar]', err);
@@ -80,6 +86,7 @@ const route = (re) => (path) => re.exec(path);
 const R = {
   programs: route(/^\/api\/library\/programs$/),
   programText: route(/^\/api\/library\/programs\/text$/),
+  programsDelete: route(/^\/api\/library\/programs\/delete$/),
   program: route(new RegExp(`^/api/library/programs/(\\d+)$`)),
   version: route(new RegExp(`^/api/library/programs/(\\d+)/versions/(\\d+)$`)),
   machinePrograms: route(new RegExp(`^/api/machines/${ID}/programs$`)),
@@ -165,6 +172,18 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
           note: b.note ?? null, createdBy: who(req, b.by), acceptNewer: b.acceptNewer === true,
         });
         return sendJson(res, result.created ? 201 : 200, result), true;
+      }
+
+      // Kutuphaneden silme (geri donusuz): onay metni sunucuda da denetlenir; kayit denetim tablosuna yazilir.
+      if (method === 'POST' && R.programsDelete(path)) {
+        const b = await readJson(req, 100_000);
+        return sendJson(res, 200, library.deletePrograms({
+          ids: b.ids, confirm: b.confirm, by: who(req, b.by), clientIp: req.clientIp ?? req.socket.remoteAddress ?? null,
+        })), true;
+      }
+      if (method === 'GET' && path === '/api/library/log') {
+        const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+        return sendJson(res, 200, { log: library.db.listLog({ limit }) }), true;
       }
 
       if (method === 'GET' && (m = R.program(path))) {

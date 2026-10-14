@@ -4,7 +4,7 @@
  *
  *   node backend\auth-cli.js listele
  *   node backend\auth-cli.js sifre <kullanici>            yeni sifreyi sorar (yazarken gorunmez)
- *   node backend\auth-cli.js ekle <kullanici> <admin|viewer>   yeni hesap, sifreyi sorar
+ *   node backend\auth-cli.js ekle <kullanici> <admin|viewer|operator>   yeni hesap, sifreyi sorar
  *   node backend\auth-cli.js sil <kullanici>
  *
  * Calisma dizini kurulum klasoru olmali (data\auth.db oradan okunur) ya da AUTH_DB_FILE verilmeli.
@@ -81,7 +81,7 @@ try {
     await auth.setPassword(u.id, await sifreIste(), { actor: { username: 'auth-cli' } });
     console.log(`"${u.username}" şifresi değiştirildi; açık oturumları kapatıldı.`);
   } else if (komut === 'ekle' && ad && rol) {
-    if (!ROLES.includes(rol)) throw new AuthError(`Rol "admin" ya da "viewer" olmalı.`, 400);
+    if (!ROLES.includes(rol)) throw new AuthError(`Rol "admin", "viewer" ya da "operator" olmalı.`, 400);
     const u = await auth.createUser({ username: ad, password: await sifreIste(), role: rol }, { actor: { username: 'auth-cli' } });
     console.log(`"${u.username}" (${u.role}) oluşturuldu.`);
   } else if (komut === 'sil' && ad) {
@@ -89,7 +89,7 @@ try {
     auth.deleteUser(u.id, { actor: { id: -1, username: 'auth-cli' } });
     console.log(`"${u.username}" silindi.`);
   } else {
-    console.log('Kullanım:\n  node backend\\auth-cli.js listele\n  node backend\\auth-cli.js sifre <kullanici>\n  node backend\\auth-cli.js ekle <kullanici> <admin|viewer>\n  node backend\\auth-cli.js sil <kullanici>');
+    console.log('Kullanım:\n  node backend\\auth-cli.js listele\n  node backend\\auth-cli.js sifre <kullanici>\n  node backend\\auth-cli.js ekle <kullanici> <admin|viewer|operator>\n  node backend\\auth-cli.js sil <kullanici>');
     process.exitCode = 2;
   }
 } catch (err) {

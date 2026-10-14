@@ -8,23 +8,28 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseTelemetry } from '../shared/schema.js';
 import { loadDrivers } from '../shared/drivers.js';
+import { loadDowntimeCodes } from '../shared/downtime-codes.js';
 import { loadInventory, loadConfig, validateMachines, saveMachines, agentMachines } from '../shared/inventory.js';
 import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
 import { Library } from './programs/library.js';
 import { MachineFiles } from './programs/machine-files.js';
+import { Planning } from './planning/planning.js';
+import { createPlanningRoutes } from './planning/routes.js';
 import { createProgramRoutes } from './programs/routes.js';
 import { AuthDb } from './auth/auth-db.js';
 import { Auth } from './auth/auth.js';
 import { createGate, createAuthRoutes } from './auth/http.js';
 import { redactSnapshot, redactDetail } from './auth/policy.js';
 import { csvDocument } from './csv.js';
-import { buildReport, reportCsv, compactMachineCsv, resolveRange } from './production-report.js';
+import { buildReport, buildRuns, reportCsv, runsCsv, compactMachineCsv, resolveRange } from './production-report.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const DB_FILE = process.env.DB_FILE ?? 'data/telemetry.db';
 /** Program kutuphanesi: telemetri veritabanindan AYRI dosya (budanmaz, ayri yedeklenir). */
 const LIBRARY_DB_FILE = process.env.LIBRARY_DB_FILE ?? 'data/library.db';
+/** Planlama (urun kartlari, siparisler, is emirleri): telemetri ve kutuphaneden AYRI dosya, ayri yedeklenir. */
+const PLANNING_DB_FILE = process.env.PLANNING_DB_FILE ?? 'data/planlama.db';
 /**
  * Tezgaha program GONDERMEYI tamamen kapatir (kutuphane, tarama ve on kontrol
  * calisir). Kimlik dogrulama henuz yok; ozelligi kullanmayacaksaniz 1 yapin.
@@ -36,6 +41,8 @@ const TRANSFER_DISABLED = process.env.TRANSFER_DISABLED === '1';
  * (ornegin kendi gonderdigimiz bir test dosyasini silmek); gundelik kullanimda verilmez.
  */
 const DELETE_ENABLED = process.env.DELETE_ENABLED === '1';
+/** Tornadan silmeyi her durumda KAPATAN acil anahtar (yapilandirma dosyasi acik olsa bile). Silme geri donusuzdur. */
+const DELETE_DISABLED = process.env.DELETE_DISABLED === '1';
 /**
  * Ayarlar ekranindan yapilandirma yazimi. Kimlik dogrulama HENUZ YOK - ofis
  * agindaki herkes tezgah tanimlarini degistirebilir. Dashboard ofis LAN'i
@@ -53,6 +60,12 @@ const SESSION_RECHECK_TICKS = 30;
 /** Dashboard'a yayin sikligi - ingest hizindan bagimsiz (Bolum 07: < 2-5 sn). */
 const BROADCAST_MS = 1000;
 const MAX_BODY_BYTES = 1_000_000;
+/**
+ * /api/ingest icin AYRI, buyuk sinir: backend kapaliyken ajan mesajlari tamponlar (en fazla 20.000 mesaj, ~400-1000 bayt)
+ * ve geri gelince HEPSINI tek istekte yollar. 1 MB sinir ~2.500 mesajda (birkac dakikalik kesinti) bu paketi reddeder,
+ * ajan ayni paketi sonsuza dek yeniden dener ve veri kalici kaybolurdu. Ingest yalniz sunucu bilgisayarindan acilir (policy 'local').
+ */
+const MAX_INGEST_BYTES = 40_000_000;
 
 const store = new TelemetryStore(DB_FILE);
 
@@ -64,11 +77,23 @@ const machineFiles = new MachineFiles({
   library,
   getMachine: (id) => loadInventory().find((m) => m.id === id) ?? null,
   liveInfo: (id) => store.liveInfo(id),
-  flags: { transferDisabled: TRANSFER_DISABLED, deleteEnabled: DELETE_ENABLED },
+  flags: { transferDisabled: TRANSFER_DISABLED, deleteEnabled: DELETE_ENABLED, deleteDisabled: DELETE_DISABLED },
 });
 const programRoutes = createProgramRoutes({
   library, files: machineFiles, listMachines: () => loadInventory(), authRequired: !AUTH_DISABLED,
 });
+
+// Planlama modulu (urun karti, siparis, program eslemesi): telemetriyi import etmez; tornalarda gorulen program adlarini disaridan alir.
+const planning = new Planning({
+  dbFile: PLANNING_DB_FILE,
+  listSeenPrograms: () => store.db.productionPrograms(),
+  listMachines: () => loadInventory(), // is emrine atanabilecek tezgahlar
+  productionEvents: (machineId, fromMs, toMs) => store.db.productionEvents(machineId, fromMs, toMs), // is emrinin gerceklesen adedi
+  liveMachine: (machineId) => store.liveInfo(machineId), // canli durum/program/sayac (is emri baslat-bitir)
+  spans: (machineId, fromMs, toMs) => store.db.spans(machineId, fromMs, toMs), // olculmus duruslar
+  downtimeConfig: loadDowntimeCodes(), // duruş nedeni kodlari (config/downtime-codes.json)
+});
+const planningRoutes = createPlanningRoutes({ planning });
 
 // Kimlik dogrulama: her istek once kapidan (gate) gecer; izin tablosu backend/auth/policy.js'te.
 const authDb = new AuthDb(AUTH_DB_FILE);
@@ -92,10 +117,26 @@ const STATIC_FILES = {
   '/diff.js': ['../dashboard/diff.js', 'text/javascript; charset=utf-8'],
   '/bulk-import-view.js': ['../dashboard/bulk-import-view.js', 'text/javascript; charset=utf-8'],
   '/delete-view.js': ['../dashboard/delete-view.js', 'text/javascript; charset=utf-8'],
+  '/library-delete-view.js': ['../dashboard/library-delete-view.js', 'text/javascript; charset=utf-8'],
   '/diff-render.js': ['../dashboard/diff-render.js', 'text/javascript; charset=utf-8'],
   '/auth-view.js': ['../dashboard/auth-view.js', 'text/javascript; charset=utf-8'],
   '/users-view.js': ['../dashboard/users-view.js', 'text/javascript; charset=utf-8'],
   '/production-view.js': ['../dashboard/production-view.js', 'text/javascript; charset=utf-8'],
+  '/apps.js': ['../dashboard/apps.js', 'text/javascript; charset=utf-8'],
+  '/planning-view.js': ['../dashboard/planning-view.js', 'text/javascript; charset=utf-8'],
+  '/planning-common.js': ['../dashboard/planning-common.js', 'text/javascript; charset=utf-8'],
+  '/planning-products.js': ['../dashboard/planning-products.js', 'text/javascript; charset=utf-8'],
+  '/planning-orders.js': ['../dashboard/planning-orders.js', 'text/javascript; charset=utf-8'],
+  '/planning-programs.js': ['../dashboard/planning-programs.js', 'text/javascript; charset=utf-8'],
+  '/planning-workorders.js': ['../dashboard/planning-workorders.js', 'text/javascript; charset=utf-8'],
+  '/planning-wo-form.js': ['../dashboard/planning-wo-form.js', 'text/javascript; charset=utf-8'],
+  '/planning-production.js': ['../dashboard/planning-production.js', 'text/javascript; charset=utf-8'],
+  '/planning-shop.js': ['../dashboard/planning-shop.js', 'text/javascript; charset=utf-8'],
+  '/planning-card.js': ['../dashboard/planning-card.js', 'text/javascript; charset=utf-8'],
+  '/planning-material.js': ['../dashboard/planning-material.js', 'text/javascript; charset=utf-8'],
+  '/planning-efficiency.js': ['../dashboard/planning-efficiency.js', 'text/javascript; charset=utf-8'],
+  '/planning-measure.js': ['../dashboard/planning-measure.js', 'text/javascript; charset=utf-8'],
+  '/planning-packing.js': ['../dashboard/planning-packing.js', 'text/javascript; charset=utf-8'],
   '/format.js': ['../dashboard/format.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['../dashboard/styles.css', 'text/css; charset=utf-8'],
 };
@@ -109,13 +150,13 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
-function readBody(req) {
+function readBody(req, max = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > max) {
         reject(new Error('istek govdesi cok buyuk'));
         req.destroy();
         return;
@@ -158,7 +199,7 @@ function parseRange(url) {
 async function handleIngest(req, res) {
   let payload;
   try {
-    payload = JSON.parse(await readBody(req));
+    payload = JSON.parse(await readBody(req, MAX_INGEST_BYTES));
   } catch (err) {
     return sendJson(res, 400, { error: `govde okunamadi: ${err.message}` });
   }
@@ -166,12 +207,22 @@ async function handleIngest(req, res) {
   const batch = Array.isArray(payload) ? payload : [payload];
   const errors = [];
   let accepted = 0;
+  let failed = 0;
 
   for (const raw of batch) {
     const parsed = parseTelemetry(raw);
     if (parsed.ok) {
-      store.ingest(parsed.value);
-      accepted += 1;
+      // Tek mesajin yazilamamasi (hata) paketin geri kalanini oldurmesin: ajan 500 alinca AYNI paketi sonsuza dek
+      // yeniden gonderirdi ("zehirli mesaj"). Hatali mesaj reddedilir ve gunluge yazilir.
+      try {
+        store.ingest(parsed.value);
+        accepted += 1;
+      } catch (err) {
+        failed += 1;
+        store.rejectedCount += 1;
+        console.error(`[backend] mesaj yazilamadi (${parsed.value?.machineId}):`, err);
+        if (errors.length < 10) errors.push({ machineId: parsed.value?.machineId ?? null, errors: ['ic hata: mesaj yazilamadi'] });
+      }
     } else {
       store.rejectedCount += 1;
       if (errors.length < 10) {
@@ -179,6 +230,9 @@ async function handleIngest(req, res) {
       }
     }
   }
+
+  // Hicbir mesaj yazilamadiysa (veritabani sorunu) 500: ajan tamponunu SILMEZ, sonra yeniden dener.
+  if (failed > 0 && accepted === 0) return sendJson(res, 500, { error: 'mesajlar yazilamadi', accepted, rejected: batch.length, errors });
 
   // Kismi kabul: gecerli mesajlar yazilir, gecersizler raporlanir.
   sendJson(res, errors.length > 0 ? 207 : 202, {
@@ -310,6 +364,18 @@ function handleProduction(url, res, csv) {
   return sendCsv(res, `uretim-${view}${machineId ? `-${machineId}` : ''}-${span}.csv`, reportCsv(report, view));
 }
 
+/** GET /api/production/runs[.csv]: program calisma araliklari (hangi program hangi saatte devreye girdi, ne zaman bitti). */
+function handleProductionRuns(url, res, csv) {
+  const range = resolveRange(url.searchParams.get('from'), url.searchParams.get('to'));
+  if (range.error) return sendJson(res, 400, { error: range.error });
+  const machineId = url.searchParams.get('machine') || null;
+  if (machineId && !store.has(machineId)) return sendJson(res, 404, { error: `tezgah bulunamadi: ${machineId}` });
+  const report = buildRuns({ db: store.db, machineId, ...range });
+  if (!csv) return sendJson(res, 200, report);
+  const span = range.from === range.to ? range.from : `${range.from}_${range.to}`;
+  return sendCsv(res, `program-gecisleri${machineId ? `-${machineId}` : ''}-${span}.csv`, runsCsv(report));
+}
+
 /**
  * Ayarlar ekranindan gelen tezgah listesini dogrular, yazar ve depoyu
  * yeniden yukler - sunucuyu yeniden baslatmaya gerek kalmaz.
@@ -419,6 +485,8 @@ const server = http.createServer(async (req, res) => {
     if (await authRoutes(req, res, url)) return;
     // Program kutuphanesi / aktarim uclari (kendi hata yanitlarini verir).
     if (await programRoutes(req, res, url)) return;
+    // Planlama uclari (/api/planning/*): yalniz yonetici (izin tablosunda varsayilan reddet).
+    if (await planningRoutes(req, res, url)) return;
 
     if (req.method === 'POST' && pathname === '/api/ingest') return await handleIngest(req, res);
     if (req.method === 'GET' && pathname === '/api/stream') return handleStream(req, res);
@@ -473,6 +541,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && pathname === '/api/production') return handleProduction(url, res, false);
     if (req.method === 'GET' && pathname === '/api/production/export.csv') return handleProduction(url, res, true);
+    if (req.method === 'GET' && pathname === '/api/production/runs') return handleProductionRuns(url, res, false);
+    if (req.method === 'GET' && pathname === '/api/production/runs.csv') return handleProductionRuns(url, res, true);
 
     const machineMatch = pathname.match(MACHINE_ROUTE);
     if (req.method === 'GET' && machineMatch) {
@@ -483,6 +553,13 @@ const server = http.createServer(async (req, res) => {
 
     sendJson(res, 404, { error: 'bulunamadi' });
   } catch (err) {
+    // Bozuk yüzde kodlaması (/api/machines/%) istemci hatasıdır. Beklenmeyen hata günlüğe yazılır (servis olarak konsol yok).
+    if (err instanceof URIError) {
+      if (!res.headersSent) sendJson(res, 400, { error: 'adres gecersiz (bozuk yuzde kodlamasi)' });
+      return;
+    }
+    console.error(`[backend] istek hatasi: ${req.method} ${pathname}`, err);
+    if (res.headersSent) { res.end(); return; } // yanit baslamissa ikinci yanit yazilamaz (catch icinde atma -> surec cokerdi)
     sendJson(res, 500, { error: err.message });
   }
 });
@@ -494,6 +571,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[backend] ingest     -> POST http://localhost:${PORT}/api/ingest`);
   console.log(`[backend] canli akis -> GET  http://localhost:${PORT}/api/stream`);
   console.log(`[backend] veritabani -> ${DB_FILE}`);
+  console.log(`[backend] planlama   -> ${PLANNING_DB_FILE}`);
   console.log(
     `[backend] kutuphane  -> ${LIBRARY_DB_FILE}` +
       (TRANSFER_DISABLED ? '  (tezgaha GONDERME KAPALI: TRANSFER_DISABLED=1)' : ''),
@@ -517,6 +595,7 @@ function shutdown() {
   for (const res of clients) res.end();
   store.close();
   library.close();
+  planning.close();
   authDb.close();
   process.exit(0);
 }

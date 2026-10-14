@@ -145,9 +145,17 @@ export function buildReport({ db, machines, from, to, machineId = null, now = Da
     current: { date: current.date, shift: current.id },
     shifts: shifts.map((s) => ({ id: s.id, label: s.label, startHour: s.startHour, endHour: s.endHour })),
     machines: machines.map((m) => ({ id: m.id, name: m.name ?? m.id })),
-    // Gun gezinmesi ve hazir araliklar: istemci tarih hesabi yapmasin.
+    // Gun/aralik gezinmesi ve hazir araliklar: istemci tarih hesabi yapmasin.
     prevDate: addDays(from, -1),
     nextDate: to < current.date ? addDays(to, 1) : null,
+    // Ayni uzunlukta onceki / sonraki aralik (cok gunluk gorunumde onceki/sonraki dugmeleri). Sonraki, bugunun uretim gununu asmaz.
+    prevRange: (() => { const n = daysBetween(from, to); return { from: addDays(from, -n), to: addDays(from, -1) }; })(),
+    nextRange: (() => {
+      if (to >= current.date) return null;
+      const n = daysBetween(from, to);
+      const nextTo = addDays(to, n);
+      return { from: addDays(to, 1), to: nextTo > current.date ? current.date : nextTo };
+    })(),
     presets: {
       today: { from: current.date, to: current.date },
       yesterday: { from: addDays(current.date, -1), to: addDays(current.date, -1) },
@@ -158,6 +166,45 @@ export function buildReport({ db, machines, from, to, machineId = null, now = Da
     ...view,
     rows: rows.map((r) => ({ ...r, ...finish(r) })).map(({ cycleSum, ...rest }) => rest),
   };
+}
+
+/* ------------------------------------------------- program gecisleri */
+
+/**
+ * Program calisma araliklari (hangi program hangi saatte devreye girdi, ne zaman bitti) + her aralikta uretilen adet.
+ * `qty` aralik ile raporlanan pencerenin KESISIMI icindir; aralik pencereden once basladiysa / sonra bitiyorsa
+ * `startsBefore` / `endsAfter` isaretlenir (saatler gercek baslangic/bitistir).
+ * @param {{db: import('./db.js').TelemetryDb, from: string, to: string, machineId?: string|null, now?: number, shifts?: readonly object[]}} args
+ */
+export function buildRuns({ db, from, to, machineId = null, now = Date.now(), shifts = SHIFTS }) {
+  const windows = shiftWindows(from, to, shifts);
+  const fromMs = windows[0].fromMs;
+  const toMs = windows[windows.length - 1].toMs;
+  const shiftInfo = (ms) => { const w = shiftOf(ms, shifts); return { date: w.date, id: w.id, label: w.label }; };
+  const runs = db.programRuns(machineId, fromMs, toMs, now).map((r) => ({
+    ...r,
+    ongoing: r.endedAt == null,
+    durationMs: (r.endedAt ?? now) - r.startedAt,
+    startsBefore: r.startedAt < fromMs,
+    endsAfter: (r.endedAt ?? now) > toMs,
+    startShift: shiftInfo(r.startedAt),
+    endShift: r.endedAt == null ? null : shiftInfo(r.endedAt),
+  }));
+  return { from, to, machineId, now, runs };
+}
+
+const clock = (ms) => new Date(ms).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/** @param {ReturnType<typeof buildRuns>} report */
+export function runsCsv(report) {
+  return csvDocument(
+    ['tezgah', 'program', 'baslangic', 'bitis', 'sure_dk', 'adet', 'baslangic_vardiya', 'bitis_vardiya', 'devam_ediyor'],
+    report.runs.map((r) => [
+      r.machineId, r.program, clock(r.startedAt), r.endedAt == null ? null : clock(r.endedAt),
+      Math.round(r.durationMs / 6000) / 10, r.qty,
+      `${r.startShift.date} ${r.startShift.label}`, r.endShift ? `${r.endShift.date} ${r.endShift.label}` : null, r.ongoing ? 'evet' : '',
+    ]),
+  );
 }
 
 /* ---------------------------------------------------------------- CSV */

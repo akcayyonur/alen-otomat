@@ -1,53 +1,22 @@
 /**
- * Yazdirilabilir IS EMRI formu: bugunku kagit formun (Excel "IS EMRI" sayfasi) duzeni. El ile yazilan alanlar (uretim gramaji, gercek sure,
- * planlama yetkilisi, alttaki TARIH/VARDIYA/ADET tablosu) bos birakilir; sistemde bilinenler dolu gelir.
- * Yazdirma: tarayicinin yazdir penceresi (A4, dikey). Ekranda "kagit" gorunumu icin her temada beyaz zemin.
+ * İŞ EMRİ FORMU penceresi: bugünkü kâğıt formun (Excel "İŞ EMRİ" sayfası) düzeni + varsa teknik resimler, TEK PDF'te.
+ *
+ * Form PDF olarak sunucuda üretilir (backend/planning/wo-form-pdf.js: sistemde bilinenler dolu, el ile yazılanlar boş) ve iş emrinin teknik resim
+ * PDF'leriyle birleştirilir (ön sayfa = form, arka sayfalar = çizimler). Ekranda gösterilen de basılan da bu dosyadır; tarayıcı sayfaya gömülü PDF'i
+ * `window.print()` ile basmadığı için yazdırma da PDF görüntüleyicisinden yapılır ve form ile resimler TEK işte çıkar (çift taraflı baskı uygun).
+ *
+ * Satıra tıklayınca açılan görünüm budur (listede "Düzenle" ayrı); Tezgah başından da herkes açabilir (izleyici ve operatör yalnız görür).
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { openModal, fmtDec } from './planning-common.js';
+import { openModal } from './planning-common.js';
+import { printUrl } from './planning-drawings.js';
 
-const g = (kg) => (kg === null || kg === undefined ? '' : fmtDec(kg * 1000, 2));
-const d = (ms) => (ms ? new Date(ms).toLocaleDateString('tr-TR') : '');
-const dayShort = (key) => { const [y, m, dd] = key.split('-').map(Number); return new Date(y, m - 1, dd).toLocaleDateString('tr-TR'); };
-
-/** @param {object} w /api/planning/work-orders/:no yaniti */
-export function formHtml(w) {
-  const cell = (label, value, cls = '') => `<div class="pl-f-cell ${cls}"><span class="pl-f-label">${label}</span><span class="pl-f-val">${value === '' || value == null ? '&nbsp;' : escapeHtml(value)}</span></div>`;
-  // Alt tablo (TARIH | VARDIYA | ADET x 3 grup x 8 satir): uretime baslamis is emrinde vardiya adetleri telemetriden dolar (sutun sutun: once soldaki grup),
-  // geri kalan bos kalir (el ile yazilir).
-  const slots = (w.progress?.shifts ?? []).slice(0, 24);
-  const slotCells = (row) => [0, 1, 2].map((g) => {
-    const s = slots[g * 8 + row];
-    return s ? `<td>${escapeHtml(dayShort(s.date))}</td><td>${escapeHtml(s.label)}</td><td>${escapeHtml(String(s.qty))}</td>` : '<td></td><td></td><td></td>';
-  }).join('');
-  const rows = (n) => Array.from({ length: n }, (_, i) => `<tr>${slotCells(i)}</tr>`).join('');
-  return (
-    '<div class="pl-form">' +
-    `<div class="pl-f-head"><div class="pl-f-title">İŞ EMRİ</div><div class="pl-f-no"><div><span class="pl-f-label">İŞ EMRİ NO:</span> <b>${escapeHtml(w.no)}</b></div>` +
-    `<div><span class="pl-f-label">TARİH:</span> <b>${escapeHtml(d(w.createdAt))}</b></div></div></div>` +
-    '<div class="pl-f-grid">' +
-    cell('MAMUL ADI :', w.productName) + cell('TERMİN SÜRESİ:', d(w.dueDate), 'pl-f-due') +
-    cell('ALEN OTOMAT ÜRÜN KODU', w.stockCode) + cell('SİPARİŞ NO', w.custOrderNo) +
-    cell('MÜŞTERİ ÜRÜN KODU', w.customerCode) + cell('HEDEF ADET', `${w.targetQty.toLocaleString('tr-TR')} AD`) +
-    cell('HAMMADDE ADI', w.usedMaterial ?? w.material) + cell('ALTERNATİF HAMMADDE ADI :', w.altMaterial) +
-    cell('NET GRAMAJ (gr) (MALİYET)', g(w.netKg ?? null) ? `${g(w.netKg)} GR` : '') + cell('NET GRAMAJ (gr) (ÜRETİM)', w.measuredNetKg == null ? '' : `${g(w.measuredNetKg)} gr`) +
-    cell('BRÜT GRAMAJ (gr)', g(w.grossKg) ? `${g(w.grossKg)} GR` : '') +
-    cell('ÜRETİM SÜRESİ (sn) (MALİYET) SAAT', w.plannedSec ? `${fmtDec(w.plannedSec, 1)} SN${w.plannedHours ? ` · ${fmtDec(w.plannedHours, 2)} SAAT` : ''}` : '') + cell('ÜRETİM SÜRESİ (sn) (ÜRETİM)', '') +
-    cell('GKK RAPOR NO', w.gkkReportNo) + cell('İLK ONAY RAPOR NO', w.firstApprovalNo) +
-    cell('TEZGAH NO', w.machineNumber ?? w.machineId) +
-    cell('KULLANILAN TOPLAM HAMMADDE (Kg) (Boy)', w.rawKg === null && w.bars === null ? '' : `${w.rawKg === null ? '—' : fmtDec(w.rawKg, 2)} KG · ${w.bars === null ? '—' : fmtDec(w.bars, 2)} BOY`, 'pl-f-wide') +
-    `<div class="pl-f-cell pl-f-wide"><span class="pl-f-label">AÇIKLAMA</span><span class="pl-f-val">${w.note ? escapeHtml(w.note) : '&nbsp;'}</span></div>` +
-    '<div class="pl-f-cell pl-f-wide pl-f-sign"><span class="pl-f-label">ÜRETİM PLANLAMA YETKİLİSİ</span><span class="pl-f-val">&nbsp;</span></div>' +
-    '</div>' +
-    '<table class="pl-f-table"><thead><tr>' + '<th>TARİH</th><th>VARDİYA</th><th>ADET</th>'.repeat(3) + `</tr></thead><tbody>${rows(8)}</tbody></table>` +
-    `<p class="pl-f-foot">${w.status === 'iptal' ? 'İPTAL EDİLDİ · ' : ''}${slots.length ? 'Vardiya adetleri telemetriden (tezgah sayacı) · ' : ''}Sistemden üretildi · ${escapeHtml(new Date().toLocaleString('tr-TR', { hour12: false }))}</p>` +
-    '</div>'
-  );
-}
-
-/** @param {string} no is emri numarasi */
-export async function openWorkOrderForm(no) {
+/**
+ * @param {string} no is emri numarasi
+ * @param {{onEdit?: () => void}} [opts] onEdit verilirse (yonetici) pencerede "Düzenle…" dugmesi cikar
+ */
+export async function openWorkOrderForm(no, { onEdit = null } = {}) {
   const m = openModal({ title: `İş emri formu · ${no}`, wide: true });
   m.dlg.classList.add('pl-form-dlg');
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
@@ -58,14 +27,29 @@ export async function openWorkOrderForm(no) {
     m.body.innerHTML = `<p class="notice notice-sim">Form alınamadı: ${escapeHtml(err.message)}</p>`;
     return;
   }
+  const url = printUrl(no);
+  const drawings = w.drawings ?? [];
+  const pages = drawings.reduce((s, d) => s + d.pages, 0);
   m.body.innerHTML =
-    '<div class="dt-actions pl-form-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Yazdır</button></div>' +
-    formHtml(w);
+    '<div class="dt-actions pl-form-actions">' +
+    (onEdit ? '<button type="button" class="icon-btn" data-act="edit">Düzenle…</button>' : '') +
+    `<a class="icon-btn" href="${url}" target="_blank" rel="noopener">Yeni sekmede aç</a>` +
+    '<button type="button" class="icon-btn btn-primary" data-act="print">Yazdır</button></div>' +
+    '<p class="hint pl-form-actions">' +
+    (drawings.length
+      ? `İş emri formu + ${drawings.length} teknik resim PDF'i (${pages} sayfa) tek dosyada: <b>Yazdır</b> hepsini birlikte basar (form ön, resimler arka sayfalar).`
+      : 'İş emri formu. Bu iş emrinde teknik resim yok; yönetici iş emrini düzenlerken PDF yükleyebilir.') +
+    '</p>' +
+    `<iframe class="pl-f-pdf" title="İş emri formu ve teknik resimler (PDF)" src="${url}#view=FitH&pagemode=none"></iframe>`;
+  const frame = m.body.querySelector('iframe');
   m.body.querySelector('[data-act="print"]').addEventListener('click', () => {
-    document.body.classList.add('pl-printing');
-    const done = () => { document.body.classList.remove('pl-printing'); window.removeEventListener('afterprint', done); };
-    window.addEventListener('afterprint', done);
-    window.print();
+    // PDF görüntüleyicisinin kendi yazdırma penceresi: form + resimler tek iş. Tarayıcı izin vermezse PDF yeni sekmede açılır (oradan yazdırılır).
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch {
+      window.open(url, '_blank', 'noopener');
+    }
   });
+  m.body.querySelector('[data-act="edit"]')?.addEventListener('click', () => { m.close(); onEdit(); });
 }
-

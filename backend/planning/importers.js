@@ -14,6 +14,8 @@
  */
 import { decodeCsv, parseCsv } from './csv-read.js';
 import { cleanCode, foldTr, headerKey, isScientific, looseKey, parseDate, parseNumber } from './normalize.js';
+import { findGkkHeader } from './gkk.js';
+import { findApprovalHeader } from './first-approval.js';
 
 export class ImportError extends Error {
   constructor(message, status = 400) {
@@ -61,6 +63,17 @@ function saveIfChanged(db, key, stockCode, incoming, { source, by, now, fillOnly
   if (!changed) return 'unchanged';
   db.saveProduct(key, fields, { source: cur.edited ? cur.source : source, by, now });
   return 'updated';
+}
+
+/**
+ * Form sayfalari (EYS.FR.011 GKK rapor numaralari, EYS.FR.013 ilk baskı onay listesi): sutun basliklari ilk satirda degil, form basliginin
+ * birkac satir altindadir; bu yuzden `detectFormat`tan once aranir.
+ * @returns {'gkk'|'ilkonay'|null}
+ */
+export function detectForm(parsed) {
+  if (findGkkHeader(parsed)) return 'gkk';
+  if (findApprovalHeader(parsed)) return 'ilkonay';
+  return null;
 }
 
 /** @returns {'isemri'|'siparis'|null} */
@@ -222,15 +235,26 @@ function importSiparis(db, parsed, ctx) {
  * @param {Buffer} buffer
  * @param {{filename?: string|null, by?: string|null, keepOld?: boolean, now?: number}} [opts]
  */
-export function importCsv(db, buffer, { filename = null, by = null, keepOld = false, now = Date.now() } = {}) {
+export function importCsv(db, buffer, { filename = null, by = null, keepOld = false, now = Date.now(), quality = null } = {}) {
   if (!buffer || buffer.length === 0) throw new ImportError('Dosya boş.');
   const { text, encoding } = decodeCsv(buffer);
   const parsed = parseCsv(text);
   if (parsed.headers.length === 0) throw new ImportError('Dosyada başlık satırı bulunamadı.');
+
+  const form = quality ? detectForm(parsed) : null;
+  if (form) {
+    const warnings = new Warnings();
+    const batchId = db.beginBatch(form, { filename, by, now });
+    const ctx = { warn: (m) => warnings.add(m), now, by };
+    const result = form === 'gkk' ? quality.importGkk(parsed, ctx) : quality.importApprovals(parsed, ctx);
+    db.finishBatch(batchId, { totalRows: result.totalRows, added: result.added, updated: result.updated, unchanged: result.unchanged, skipped: result.skipped, warnings: warnings.list() });
+    return { format: form, encoding, delimiter: parsed.delimiter, batchId, ...result, warnings: warnings.list() };
+  }
+
   const format = detectFormat(parsed.headers);
   if (!format) {
     throw new ImportError(
-      'Dosya tanınmadı. Beklenen: iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıkları) ya da sipariş dosyası (Mamul_Kodu, Evrak_No … başlıkları). ' +
+      'Dosya tanınmadı. Beklenen: iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıkları), sipariş dosyası (Mamul_Kodu, Evrak_No … başlıkları), GKK rapor numaraları (EYS.FR.011: RAPOR NO, ÜRETİCİ RAPOR TARİHİ) ya da ilk baskı onay listesi (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU). ' +
       `Bulunan ilk başlıklar: ${parsed.headers.slice(0, 6).join(', ')}`,
     );
   }

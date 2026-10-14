@@ -58,11 +58,10 @@ test('admin: program kutuphanesi, tezgah programlari/klasorleri, aktarim, ayarla
     ['POST', '/api/machines/CNC-01/programs/import-plan'], ['GET', '/api/machines/CNC-01/programs/import-plan/abc123'],
     ['GET', '/api/machines/CNC-01/programs/import-plan/abc123/diff'], ['POST', '/api/machines/CNC-01/programs/import-apply'],
     ['POST', '/api/machines/CNC-01/programs/delete-precheck'], ['POST', '/api/machines/CNC-01/programs/delete'],
-    // planlama (urun kartlari, siparisler, program eslemesi): yalniz yonetici
+    // planlama (urun kartlari, siparisler): yalniz yonetici (program eslemesi 0.17.2'den beri operatore de acik, asagidaki operator testine bakin)
     ['GET', '/api/planning/products'], ['POST', '/api/planning/products'],
     ['GET', '/api/planning/products/SR001.013'], ['PUT', '/api/planning/products/SR001.013'], ['POST', '/api/planning/import'],
-    ['GET', '/api/planning/orders'], ['GET', '/api/planning/orders/lines'], ['GET', '/api/planning/programs'],
-    ['PUT', '/api/planning/programs/map'], ['DELETE', '/api/planning/programs/map'], ['POST', '/api/planning/programs/confirm-exact'],
+    ['GET', '/api/planning/orders'], ['GET', '/api/planning/orders/lines'],
     ['POST', '/api/planning/work-orders'], ['GET', '/api/planning/work-orders/next'],
     ['PUT', '/api/planning/work-orders/sequence'], ['PUT', '/api/planning/work-orders/2026001055'],
     ['POST', '/api/planning/work-orders/2026001055/cancel'], ['POST', '/api/planning/work-orders/2026001055/reopen'],
@@ -75,17 +74,41 @@ test('admin: program kutuphanesi, tezgah programlari/klasorleri, aktarim, ayarla
   for (const [m, p] of adminUclar) assert.equal(K(m, p), 'admin', `${m} ${p}`);
 });
 
-test('operator: fabrika PC\'sinin ortak hesabi YALNIZ is emri baslat/bitir, durus nedeni ve okuma uclarini kullanir', () => {
-  const operatorUclar = [
+test('planlama: izleyicinin (viewer) de okuyabildigi uclar YALNIZ GET ve tek bir listede', () => {
+  const viewerUclar = [
     ['GET', '/api/planning/summary'], ['GET', '/api/planning/work-orders'], ['GET', '/api/planning/work-orders/2026001055'],
-    ['POST', '/api/planning/work-orders/2026001055/start'], ['POST', '/api/planning/work-orders/2026001055/finish'],
     ['GET', '/api/planning/downtime-codes'], ['GET', '/api/planning/shop/overview'], ['GET', '/api/planning/shop/stops'],
+    ['GET', '/api/planning/crates'], ['GET', '/api/planning/crates/7'], ['GET', '/api/planning/crates/7/sheet'],
+    ['GET', '/api/planning/work-orders/2026001055/measurements'], ['GET', '/api/planning/work-orders/2026001055/measure-report'],
+    ['GET', '/api/planning/work-orders/2026001055/drawings.pdf'], ['GET', '/api/planning/work-orders/2026001055/print.pdf'], ['GET', '/api/planning/measure-reports'],
+    ['GET', '/api/planning/gkk'], ['GET', '/api/planning/first-approvals'],
+  ];
+  for (const [m, p] of viewerUclar) assert.equal(K(m, p), 'viewer', `${m} ${p}`);
+  // ayni yollarda YAZMA yontemleri viewer'a (ve cogu operatore) ACILMAZ
+  for (const [m, p] of [
+    ['POST', '/api/planning/gkk'], ['PUT', '/api/planning/gkk/5'], ['DELETE', '/api/planning/gkk/5'], ['PUT', '/api/planning/gkk/sequence'],
+    ['PUT', '/api/planning/first-approvals/5'], ['DELETE', '/api/planning/first-approvals/5'], ['PUT', '/api/planning/first-approvals/sequence'],
+    ['POST', '/api/planning/work-orders/2026001055/drawings'], ['DELETE', '/api/planning/work-orders/2026001055/drawings/3'],
+    ['PUT', '/api/planning/products/SR001.013/measure-plan'], ['DELETE', '/api/planning/work-orders/2026001055'],
+    // benzer ama farkli yol: viewer'a acilmaz
+    ['GET', '/api/planning/gkk/5'], ['GET', '/api/planning/gkk/sequence'], ['GET', '/api/planning/first-approvals/5'], ['GET', '/api/planning/work-orders/123'],
+    ['GET', '/api/planning/work-orders/2026001055/drawings'], ['GET', '/api/planning/work-orders/2026001055/drawings.pdf/x'], ['GET', '/api/planning/work-orders/2026001055/print.pdf/x'], ['POST', '/api/planning/work-orders/2026001055/print.pdf'], ['GET', '/api/planning/measure-reports/1'],
+  ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
+});
+
+test('operator: fabrika PC\'sinin ortak hesabi YALNIZ is emri baslat/bitir, durus nedeni, kart/olcu yazma uclarini ve ilk onay numarasi almayi kullanir', () => {
+  const operatorUclar = [
+    ['POST', '/api/planning/work-orders/2026001055/start'], ['POST', '/api/planning/work-orders/2026001055/finish'],
     ['POST', '/api/planning/shop/downtime-reasons'], ['DELETE', '/api/planning/shop/downtime-reasons/17'],
-    ['GET', '/api/planning/crates'], ['GET', '/api/planning/crates/7'], ['POST', '/api/planning/work-orders/2026001055/crates'],
+    ['POST', '/api/planning/work-orders/2026001055/crates'],
     ['POST', '/api/planning/work-orders/2026001055/cards'], ['POST', '/api/planning/work-orders/2026001055/fields'],
-    ['GET', '/api/planning/work-orders/2026001055/measurements'], ['PUT', '/api/planning/work-orders/2026001055/measure-plan'],
-    ['POST', '/api/planning/work-orders/2026001055/measurements'], ['GET', '/api/planning/crates/7/sheet'],
+    ['PUT', '/api/planning/work-orders/2026001055/measure-plan'],
+    ['POST', '/api/planning/work-orders/2026001055/measurements'],
     ['POST', '/api/planning/crates/7/close'], ['POST', '/api/planning/crates/7/pack'], ['POST', '/api/planning/crates/7/void'],
+    ['POST', '/api/planning/first-approvals'],
+    // program eslemesi: okuma, dar urun aramasi, esle / kaldir / birebir onayla
+    ['GET', '/api/planning/programs'], ['GET', '/api/planning/programs/product-search'], ['PUT', '/api/planning/programs/map'],
+    ['DELETE', '/api/planning/programs/map'], ['POST', '/api/planning/programs/confirm-exact'],
   ];
   for (const [m, p] of operatorUclar) assert.equal(K(m, p), 'operator', `${m} ${p}`);
   // benzer ama farkli yontem / yol / numara bicimi operator'a ACILMAZ (varsayilan reddet: admin)
@@ -94,7 +117,8 @@ test('operator: fabrika PC\'sinin ortak hesabi YALNIZ is emri baslat/bitir, duru
     ['GET', '/api/planning/work-orders/123'], ['POST', '/api/planning/work-orders/2026001055/cancel'], ['POST', '/api/planning/work-orders/2026001055/reopen'],
     ['GET', '/api/planning/work-orders/2026001055/start'], ['PUT', '/api/planning/shop/downtime-reasons'], ['DELETE', '/api/planning/shop/downtime-reasons/abc'],
     ['GET', '/api/planning/shop/overview/x'], ['GET', '/api/planning/products'], ['GET', '/api/planning/orders'], ['POST', '/api/planning/import'],
-    ['GET', '/api/planning/programs'], ['GET', '/API/planning/summary'],
+    ['POST', '/api/planning/programs'], ['GET', '/api/planning/programs/map'], ['PUT', '/api/planning/programs/product-search'], ['GET', '/api/planning/programs/confirm-exact'],
+    ['GET', '/api/planning/programs/product-search/x'], ['GET', '/API/planning/summary'],
     // kasalar: kart numarasi sirasi tabani yalniz yonetici; benzer ama farkli yol/yontem acilmaz
     ['PUT', '/api/planning/crates/sequence'], ['GET', '/api/planning/crates/abc'], ['DELETE', '/api/planning/crates/7'], ['POST', '/api/planning/crates/7/reopen'],
     ['POST', '/api/planning/crates/7'], ['GET', '/api/planning/crates/7/close'], ['POST', '/api/planning/work-orders/123/crates'], ['POST', '/api/planning/work-orders/123/cards'], ['GET', '/api/planning/work-orders/123/measurements'], ['POST', '/api/planning/crates/7/sheet'], ['DELETE', '/api/planning/work-orders/2026001055/measurements'], ['GET', '/api/planning/work-orders/2026001055/cards'], ['PUT', '/api/planning/work-orders/2026001055/crates'],

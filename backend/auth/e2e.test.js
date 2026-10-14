@@ -218,9 +218,13 @@ test('viewer: yalniz izleme; kutuphane, ayarlar, tezgah programlari/klasorleri, 
     ['POST', `/api/machines/${id}/programs/import-plan`], ['GET', `/api/machines/${id}/programs/import-plan/abc123`],
     ['GET', `/api/machines/${id}/programs/import-plan/abc123/diff`], ['POST', `/api/machines/${id}/programs/import-apply`],
     ['POST', `/api/machines/${id}/programs/delete-precheck`], ['POST', `/api/machines/${id}/programs/delete`],
-    ['GET', '/api/planning/summary'], ['GET', '/api/planning/products'], ['POST', '/api/planning/products'], ['POST', '/api/planning/import'],
+    ['GET', '/api/planning/products'], ['POST', '/api/planning/products'], ['POST', '/api/planning/import'],
     ['GET', '/api/planning/orders'], ['GET', '/api/planning/programs'], ['PUT', '/api/planning/programs/map'],
-    ['GET', '/api/planning/work-orders'], ['POST', '/api/planning/work-orders'], ['PUT', '/api/planning/work-orders/2026001055'],
+    ['POST', '/api/planning/work-orders'], ['PUT', '/api/planning/work-orders/2026001055'],
+    // planlama yazma/yonetim: izleyici okur ama yazamaz; siparis/uretim raporlari/hammadde hic goremez
+    ['POST', '/api/planning/gkk'], ['PUT', '/api/planning/gkk/1'], ['DELETE', '/api/planning/gkk/1'], ['POST', '/api/planning/first-approvals'],
+    ['PUT', '/api/planning/first-approvals/1'], ['POST', '/api/planning/work-orders/2026001055/drawings'],
+    ['GET', '/api/planning/material/need'], ['GET', '/api/planning/efficiency'], ['GET', '/api/planning/downtime-report'],
   ];
   for (const [m, yol] of yasak) {
     const r = await istek(m, yol, { cerez: viewer, govde: m === 'GET' ? null : {} });
@@ -298,7 +302,7 @@ test('operator (fabrika PC\'sinin ortak hesabi): is emri baslat/bitir ve durus n
     ['GET', '/api/users'], ['POST', '/api/users'], ['GET', '/api/auth/audit'], ['GET', '/api/config'], ['PUT', '/api/config/machines'], ['GET', '/api/drivers'],
     ['GET', '/api/library/config'], ['GET', '/api/library/programs'], ['POST', '/api/transfers'], ['GET', '/api/machines/CNC-01/programs'],
     ['GET', '/api/planning/products'], ['POST', '/api/planning/products'], ['POST', '/api/planning/import'], ['GET', '/api/planning/orders'],
-    ['GET', '/api/planning/programs'], ['PUT', '/api/planning/programs/map'], ['POST', '/api/planning/work-orders'], ['GET', '/api/planning/work-orders/next'],
+    ['POST', '/api/planning/work-orders'], ['GET', '/api/planning/work-orders/next'],
     ['PUT', '/api/planning/work-orders/sequence'], ['PUT', `/api/planning/work-orders/${no}`], ['POST', `/api/planning/work-orders/${no}/cancel`], ['POST', `/api/planning/work-orders/${no}/reopen`],
     ['GET', '/api/planning/material/need'], ['GET', '/api/planning/material/consumption'], ['GET', '/api/planning/material/consumption.csv'], ['POST', '/api/planning/material/fis'],
     ['GET', '/api/planning/efficiency'], ['GET', '/api/planning/downtime-report'], ['GET', '/api/planning/efficiency.csv'],
@@ -307,19 +311,39 @@ test('operator (fabrika PC\'sinin ortak hesabi): is emri baslat/bitir ve durus n
     const r = await istek(m, yol, { cerez: op, govde: m === 'GET' ? null : {} });
     assert.equal(r.status, 403, `${m} ${yol} operator icin 403 olmali (geldi: ${r.status})`);
   }
+
+  // operatorun ACIK program esleme uclari: okuma, dar urun aramasi, esle (kendi basina 403 DEGIL); urun karti listesi ise kapali kalir
+  assert.equal((await istek('GET', '/api/planning/programs', { cerez: op })).status, 200);
+  const ara = await istek('GET', '/api/planning/programs/product-search?q=A', { cerez: op });
+  assert.equal(ara.status, 200, ara.text);
+  assert.ok(Array.isArray(ara.json.items));
+  assert.notEqual((await istek('PUT', '/api/planning/programs/map', { cerez: op, govde: { program: 'YOK-PROGRAM', stockCode: 'YOK.URUN' } })).status, 403, 'operator esleme yazabilir (urun yoksa 404, 403 degil)');
+  assert.equal((await istek('GET', '/api/planning/products', { cerez: op })).status, 403, 'urun karti listesi operatore kapali');
   assert.deepEqual((await istek('GET', '/api/health', { cerez: op })).json, { ok: true }, 'operator saglik ayrintisini gormez');
 
-  // viewer (izleyici) operator uclarini kullanamaz; anonim 401
+  // viewer (izleyici) planlamada YALNIZ OKUR: yazan operator uclarini kullanamaz (403); anonim hicbirini goremez (401)
   for (const [m, yol] of [
-    ['GET', '/api/planning/downtime-codes'], ['GET', '/api/planning/shop/overview'], ['GET', '/api/planning/shop/stops?machine=CNC-01'], ['POST', '/api/planning/shop/downtime-reasons'],
+    ['POST', '/api/planning/shop/downtime-reasons'],
     ['POST', `/api/planning/work-orders/${no}/start`], ['POST', `/api/planning/work-orders/${no}/finish`],
-    ['GET', '/api/planning/crates'], ['POST', `/api/planning/work-orders/${no}/crates`], ['POST', `/api/planning/work-orders/${no}/cards`], ['POST', `/api/planning/work-orders/${no}/fields`],
-    ['GET', `/api/planning/work-orders/${no}/measurements`], ['PUT', `/api/planning/work-orders/${no}/measure-plan`], ['POST', `/api/planning/work-orders/${no}/measurements`], ['GET', '/api/planning/crates/1/sheet'],
-    ['POST', '/api/planning/crates/1/close'], ['POST', '/api/planning/crates/1/pack'],
+    ['POST', `/api/planning/work-orders/${no}/crates`], ['POST', `/api/planning/work-orders/${no}/cards`], ['POST', `/api/planning/work-orders/${no}/fields`],
+    ['PUT', `/api/planning/work-orders/${no}/measure-plan`], ['POST', `/api/planning/work-orders/${no}/measurements`],
+    ['POST', '/api/planning/crates/1/close'], ['POST', '/api/planning/crates/1/pack'], ['POST', '/api/planning/first-approvals'],
   ]) {
     assert.equal((await istek(m, yol, { cerez: viewer, govde: m === 'GET' ? null : {} })).status, 403, `viewer: ${m} ${yol}`);
     assert.equal((await istek(m, yol, { govde: m === 'GET' ? null : {} })).status, 401, `anonim: ${m} ${yol}`);
   }
+  // okuma uclari izleyiciye ACIK (tezgah basi, is emirleri, olcu raporlari, GKK, ilk onay); IP gormez
+  for (const yol of [
+    '/api/planning/summary', '/api/planning/work-orders', `/api/planning/work-orders/${no}`, '/api/planning/downtime-codes', '/api/planning/shop/overview',
+    '/api/planning/shop/stops?machine=CNC-01', '/api/planning/crates', `/api/planning/work-orders/${no}/measurements`, `/api/planning/crates/${kartBas.json.id}/sheet`,
+    '/api/planning/gkk', '/api/planning/first-approvals', '/api/planning/measure-reports', `/api/planning/work-orders/${no}/measure-report`,
+  ]) {
+    const r = await istek('GET', yol, { cerez: viewer });
+    assert.equal(r.status, 200, `viewer: GET ${yol} (geldi: ${r.status} ${r.text.slice(0, 100)})`);
+    assert.ok(!r.text.includes('192.168.88.'), `${yol}: viewer tezgah IP'si gormez`);
+    assert.equal((await istek('GET', yol)).status, 401, `anonim: GET ${yol}`);
+  }
+  assert.equal((await istek('GET', `/api/planning/work-orders/${no}/drawings.pdf`, { cerez: viewer })).status, 404, 'cizim yoksa 404 (yetki var)');
 
   // sonraki testler (CSRF: hesap sayisi) etkilenmesin
   assert.equal((await istek('DELETE', `/api/users/${olustur.json.user.id}`, { cerez: admin })).status, 200);

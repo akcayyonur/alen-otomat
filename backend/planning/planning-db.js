@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS products (
   gross_kg      REAL,
   planned_sec   REAL,
   note          TEXT,
+  measure_plan  TEXT,
+  measure_plan_at INTEGER,
   source        TEXT    NOT NULL,
   edited        INTEGER NOT NULL DEFAULT 0,
   search_key    TEXT    NOT NULL DEFAULT '',
@@ -184,6 +186,8 @@ CREATE INDEX IF NOT EXISTS idx_downtime_reasons_machine ON downtime_reasons (mac
 
 -- Kasalar (Urun Tanitim Karti, K asamasi): makineden cikan urun kasaya dolar, her kasaya sistemin bastigi bir kart konur. Dolarken adet BILINMEZ:
 -- kasa acilirken / kapanirken tezgahin parca sayaci kaydedilir (sayilan adet = telemetri tahmini), kesin adet paketlemede girilir (packed_qty).
+-- wash_* / dry_* / anneal_*: kartta isaretlenen islemler (karti basarken usta tikler): yikamaya gidecek / yikandi, kurutmaya gidecek / kurutuldu, tavlamaya gidecek / tavlandi (0/1).
+-- reject: kartta "URUN RET" tiki (0/1). Ret edilen kasa PAKETLEMEYE GITMEZ (tekrar isleme ya da hurdaya ayrilir): durumu 'ret', paketleme listesine dusmez.
 CREATE TABLE IF NOT EXISTS crates (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   seq           INTEGER NOT NULL UNIQUE,
@@ -206,7 +210,14 @@ CREATE TABLE IF NOT EXISTS crates (
   note          TEXT,
   voided_at     INTEGER,
   voided_by     TEXT,
-  void_reason   TEXT
+  void_reason   TEXT,
+  wash_to       INTEGER NOT NULL DEFAULT 0,
+  wash_done     INTEGER NOT NULL DEFAULT 0,
+  dry_to        INTEGER NOT NULL DEFAULT 0,
+  dry_done      INTEGER NOT NULL DEFAULT 0,
+  anneal_to     INTEGER NOT NULL DEFAULT 0,
+  anneal_done   INTEGER NOT NULL DEFAULT 0,
+  reject        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_crates_wo ON crates (wo_no);
 
@@ -236,6 +247,8 @@ CREATE TABLE IF NOT EXISTS seq_floor (
 `;
 
 /** LIKE ozel karakterlerini kacirir (kullanici metni desen olmasin). */
+import { CRATE_STEP_COLUMNS } from './card-steps.js';
+
 const likeEscape = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 const productOut = (r) => (r == null ? null : {
@@ -250,6 +263,8 @@ const productOut = (r) => (r == null ? null : {
   grossKg: r.gross_kg,
   plannedSec: r.planned_sec,
   note: r.note,
+  measurePlan: r.measure_plan ? JSON.parse(r.measure_plan) : [],
+  measurePlanAt: r.measure_plan_at == null ? null : Number(r.measure_plan_at),
   source: r.source,
   edited: r.edited === 1,
   createdAt: Number(r.created_at),
@@ -281,6 +296,34 @@ export class PlanningDb {
       ['measure_plan', 'TEXT'], ['measure_plan_at', 'INTEGER'],
     ];
     for (const [name, type] of add) if (!have.has(name)) this.db.exec(`ALTER TABLE work_orders ADD COLUMN ${name} ${type}`);
+
+    // urun karti: kalici olcu plani (her urunun olculeri farklidir; 3 olcu ya da 5 olcu olabilir)
+    const haveP = new Set(this.db.prepare('PRAGMA table_info(products)').all().map((c) => c.name));
+    for (const [name, type] of [['measure_plan', 'TEXT'], ['measure_plan_at', 'INTEGER']]) if (!haveP.has(name)) this.db.exec(`ALTER TABLE products ADD COLUMN ${name} ${type}`);
+
+    // kasa/kart: yikama, kurutma, tavlama isaretleri (eski veritabanlari bos = hicbiri isaretli degil)
+    const haveC = new Set(this.db.prepare('PRAGMA table_info(crates)').all().map((c) => c.name));
+    for (const name of [...CRATE_STEP_COLUMNS, 'reject']) if (!haveC.has(name)) this.db.exec(`ALTER TABLE crates ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  /** Urun kartinin olcu plani (JSON metni) ve zamani; yeni is emrine kopyalanir (is emrinin plani daha yeniyse o). */
+  setProductMeasurePlan(codeKey, planJson, now = Date.now()) {
+    this.db.prepare('UPDATE products SET measure_plan = ?, measure_plan_at = ? WHERE code_key = ?').run(planJson, now, codeKey);
+  }
+
+  /**
+   * Olcu kontrolu olan is emirleri (en son olcum ustte): olcum girilmis sutun sayisi ve son olcum zamani.
+   * @returns {{total: number, items: {no: string, columns: number, lastAt: number}[]}}
+   */
+  measureReportRows({ q = '', limit = 50, offset = 0 } = {}) {
+    const key = foldTr(q);
+    const where = key === '' ? '' : "WHERE w.search_key LIKE ? ESCAPE '\\'";
+    const args = key === '' ? [] : [`%${likeEscape(key)}%`];
+    const from = `FROM (SELECT wo_no, COUNT(DISTINCT slot) AS cols, MAX(measured_at) AS last_at FROM measurements GROUP BY wo_no) m JOIN work_orders w ON w.no = m.wo_no ${where}`;
+    const total = Number(this.db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...args).n);
+    const items = this.db.prepare(`SELECT w.no, m.cols, m.last_at ${from} ORDER BY m.last_at DESC LIMIT ? OFFSET ?`).all(...args, limit, offset)
+      .map((r) => ({ no: r.no, columns: Number(r.cols), lastAt: Number(r.last_at) }));
+    return { total, items };
   }
 
   /* ------------------------------------------------------------ olcu kontrolu */
@@ -518,13 +561,15 @@ export class PlanningDb {
   #crateOut(r) {
     if (r == null) return null;
     const n = (v) => (v == null ? null : Number(v));
-    const state = r.voided_at != null ? 'iptal' : r.closed_at == null ? 'acik' : r.packed_qty == null ? 'kapali' : 'paketlendi';
+    const state = r.voided_at != null ? 'iptal' : r.closed_at == null ? 'acik' : r.reject ? 'ret' : r.packed_qty == null ? 'kapali' : 'paketlendi';
     return {
       id: Number(r.id), seq: Number(r.seq), cardNo: `K${String(r.seq).padStart(6, '0')}`, state, woNo: r.wo_no, machineId: r.machine_id,
       openedAt: Number(r.opened_at), openedBy: r.opened_by, openedPerson: r.opened_person, startTotal: n(r.start_total),
       closedAt: n(r.closed_at), closedBy: r.closed_by, closedPerson: r.closed_person, endTotal: n(r.end_total), countedQty: n(r.counted_qty), approxQty: n(r.approx_qty),
       packedQty: n(r.packed_qty), packedAt: n(r.packed_at), packedBy: r.packed_by, packedPerson: r.packed_person, note: r.note,
       voidedAt: n(r.voided_at), voidedBy: r.voided_by, voidReason: r.void_reason,
+      reject: !!r.reject,
+      steps: { washTo: !!r.wash_to, washDone: !!r.wash_done, dryTo: !!r.dry_to, dryDone: !!r.dry_done, annealTo: !!r.anneal_to, annealDone: !!r.anneal_done },
       // kartta gorunen is emri bilgileri (is emrinin kopya degerleri)
       stockCode: r.stock_code ?? null, productName: r.product_name ?? null, customerCode: r.customer_code ?? null, gkkReportNo: r.gkk_report_no ?? null,
       targetQty: r.target_qty == null ? null : Number(r.target_qty),
@@ -550,7 +595,7 @@ export class PlanningDb {
 
   /**
    * @param {{woNo?: string, machineId?: string, state?: string, limit?: number, offset?: number}} [f]
-   *   state: 'acik' | 'kapali' (kapanmis, paketlenmemis) | 'paketlendi' | 'iptal' | 'aktif' (iptal haric, varsayilan) | 'tumu'
+   *   state: 'acik' | 'kapali' (kapanmis, paketleme bekleyen; RET olanlar HARIC) | 'paketlendi' | 'ret' (kartta ret tikli, paketlemeye gitmez) | 'iptal' | 'aktif' (iptal haric, varsayilan) | 'tumu'
    */
   listCrates({ woNo = '', machineId = '', state = 'aktif', limit = 100, offset = 0 } = {}) {
     const conds = [];
@@ -558,7 +603,8 @@ export class PlanningDb {
     if (woNo !== '') { conds.push('c.wo_no = ?'); args.push(woNo); }
     if (machineId !== '') { conds.push('c.machine_id = ?'); args.push(machineId); }
     if (state === 'acik') conds.push('c.closed_at IS NULL AND c.voided_at IS NULL');
-    else if (state === 'kapali') conds.push('c.closed_at IS NOT NULL AND c.packed_qty IS NULL AND c.voided_at IS NULL');
+    else if (state === 'kapali') conds.push('c.closed_at IS NOT NULL AND c.packed_qty IS NULL AND c.voided_at IS NULL AND c.reject = 0');
+    else if (state === 'ret') conds.push('c.reject = 1 AND c.voided_at IS NULL');
     else if (state === 'paketlendi') conds.push('c.packed_qty IS NOT NULL AND c.voided_at IS NULL');
     else if (state === 'iptal') conds.push('c.voided_at IS NOT NULL');
     else if (state === 'aktif') conds.push('c.voided_at IS NULL');

@@ -94,9 +94,9 @@ function openProductPicker(program, onPick) {
     const text = q.value.trim();
     if (text === '') { res.innerHTML = '<p class="empty">Aramaya başlayın.</p>'; return; }
     try {
-      const r = await api(`/api/planning/products?${new URLSearchParams({ q: text, limit: 30 })}`);
+      const r = await api(`/api/planning/programs/product-search?${new URLSearchParams({ q: text, limit: 30 })}`);
       if (my !== seq) return;
-      res.innerHTML = r.items.length === 0 ? '<p class="empty">Eşleşen ürün yok. Önce Ürünler sekmesinden kartı açın.</p>' :
+      res.innerHTML = r.items.length === 0 ? '<p class="empty">Eşleşen ürün yok. Ürün kartı açılmamışsa yöneticiye bildirin.</p>' :
         '<table class="tbl"><tbody>' + r.items.map((p) =>
           `<tr class="pl-row" data-code="${escapeHtml(p.stockCode)}" tabindex="0"><td class="mono"><b>${escapeHtml(p.stockCode)}</b></td><td>${cellText(p.name)}</td>` +
           `<td class="mono">${cellText(p.customerCode)}</td></tr>`).join('') + '</tbody></table>' +

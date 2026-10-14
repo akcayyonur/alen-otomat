@@ -61,7 +61,7 @@ test('kart bas: tek adimda kapali kasa; sayilan adet onceki karttan beri; sayac 
   assert.deepEqual([k2.openedAt, k2.closedAt, k2.startTotal, k2.endTotal, k2.countedQty], [day(9), day(9, 50), 503, 505, 2], 'ikinci kart: ilk kartin bitisinden; sayac zinciri 503 -> 505');
 
   const g = p.getWorkOrder(w.no, { now: NOW });
-  assert.deepEqual(g.crates.totals, { count: 2, open: false, unpacked: 2, counted: 5, packed: 0, unassigned: 0 });
+  assert.deepEqual(g.crates.totals, { count: 2, open: false, unpacked: 2, rejected: 0, rejectedCounted: 0, counted: 5, packed: 0, unassigned: 0 });
   assert.equal(p.shopOverview({ now: NOW }).packing.waiting, 2);
   const ev1 = g.events.filter((e) => e.kind === 'kart-basildi');
   assert.equal(ev1.length, 2);

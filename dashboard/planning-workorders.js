@@ -9,13 +9,16 @@ import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
   put, cellText, fmtNum, dateText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip,
-  rawMaterial, plannedHours, isoDate, fmtDec, woStatusChip,
+  rawMaterial, plannedHours, isoDate, fmtDec, woStatusChip, isAdminRole,
 } from './planning-common.js';
 import { openWorkOrderForm } from './planning-wo-form.js';
 import { openProductDialog } from './planning-products.js';
 import { progressHtml, openStartDialog, openFinishDialog } from './planning-production.js';
 import { cratesHtml, openCrateCard, openIssueCard } from './planning-card.js';
-import { openMeasureDialog, openMeasureSheet } from './planning-measure.js';
+import { openMeasureDialog, openMeasureSheet, openMeasurePlanDialog } from './planning-measure.js';
+import { openGkkPicker } from './planning-gkk.js';
+import { createFirstApproval } from './planning-approvals.js';
+import { drawingsEditorHtml, wireDrawings } from './planning-drawings.js';
 import { materialPanelHtml } from './planning-material.js';
 import { openFormDialog } from './auth-view.js';
 
@@ -27,19 +30,26 @@ const EVENT_LABEL = Object.freeze({
   olusturuldu: 'oluşturuldu', guncellendi: 'güncellendi', iptal: 'iptal edildi', baslatildi: 'üretime başlatıldı', bitirildi: 'bitirildi', 'yeniden-acildi': 'üretime geri alındı',
   'kart-basildi': 'ürün tanıtım kartı basıldı', 'olcu-kontrol': 'ölçü kontrolü girildi', 'olcu-plani': 'ölçü planı güncellendi', 'kasa-acildi': 'kasa açıldı', 'kasa-kapandi': 'kasa kapandı', 'kasa-paketlendi': 'kasa paketlendi', 'kasa-iptal': 'kasa iptal edildi',
   'fis-girildi': 'Mikro fişi girildi', 'fis-geri-alindi': 'Mikro fişi işareti geri alındı',
+  'cizim-eklendi': 'teknik resim eklendi', 'cizim-silindi': 'teknik resim kaldırıldı',
 });
+
+/** Ölçü satırlarının tek satırlık özeti ("3 ölçü: Ø34,2 · Boy 14 · Ø30,8"). */
+const planSummary = (w) => (w.measurePlan?.length
+  ? `${w.measurePlan.length} ölçü: ${escapeHtml(w.measurePlan.map((r) => r.label).join(' · '))}`
+  : 'Ölçü satırları tanımlı değil. Ürüne göre 3, 5 ... ölçü tanımlanır; tanımlanınca Tezgah başında saatlik ölçüm girilir.');
 const decInput = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
 
 /* ============================================================ liste */
 
 /** @param {HTMLElement} host */
 export async function renderWorkOrders(host) {
+  const canEdit = isAdminRole(); // izleyici (viewer) yalniz listeyi ve formu gorur
   const st = { q: '', status: 'aktif', machine: '', items: [], total: 0, seq: 0, machines: [] };
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="İş emri no, ürün, müşteri sipariş no ara…" aria-label="İş emri ara">' +
     '<label class="fld-inline">Durum <select data-role="status"><option value="aktif">Aktif (planlandı + üretimde)</option><option value="uretimde">Üretimde</option><option value="planlandi">Planlandı</option><option value="bitti">Biten</option><option value="iptal">İptal edilenler</option><option value="tumu">Tümü</option></select></label>' +
     '<label class="fld-inline">Tezgah <select data-role="machine"><option value="">Tümü</option></select></label>' +
-    '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni iş emri</button></div>' +
+    (canEdit ? '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni iş emri</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>' +
     '<p class="pl-more" data-role="more" hidden><button type="button" class="icon-btn" data-act="more">Daha fazla göster</button></p>';
@@ -47,11 +57,11 @@ export async function renderWorkOrders(host) {
 
   function draw() {
     $('count').textContent = st.total === 0
-      ? (st.q || st.machine || st.status !== 'aktif' ? 'Eşleşen iş emri yok.' : 'Henüz iş emri yok. "Yeni iş emri" ile siparişten bir ürün seçip oluşturun (ya da Siparişler sekmesindeki satırdan).')
+      ? (st.q || st.machine || st.status !== 'aktif' ? 'Eşleşen iş emri yok.' : `Henüz iş emri yok.${canEdit ? ' "Yeni iş emri" ile siparişten bir ürün seçip oluşturun (ya da Siparişler sekmesindeki satırdan).' : ''}`)
       : `${fmtNum(st.total)} iş emri${st.items.length < st.total ? ` (ilk ${fmtNum(st.items.length)} gösteriliyor)` : ''}`;
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>İş emri no</th><th>Ürün</th><th>Müşteri sip. no</th><th>Tezgah</th>' +
-      '<th class="num">Hedef</th><th class="num">Üretilen</th><th>Termin</th><th>Durum</th><th></th></tr></thead><tbody>' +
+      '<th class="num">Hedef</th><th class="num">Üretilen</th><th>Termin</th><th>Durum</th>' + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>' +
       st.items.map((w) => {
         const no = escapeHtml(w.no);
         const btn = (act, label) => `<button type="button" class="icon-btn icon-btn-sm" data-act="${act}" data-no="${no}">${label}</button> `;
@@ -61,7 +71,7 @@ export async function renderWorkOrders(host) {
           `<td class="mono">${w.machineId ? escapeHtml(w.machineId) : '<span class="is-null" title="Tezgah başlatırken seçilir">atanmadı</span>'}</td><td class="num">${fmtNum(w.targetQty)}</td>` +
           `<td class="num">${w.produced == null ? cellText(null) : `${fmtNum(w.produced)} <small class="hint">%${fmtDec(w.pct ?? 0, 0)}</small>`}</td>` +
           `<td>${dateText(w.dueDate)}</td><td>${woStatusChip(w.status)}</td>` +
-          `<td class="nowrap">${w.status === 'planlandi' ? btn('start', 'Başlat') : ''}${w.status === 'uretimde' ? btn('finish', 'Bitir') : ''}${btn('form', 'Form')}</td></tr>`;
+          (canEdit ? `<td class="nowrap">${w.status === 'planlandi' ? btn('start', 'Başlat') : ''}${w.status === 'uretimde' ? btn('finish', 'Bitir') : ''}${btn('edit', 'Düzenle')}</td></tr>` : '</tr>');
       }).join('') +
       '</tbody></table>';
     $('more').hidden = st.items.length >= st.total;
@@ -93,11 +103,13 @@ export async function renderWorkOrders(host) {
     if (role === 'status') { st.status = ev.target.value; load(true); }
     else if (role === 'machine') { st.machine = ev.target.value; load(true); }
   };
+  // Satıra basınca FORM açılır (arka sayfada teknik resimler); "Düzenle" düğmesi (yönetici) iş emrini düzenler.
+  const edit = (no) => openWorkOrderDialog(no, () => load(true));
   const open = (ev) => {
-    const form = ev.target.closest?.('[data-act="form"]');
-    if (form) { ev.stopPropagation(); openWorkOrderForm(form.dataset.no); return true; }
+    const e = ev.target.closest?.('[data-act="edit"]');
+    if (e) { ev.stopPropagation(); edit(e.dataset.no); return true; }
     const row = ev.target.closest?.('.pl-row');
-    if (row) { openWorkOrderDialog(row.dataset.no, () => load(true)); return true; }
+    if (row) { openWorkOrderForm(row.dataset.no, canEdit ? { onEdit: () => edit(row.dataset.no) } : {}); return true; }
     return false;
   };
   host.onclick = (ev) => {
@@ -283,7 +295,7 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
       `<div class="notice"><b>İş emri oluşturuldu: <span class="mono">${escapeHtml(w.no)}</span></b> · ${escapeHtml(w.stockCode)} · ${fmtNum(w.targetQty)} adet · ${w.machineId ? escapeHtml(w.machineId) : 'tezgah atanmadı (başlatırken seçilir)'}</div>` +
       (w.warnings?.length ? `<ul class="checks">${w.warnings.map((x) => `<li class="check check-warn"><span class="check-ic" aria-hidden="true">▲</span><div>${escapeHtml(x)}</div></li>`).join('')}</ul>` : '') +
       '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="open-form">Formu aç / yazdır</button><button type="button" class="icon-btn" data-act="close">Kapat</button></div>';
-    m.body.querySelector('[data-act="open-form"]').addEventListener('click', () => { m.close(); openWorkOrderForm(w.no); });
+    m.body.querySelector('[data-act="open-form"]').addEventListener('click', () => { m.close(); openWorkOrderForm(w.no, { onEdit: () => openWorkOrderDialog(w.no, onDone) }); });
   }
 
   /* ---- olaylar ---- */
@@ -348,8 +360,10 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       `<label class="fld"><span>Tezgah</span><select name="machineId"${lockMachine ? ' disabled' : ''}>${machineOptions(meta.machines, w.machineId ?? '', '— atanmadı —')}</select></label>` +
       input('sampleQty', 'Numune adedi', w.sampleQty, ' inputmode="numeric"') +
       input('usedMaterial', 'Kullanılan hammadde (gerçek)', w.usedMaterial ?? '', ' maxlength="80"') +
-      input('gkkReportNo', 'GKK rapor no', w.gkkReportNo ?? '', ' maxlength="40"') +
-      input('firstApprovalNo', 'İlk onay rapor no', w.firstApprovalNo ?? '', ' maxlength="40"') +
+      `<label class="fld"><span>GKK rapor no</span><span class="fld-row"><input name="gkkReportNo" value="${escapeHtml(w.gkkReportNo ?? '')}" maxlength="40" autocomplete="off"${dis}>` +
+      `<button type="button" class="icon-btn icon-btn-sm" data-act="gkk-pick"${dis} title="Hammaddeye uyan GK numaralarını listeler">Listeden seç…</button></span></label>` +
+      `<label class="fld"><span>İlk onay rapor no</span><span class="fld-row"><input name="firstApprovalNo" value="${escapeHtml(w.firstApprovalNo ?? '')}" maxlength="40" autocomplete="off"${dis}>` +
+      `<button type="button" class="icon-btn icon-btn-sm" data-act="approval-new"${dis} title="Sıradaki ilk onay numarasını verir ve bu alana yazar">Numara al…</button></span></label>` +
       input('measuredNetG', 'Ölçülen net gramaj (gram)', gramInput(w.measuredNetKg), ' inputmode="decimal"') +
       '</div><h4 class="sub">İş emrine özel ürün değerleri (açıldığı andaki kopya; buradan düzeltilebilir)</h4><div class="fld-grid">' +
       input('material', 'Hammadde', w.material ?? '', ' maxlength="80"') + input('altMaterial', 'Alternatif hammadde', w.altMaterial ?? '', ' maxlength="80"') +
@@ -357,8 +371,11 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       input('netG', 'Net ağırlık (gram)', gramInput(w.netKg), ' inputmode="decimal"') + input('grossG', 'Brüt ağırlık (gram)', gramInput(w.grossKg), ' inputmode="decimal"') +
       input('plannedSec', 'Planlanan çevrim (sn)', decInput(w.plannedSec), ' inputmode="decimal"') +
       '</div>' + input('note', 'Açıklama', w.note ?? '', ' maxlength="500"') +
+      `<section class="dr-box"><h4 class="sub">Ölçü satırları (ölçü kontrol föyü)</h4><p class="hint" data-role="plan-summary">${planSummary(w)}</p>` +
+      `<button type="button" class="icon-btn" data-act="measure-plan"${dis}>Ölçü satırlarını tanımla / düzenle…</button></section>` +
+      drawingsEditorHtml(w) +
       '<p class="notice notice-sim" data-role="err" hidden></p>' +
-      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="form">Form / yazdır</button>' +
+      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="form">Formu aç / yazdır</button>' +
       (w.status === 'planlandi' ? '<button type="button" class="icon-btn btn-primary" data-act="start">Üretime başlat…</button>' : '') +
       (w.status === 'uretimde' ? '<button type="button" class="icon-btn btn-primary" data-act="finish">Bitir…</button>' : '') +
       (w.status === 'bitti' ? '<button type="button" class="icon-btn" data-act="reopen-ask">Üretime geri al…</button>' : '') +
@@ -372,7 +389,18 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
     wire();
   }
 
+  /** Teknik resim bölümü: yükleme/kaldırma sonrası yalnız bölüm yeniden çizilir (formda yazılanlar silinmez). */
+  function onDrawings(list) {
+    w.drawings = list;
+    const sec = m.body.querySelector('[data-role="drawings"]');
+    if (!sec) return;
+    sec.outerHTML = drawingsEditorHtml(w);
+    wireDrawings(m.body, w, onDrawings);
+    onChanged();
+  }
+
   function wire() {
+    wireDrawings(m.body, w, onDrawings);
     const form = m.body.querySelector('form');
     const num = (v) => (String(v).trim() === '' ? null : Number(String(v).replace(/\./g, '').replace(',', '.')));
     form?.addEventListener('submit', async (ev) => {
@@ -425,6 +453,28 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
           onChanged();
           draw();
         },
+      });
+    }
+    else if (act === 'gkk-pick') {
+      const f = m.body.querySelector('form').elements;
+      openGkkPicker({
+        erpMaterial: f.usedMaterial.value.trim() || f.material.value.trim() || w.usedMaterial || w.material || '', stockCode: w.stockCode, current: f.gkkReportNo.value.trim(),
+        onPick: (no) => { f.gkkReportNo.value = no; },
+      });
+    }
+    else if (act === 'approval-new') {
+      const f = m.body.querySelector('form').elements;
+      createFirstApproval(w.no, (a) => { f.firstApprovalNo.value = a.code; w.firstApprovalNo = a.code; onChanged(); });
+    }
+    else if (act === 'measure-plan') {
+      openMeasurePlanDialog(w.no, async () => {
+        try {
+          const fresh = await api(`/api/planning/work-orders/${encodeURIComponent(w.no)}`);
+          w.measurePlan = fresh.measurePlan;
+          const el = m.body.querySelector('[data-role="plan-summary"]');
+          if (el) el.innerHTML = planSummary(w);
+        } catch { /* özet yenilenemedi: kayıt yapıldı */ }
+        onChanged();
       });
     }
     else if (act === 'cancel-ask') { m.body.querySelector('[data-role="cancel-box"]').hidden = false; m.body.querySelector('[name="reason"]').focus(); }

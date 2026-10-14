@@ -9,6 +9,24 @@ import { escapeHtml, stateOf } from './format.js';
 import { api, post } from './lib-common.js';
 import { cellText, fmtNum, dateTimeText, openModal, chip, fmtDec, rememberedPerson, rememberPerson, parseInput, gramToKg } from './planning-common.js';
 import { openIssueCard } from './planning-card.js';
+import { openGkkPicker } from './planning-gkk.js';
+import { createFirstApproval } from './planning-approvals.js';
+
+/** "Listeden seç…" düğmeli GKK alanı: ustalar hammaddenin GK numarasını takip formundan bulup yazar. */
+const gkkField = (value = '', label = 'GKK rapor no') =>
+  `<label class="fld"><span>${escapeHtml(label)}</span><span class="fld-row"><input name="gkkReportNo" value="${escapeHtml(value ?? '')}" maxlength="40" autocomplete="off">` +
+  '<button type="button" class="icon-btn icon-btn-sm" data-act="gkk-pick" title="Hammaddeye uyan GK numaralarını listeler">Listeden seç…</button></span></label>';
+
+/** GKK "Listeden seç…" düğmesini bağlar. @param {HTMLFormElement} form @param {object} w iş emri */
+function wireGkkPick(form, w) {
+  form.querySelector('[data-act="gkk-pick"]')?.addEventListener('click', () => {
+    const e = form.elements;
+    openGkkPicker({
+      erpMaterial: e.usedMaterial?.value.trim() || w.usedMaterial || w.material || '', stockCode: w.stockCode, current: e.gkkReportNo.value.trim(),
+      onPick: (no) => { e.gkkReportNo.value = no; },
+    });
+  });
+}
 
 const PROGRAM_CHIP = Object.freeze({
   esli: (p) => chip('ok', '✓', 'eşli'),
@@ -109,13 +127,14 @@ export async function openStartDialog(no, onDone = () => {}, { machineId = null 
     `<label class="fld"><span>Başlangıç zamanı</span><input name="startAt" type="datetime-local"><small class="hint">${nowLocalHint}</small></label>` +
     fld('person', 'Yapan kişi (isteğe bağlı)', ' maxlength="60"') +
     fld('usedMaterial', 'Kullanılan hammadde (gerçek)', ` maxlength="80" placeholder="${escapeHtml(w.material ?? '')}"`) +
-    fld('gkkReportNo', 'GKK rapor no (hammadde)', ' maxlength="40"') + fld('firstApprovalNo', 'İlk onay rapor no (boş bırakılabilir)', ' maxlength="40"') +
-    '</div><p class="hint">İlk onay rapor no ve ölçülen net gramaj ilk parça yapılıp ölçülünce belli olur: şimdi boş bırakın, sonra Tezgah başı ekranındaki <b>"İş emrini düzenle"</b> ile girin.</p>' +
+    gkkField(w.gkkReportNo ?? '', 'GKK rapor no (hammadde)') + fld('firstApprovalNo', 'İlk onay rapor no (boş bırakılabilir)', ' maxlength="40"') +
+    '</div><p class="hint">İlk onay rapor no ve ölçülen net gramaj ilk parça yapılıp ölçülünce belli olur: şimdi boş bırakın, sonra Tezgah başı ekranındaki <b>"İlk onay numarası al"</b> ya da <b>"İş emrini düzenle"</b> ile girin.</p>' +
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">Üretime başlat</button></div></form>';
   const form = m.body.querySelector('form');
   form.elements.person.value = rememberedPerson();
   form.elements.person.focus();
+  wireGkkPick(form, w);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const err = m.body.querySelector('[data-role="err"]');
@@ -225,15 +244,21 @@ export async function openEditFieldsDialog(no, onDone = () => {}) {
     `<p class="pl-wohead"><b class="mono">${escapeHtml(w.no)}</b> · ${escapeHtml(w.stockCode)} ${escapeHtml(w.productName ?? '')} · ${escapeHtml(w.machineId ?? '')}</p>` +
     '<p class="hint">İlk parça yapılıp ölçülünce <b>ilk onay rapor no</b> ve <b>ölçülen net gramaj</b> buradan girilir. Değişiklikler iş emri geçmişine yazılır.</p>' +
     '<form autocomplete="off"><div class="fld-grid">' +
-    fld('firstApprovalNo', 'İlk onay rapor no', w.firstApprovalNo, ' maxlength="40"') +
+    `<label class="fld"><span>İlk onay rapor no</span><span class="fld-row"><input name="firstApprovalNo" value="${escapeHtml(w.firstApprovalNo ?? '')}" maxlength="40" autocomplete="off">` +
+    '<button type="button" class="icon-btn icon-btn-sm" data-act="approval-new" title="Sıradaki ilk onay numarasını verir ve iş emrine yazar">Numara al…</button></span></label>' +
     fld('measuredNetG', 'Ölçülen net gramaj (gram)', gram(w.measuredNetKg), ' inputmode="decimal"') +
-    fld('gkkReportNo', 'GKK rapor no', w.gkkReportNo, ' maxlength="40"') +
+    gkkField(w.gkkReportNo ?? '') +
     fld('usedMaterial', 'Kullanılan hammadde (gerçek)', w.usedMaterial, ` maxlength="80" placeholder="${escapeHtml(w.material ?? '')}"`) +
     `<label class="fld pl-wide"><span>Açıklama</span><input name="note" maxlength="500" value="${escapeHtml(w.note ?? '')}"></label></div>` +
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">Kaydet</button></div></form>';
   const form = m.body.querySelector('form');
   form.elements.firstApprovalNo.focus();
+  wireGkkPick(form, w);
+  // Numara alınınca sunucu iş emrine yazar; alanı da doldur (kaydet'e basınca aynı değer gider)
+  form.querySelector('[data-act="approval-new"]').addEventListener('click', () => {
+    createFirstApproval(w.no, (a) => { form.elements.firstApprovalNo.value = a.code; w.firstApprovalNo = a.code; onDone(a); });
+  });
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const err = m.body.querySelector('[data-role="err"]');

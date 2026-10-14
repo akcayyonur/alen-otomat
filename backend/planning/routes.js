@@ -19,24 +19,35 @@
  *   GET  /api/planning/shop/overview                    fabrika PC'si ana ekrani: tezgah basina durum, uretimdeki is emri, bekleyenler, nedeni sorulmamis duruslar
  *   GET  /api/planning/shop/stops?machine=&hours=       bir tezgahin OLCULMUS duruslari ve baglanmis nedenleri
  *   POST /api/planning/shop/downtime-reasons            duruse neden bagla (JSON: machineId, from, to, code, note?, person?);  DELETE .../:id kaldir
- *   GET  /api/planning/crates?woNo=&machine=&state=     kasalar (Urun Tanitim Karti): state = aktif | acik | kapali (paketlenmemis) | paketlendi | iptal | tumu
+ *   GET  /api/planning/crates?woNo=&machine=&state=     kasalar (Urun Tanitim Karti): state = aktif | acik | kapali (paketleme bekleyen; ret HARIC) | paketlendi | ret (kartta ret tikli, paketlemeye gitmez) | iptal | tumu
  *   GET  /api/planning/crates/:id                       kasa + kart bilgileri;  POST .../:id/close {person?}  kapat;  .../:id/pack {qty, person?}  paketleme adedi;  .../:id/void {reason}  iptal
  *   POST /api/planning/work-orders/:no/fields {fields: {usedMaterial?, gkkReportNo?, firstApprovalNo?, measuredNetKg?, note?}} tezgah basindan duzenleme (operator + yonetici)
  *   GET  /api/planning/work-orders/:no/measurements  olcu kontrolu (plan + sutunlar);  PUT .../:no/measure-plan {rows: [{label, nominal?, lower?, upper?}]};  POST .../:no/measurements {slot?, values, checks, person?}  (operator + yonetici)
  *   GET  /api/planning/crates/:id/sheet             urun tanitim kartinin olcu kontrol foyu (kartin zaman araligindaki olcumler)
- *   POST /api/planning/work-orders/:no/cards {person?, gkkReportNo?} URUN TANITIM KARTI BAS (tek adim: kasa doldu; kart numarasini sistem verir, kasa kaydi kapali olusur);
+ *   POST /api/planning/work-orders/:no/cards {person?, gkkReportNo?, steps?, reject?} URUN TANITIM KARTI BAS (steps: yikama/kurutma/tavlama kutulari; reject: URUN RET tiki, ret kasa paketlemeye gitmez) (tek adim: kasa doldu; kart numarasini sistem verir, kasa kaydi kapali olusur);
  *   POST /api/planning/work-orders/:no/crates {person?} uretimdeki is emrinde yeni kasa ac (eski iki adimli akis; kart numarasini sistem verir);  PUT /api/planning/crates/sequence {last}: kart sirasi tabani (yonetici)
  *   GET  /api/planning/material/need                    hammadde IHTIYACI (planlanan + uretimdeki kalan adet; hammadde bazinda kg ve cubuk)
  *   GET  /api/planning/material/consumption?from=&to=&fis=   gerceklesen SARFIYAT (biten is emirleri; fis: bekleyen | girildi | tumu);  .../consumption.csv?...&view=is-emri|hammadde
  *   POST /api/planning/material/fis {orders[], docNo?, kg?, note?}   sarfiyat fisi Mikro'ya ELLE girildi isareti;  POST .../fis/undo {orders[]}  geri al
  *   GET  /api/planning/efficiency?from=&to=&machine=    verimlilik raporu (is emri x vardiya; yalniz yonetici);  .../efficiency.csv?...&view=gunluk|matris|urun|tezgah
  *   GET  /api/planning/downtime-report?from=&to=&machine=    durus raporu (neden kodu dakikalari, nedeni belirsiz);  .../downtime-report.csv?...&view=durus|durus-kod-gun
- *   GET  /api/planning/programs                         tornalarda gorulen programlar + esleme durumu
+ *   GET  /api/planning/programs                         tornalarda gorulen programlar + esleme durumu (operator + yonetici; esleme yazma uclari da)
+ *   GET  /api/planning/programs/product-search?q=&limit=  eslemede urun secmek icin DAR arama {total, items: [{stockCode, name, customerCode}]} (operator + yonetici; urun karti degil)
  *   PUT  /api/planning/programs/map                     {program, stockCode}: programi urune bagla
  *   DELETE /api/planning/programs/map?program=          eslemeyi kaldir
  *   POST /api/planning/programs/confirm-exact           stok koduyla birebir tutan onerilerin hepsini onayla
+ *   GET  /api/planning/gkk?q=&erpMaterial=&stockCode=   GKK rapor numaralari (EYS.FR.011; okuma: giris yapmis herkes); erpMaterial = is emrinin hammadde kodu -> eslesenler `matches`'te
+ *   POST /api/planning/gkk, PUT|DELETE .../gkk/:id, PUT .../gkk/sequence {last}   (yonetici)
+ *   GET  /api/planning/first-approvals?q=&year=         ilk onay raporlari / numune takip listesi (EYS.FR.013; okuma: herkes)
+ *   POST /api/planning/first-approvals {woNo, person?, again?}   usta tezgah basinda numara alir (operator + yonetici; elle kayit yoneticiye ozel); PUT|DELETE .../:id, PUT .../sequence (yonetici)
+ *   GET  /api/planning/work-orders/:no/drawings.pdf     is emrinin teknik resimleri TEK PDF'te birlesik (okuma: herkes)
+ *   GET  /api/planning/work-orders/:no/print.pdf        is emri FORMU (on sayfa) + teknik resimler (arka sayfalar) TEK PDF'te: ekranda gosterilen ve yazdirilan dosya (okuma: herkes)
+ *   POST /api/planning/work-orders/:no/drawings?name=   govde = ham PDF (yonetici);  DELETE .../drawings/:id
+ *   GET  /api/planning/measure-reports?q=               olcu raporlari listesi;  GET .../work-orders/:no/measure-report  is emrinin tum olcumleri
+ *   PUT  /api/planning/products/:kod/measure-plan {rows}   urun kartinin kalici olcu plani (yonetici)
  */
 import { PlanningError } from './planning.js';
+import { MAX_DRAWING_BYTES } from './quality.js';
 
 /** Excel, kullanilan alani bicimlendirilmis sayfalari yuz binlerce bos satirla disa aktarabilir: genis sinir. */
 const MAX_CSV_BYTES = 64 * 1024 * 1024;
@@ -188,7 +199,86 @@ export function createPlanningRoutes({ planning }) {
       /* ---- olcu kontrolu (EYS.FR.005): operator + yonetici ---- */
       if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measurements$/.exec(path))) return sendJson(res, 200, planning.getMeasurements(m[1])), true;
       if (method === 'PUT' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measure-plan$/.exec(path))) {
-        return sendJson(res, 200, planning.setMeasurePlan(m[1], (await readJson(req)).rows, { by: who(req) })), true;
+        const body = await readJson(req);
+        if (body.saveToProduct === true && req.user?.role === 'operator') throw new PlanningError('Ürün kartına yazmak yönetici işidir.', 403);
+        return sendJson(res, 200, planning.setMeasurePlan(m[1], body.rows, { by: who(req), saveToProduct: body.saveToProduct === true })), true;
+      }
+      /* ---- olcu raporlari (kalite kontrol ve paketlemeye giden raporlar): okuma herkese ---- */
+      if (method === 'GET' && path === '/api/planning/measure-reports') {
+        return sendJson(res, 200, planning.measureReports({ q: url.searchParams.get('q') ?? '', limit: intParam(url, 'limit', 50, { min: 1, max: 200 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }) })), true;
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measure-report$/.exec(path))) return sendJson(res, 200, planning.measureReport(m[1])), true;
+      if (method === 'PUT' && (m = /^\/api\/planning\/products\/([^/]+)\/measure-plan$/.exec(path))) {
+        return sendJson(res, 200, planning.setProductMeasurePlan(decodeURIComponent(m[1]), (await readJson(req)).rows)), true;
+      }
+
+      /* ---- teknik resimler (PDF): okuma herkese, yukleme/silme yonetici ---- */
+      if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/drawings\.pdf$/.exec(path))) {
+        const merged = planning.quality.mergedDrawings(m[1]);
+        if (!merged) throw new PlanningError('Bu iş emrinde teknik resim yok.', 404);
+        // Dashboard bu PDF'i ayni sitedeki bir cerceve (iframe) icinde gosterir: yalniz bu uc icin SAMEORIGIN
+        res.writeHead(200, {
+          'content-type': 'application/pdf', 'content-length': merged.buffer.length, 'cache-control': 'no-store',
+          'content-disposition': `inline; filename="cizimler-${m[1]}.pdf"`, 'x-frame-options': 'SAMEORIGIN',
+        });
+        res.end(merged.buffer);
+        return true;
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/print\.pdf$/.exec(path))) {
+        const buffer = planning.workOrderPrintPdf(m[1]);
+        res.writeHead(200, {
+          'content-type': 'application/pdf', 'content-length': buffer.length, 'cache-control': 'no-store',
+          'content-disposition': `inline; filename="is-emri-${m[1]}.pdf"`, 'x-frame-options': 'SAMEORIGIN',
+        });
+        res.end(buffer);
+        return true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/drawings$/.exec(path))) {
+        const data = await readBuffer(req, MAX_DRAWING_BYTES + 4096);
+        return sendJson(res, 201, { drawings: planning.quality.addDrawing(m[1], { name: url.searchParams.get('name'), data }, { by: who(req) }) }), true;
+      }
+      if (method === 'DELETE' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/drawings\/(\d{1,12})$/.exec(path))) {
+        return sendJson(res, 200, { drawings: planning.quality.deleteDrawing(m[1], Number(m[2]), { by: who(req) }) }), true;
+      }
+
+      /* ---- GKK rapor numaralari (EYS.FR.011) ---- */
+      if (path === '/api/planning/gkk') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.quality.listGkk({
+            q: url.searchParams.get('q') ?? '', erpMaterial: url.searchParams.get('erpMaterial') ?? '', stockCode: url.searchParams.get('stockCode') ?? '',
+            limit: intParam(url, 'limit', 300, { min: 1, max: 1000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') return sendJson(res, 201, planning.quality.createGkk(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'PUT' && path === '/api/planning/gkk/sequence') return sendJson(res, 200, planning.quality.setGkkSequence((await readJson(req)).last)), true;
+      if ((m = /^\/api\/planning\/gkk\/(\d{1,12})$/.exec(path))) {
+        if (method === 'PUT') return sendJson(res, 200, planning.quality.updateGkk(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.quality.deleteGkk(Number(m[1]))), true;
+      }
+
+      /* ---- ilk onay raporu / numune takip listesi (EYS.FR.013) ---- */
+      if (path === '/api/planning/first-approvals') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.quality.listApprovals({
+            q: url.searchParams.get('q') ?? '', year: intParam(url, 'year', 0, { max: 2200 }),
+            limit: intParam(url, 'limit', 200, { min: 1, max: 1000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') {
+          const body = await readJson(req);
+          // Operator yalniz bir is emrinden numara alabilir; alanlari kendisi yazamaz (elle kayit yoneticiye ozel)
+          if (req.user?.role === 'operator') {
+            const extra = Object.keys(body).filter((k) => !['woNo', 'person', 'again'].includes(k));
+            if (!body.woNo || extra.length > 0) throw new PlanningError('Operatör yalnız bir iş emrinden ilk onay numarası alabilir.', 403);
+          }
+          return sendJson(res, 201, planning.quality.createApproval(body, { by: who(req) })), true;
+        }
+      }
+      if (method === 'PUT' && path === '/api/planning/first-approvals/sequence') return sendJson(res, 200, planning.quality.setApprovalSequence((await readJson(req)).last)), true;
+      if ((m = /^\/api\/planning\/first-approvals\/(\d{1,12})$/.exec(path))) {
+        if (method === 'PUT') return sendJson(res, 200, planning.quality.updateApproval(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.quality.deleteApproval(Number(m[1]), { by: who(req) })), true;
       }
       if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measurements$/.exec(path))) {
         return sendJson(res, 200, planning.saveMeasurements(m[1], await readJson(req), { by: who(req) })), true;
@@ -223,7 +313,7 @@ export function createPlanningRoutes({ planning }) {
         const st = url.searchParams.get('state') ?? 'aktif';
         return sendJson(res, 200, planning.listCrates({
           woNo: url.searchParams.get('woNo') ?? '', machineId: url.searchParams.get('machine') ?? '',
-          state: ['aktif', 'acik', 'kapali', 'paketlendi', 'iptal', 'tumu'].includes(st) ? st : 'aktif',
+          state: ['aktif', 'acik', 'kapali', 'paketlendi', 'ret', 'iptal', 'tumu'].includes(st) ? st : 'aktif',
           limit: intParam(url, 'limit', 100, { min: 1, max: 500 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
         })), true;
       }
@@ -276,6 +366,10 @@ export function createPlanningRoutes({ planning }) {
 
       /* ---- program eslemesi ---- */
       if (method === 'GET' && path === '/api/planning/programs') return sendJson(res, 200, planning.listPrograms()), true;
+      if (method === 'GET' && path === '/api/planning/programs/product-search') {
+        const r = planning.listProducts({ q: url.searchParams.get('q') ?? '', limit: intParam(url, 'limit', 30, { min: 1, max: 50 }), offset: 0 });
+        return sendJson(res, 200, { total: r.total, items: r.items.map((x) => ({ stockCode: x.stockCode, name: x.name, customerCode: x.customerCode })) }), true;
+      }
       if (method === 'PUT' && path === '/api/planning/programs/map') {
         const b = await readJson(req);
         return sendJson(res, 200, planning.mapProgram(b.program, b.stockCode, { by: who(req) })), true;

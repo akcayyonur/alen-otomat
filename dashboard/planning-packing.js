@@ -9,13 +9,14 @@ import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import { cellText, fmtNum, dateTimeText, rememberedPerson, rememberPerson } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
-import { openCrateCard, crateStateChip } from './planning-card.js';
+import { openCrateCard, crateStateChip, stepsCell } from './planning-card.js';
 import { openMeasureSheet } from './planning-measure.js';
 
 const REFRESH_MS = 20_000;
 const FILTERS = Object.freeze([
   { key: 'kapali', label: 'Paketleme bekleyenler' },
   { key: 'paketlendi', label: 'Paketlenenler' },
+  { key: 'ret', label: 'Ret edilenler' },
   { key: 'aktif', label: 'Hepsi' },
 ]);
 const sign = (n) => (n > 0 ? `+${fmtNum(n)}` : fmtNum(n));
@@ -26,7 +27,8 @@ export async function renderPacking(host) {
   host.__packToken = token;
   const st = { state: 'kapali', items: [], total: 0, seq: 0 };
   host.innerHTML =
-    '<p class="hint">Kasayla gelen <b>ürün tanıtım kartındaki KART NO</b>\'yu listede bulun, paketlenen <b>kesin adedi</b> girin. "Sayılan" tezgah sayacından hesaplanan tahmindir; fark gizlenmez.</p>' +
+    '<p class="hint">Kasayla gelen <b>ürün tanıtım kartındaki KART NO</b>\'yu listede bulun, paketlenen <b>kesin adedi</b> girin. "Sayılan" tezgah sayacından hesaplanan tahmindir; fark gizlenmez. ' +
+    '<b>Kartta ÜRÜN RET tikli kasalar paketlemeye gitmez</b> (tekrar işleme ya da hurdaya ayrılır): bu listede çıkmaz, "Ret edilenler"de görünür.</p>' +
     '<div class="pl-bar"><div class="seg" role="group" aria-label="Kasa durumu" data-role="filters"></div>' +
     '<label class="fld-inline">Paketleyen kişi <input data-role="person" maxlength="60" autocomplete="off" placeholder="isteğe bağlı"></label></div>' +
     '<p class="notice" data-role="msg" hidden></p><p class="hint" data-role="count"></p>' +
@@ -40,10 +42,10 @@ export async function renderPacking(host) {
 
   function draw() {
     $('count').textContent = st.total === 0
-      ? (st.state === 'kapali' ? 'Paketleme bekleyen kasa yok.' : 'Kasa yok.')
+      ? (st.state === 'kapali' ? 'Paketleme bekleyen kasa yok.' : st.state === 'ret' ? 'Ret edilen kasa yok.' : 'Kasa yok.')
       : `${fmtNum(st.total)} kasa${st.items.length < st.total ? ` (ilk ${fmtNum(st.items.length)} gösteriliyor)` : ''}`;
     $('list').innerHTML = st.items.length === 0 ? '' :
-      '<table class="tbl tbl-pl"><thead><tr><th>Kart no</th><th>İş emri</th><th>Ürün</th><th>Tezgah</th><th>Kart basıldı</th><th class="num">Sayılan (tahmin)</th><th>Paketlenen (kesin)</th><th class="num">Fark</th><th>Durum</th><th></th></tr></thead><tbody>' +
+      '<table class="tbl tbl-pl"><thead><tr><th>Kart no</th><th>İş emri</th><th>Ürün</th><th>Tezgah</th><th>Kart basıldı</th><th class="num">Sayılan (tahmin)</th><th>Paketlenen (kesin)</th><th class="num">Fark</th><th>İşlem</th><th>Durum</th><th></th></tr></thead><tbody>' +
       st.items.map((k) => {
         const canPack = k.state === 'kapali' || k.state === 'paketlendi';
         return `<tr data-id="${k.id}"><td class="mono"><b>${escapeHtml(k.cardNo)}</b></td><td class="mono">${escapeHtml(k.woNo)}</td>` +
@@ -52,8 +54,9 @@ export async function renderPacking(host) {
           `<td class="nowrap">${canPack
             ? `<input class="pack-qty" inputmode="numeric" autocomplete="off" aria-label="${escapeHtml(k.cardNo)} paketlenen adet" value="${k.packedQty ?? ''}" placeholder="adet"> ` +
               `<button type="button" class="icon-btn shop-btn btn-primary" data-act="pack">${k.packedQty == null ? 'Kaydet' : 'Düzelt'}</button>`
-            : k.packedQty != null ? fmtNum(k.packedQty) : '<span class="is-null">kasa açık</span>'}</td>` +
-          `<td class="num">${k.packDiff == null ? cellText(null) : escapeHtml(sign(k.packDiff))}</td><td>${crateStateChip(k.state)}</td>` +
+            : k.state === 'ret' ? '<b>RET</b> <span class="hint" style="margin:0">paketlemeye gitmez</span>'
+              : k.packedQty != null ? fmtNum(k.packedQty) : '<span class="is-null">kasa açık</span>'}</td>` +
+          `<td class="num">${k.packDiff == null ? cellText(null) : escapeHtml(sign(k.packDiff))}</td><td>${stepsCell(k.steps, k.reject)}</td><td>${crateStateChip(k.state)}</td>` +
           `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="card">Kart</button> <button type="button" class="icon-btn icon-btn-sm" data-act="sheet">Ölçü föyü</button>` +
           `${k.packedQty == null ? ' <button type="button" class="icon-btn icon-btn-sm" data-act="void">İptal…</button>' : ''}</td></tr>`;
       }).join('') + '</tbody></table>';

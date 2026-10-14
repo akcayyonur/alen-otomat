@@ -133,7 +133,7 @@ test('is emri toplamlari: sayilan, paketlenen, paketleme bekleyen, kasaya atanma
   p.packCrate(a.id, { qty: 2 }, { now: day(9, 40) });
   p.openCrate(w.no, {}, { now: day(9, 31) });
   const c = p.getWorkOrder(w.no, { now: day(10) }).crates;
-  assert.deepEqual(c.totals, { count: 2, open: true, unpacked: 0, counted: 3, packed: 2, unassigned: 2 });
+  assert.deepEqual(c.totals, { count: 2, open: true, unpacked: 0, rejected: 0, rejectedCounted: 0, counted: 3, packed: 2, unassigned: 2 });
   assert.deepEqual(c.items.map((x) => [x.cardNo, x.state, x.countedQty]), [['K000001', 'paketlendi', 2], ['K000002', 'acik', 1]]);
 
   assert.deepEqual(p.listCrates({ state: 'acik' }, { now: day(10) }).items.map((x) => x.cardNo), ['K000002']);

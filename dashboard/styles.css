@@ -788,3 +788,58 @@ dialog.pl-form-dlg .modal-body{background:var(--surface-2);}
 .heat.is-empty{background:var(--surface-2);color:var(--ink-faint);}
 .heat sup{font-size:8px;margin-left:1px;color:var(--ink-soft);}
 .heat-total{white-space:nowrap;background:var(--surface);}
+
+/* ---- Planlama: GKK rapor no, ilk onay raporu, teknik resimler (PDF), ölçü raporları ---- */
+.fld-row{display:flex;gap:6px;align-items:stretch;min-width:0;}
+.fld-row input{flex:1 1 auto;min-width:0;}
+.fld-row .icon-btn{flex:0 0 auto;white-space:nowrap;}
+.pl-search-big{font-size:15px;padding:10px 12px;min-height:44px;width:100%;max-width:520px;}
+.pl-gk-no{font-size:15px;white-space:nowrap;}
+.pl-bigcode{margin:10px 0;text-align:center;font-family:var(--mono);font-size:34px;font-weight:800;letter-spacing:.06em;color:var(--accent);}
+.shop-refs{margin:.2em 0 .5em;}
+
+/* teknik resimler (iş emrini düzenle penceresi) */
+.dr-box{margin:12px 0;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);}
+.dr-box .sub{margin-top:0;}
+.dr-list{margin:6px 0 8px;padding-left:22px;display:flex;flex-direction:column;gap:5px;}
+.dr-name{font-weight:600;word-break:break-all;}
+.dr-up{display:inline-block;position:relative;cursor:pointer;}
+.dr-up input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
+.dr-up:focus-within .icon-btn{outline:2px solid var(--accent);outline-offset:2px;}
+.dr-up.is-busy{opacity:.55;pointer-events:none;}
+
+/* iş emri formunun arka sayfası (ekranda birleşik PDF; baskıda form tek başına basılır) */
+.pl-f-pdf{display:block;align-self:center;width:100%;max-width:880px;height:calc(100vh - 210px);min-height:480px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;}
+.shop-li-actions{display:flex;gap:6px;flex:0 0 auto;}
+
+/* ölçü raporu: kartlar satırı */
+.pl-ms-cards{margin:2px 0 6px;font-size:11px;color:#111;}
+
+/* liste baskısı (GKK rapor numaraları EYS.FR.011, ilk baskı onay listesi EYS.FR.013) */
+.pl-lf{max-width:none;}
+.pl-lf-title{font-size:17px;letter-spacing:.06em;}
+.pl-lf-t{width:100%;border-collapse:collapse;margin-top:8px;font-size:10.5px;}
+.pl-lf-t th,.pl-lf-t td{border:1px solid #111;padding:2px 5px;text-align:left;vertical-align:top;}
+.pl-lf-t th{background:#eee;font-size:9.5px;text-transform:uppercase;letter-spacing:.02em;}
+.pl-lf-t thead{display:table-header-group;}
+.pl-lf-t tr{break-inside:avoid;}
+
+
+/* ürün tanıtım kartı: yıkama / kurutma / tavlama işaretleri (kartta kutu çiftleri; kartı basarken tiklenen kutular) */
+.pl-c-table tr.pl-c-step th,.pl-c-table tr.pl-c-step td{height:46px;padding-top:6px;padding-bottom:6px;}
+.pl-c-table tr.pl-c-step td{font-size:12.5px;font-weight:700;}
+.pl-c-opt{display:inline-flex;align-items:center;gap:6px;margin:2px 14px 2px 0;white-space:nowrap;}
+.pl-c-box{display:inline-block;flex:0 0 auto;position:relative;width:16px;height:16px;border:2px solid #111;font-style:normal;}
+.pl-c-box.is-on::after{content:'';position:absolute;left:3px;top:-3px;width:5px;height:11px;border:solid #111;border-width:0 3px 3px 0;transform:rotate(40deg);}
+.pl-steps{border:1px solid var(--line);border-radius:9px;background:var(--surface-2);padding:8px 14px 10px;margin:8px 0;min-width:0;text-align:left;}
+.pl-steps legend{font-size:12px;font-weight:700;color:var(--ink-soft);padding:0 6px;}
+.pl-steps-row{display:grid;grid-template-columns:90px 1fr 1fr;gap:6px 14px;align-items:center;padding:4px 0;border-top:1px solid var(--line);}
+.pl-steps legend + .pl-steps-row{border-top:none;}
+.pl-steps-opt{display:flex;align-items:center;gap:10px;min-height:44px;font-size:15px;color:var(--ink);cursor:pointer;}
+.pl-steps-opt input{width:24px;height:24px;accent-color:var(--accent);flex:0 0 auto;}
+@media (max-width:560px){.pl-steps-row{grid-template-columns:1fr;}}
+
+/* kartta "ÜRÜN RET" tiki: işaretliyse satır belirgin (siyah-beyaz baskıda da: kalın çerçeve + yazı) */
+.pl-c-table tr.pl-c-reject.is-on th,.pl-c-table tr.pl-c-reject.is-on td{background:#e6e6e6;}
+.pl-c-table tr.pl-c-reject.is-on td{font-size:13px;font-weight:800;}
+.pl-steps-reject .pl-steps-opt{grid-column:2 / -1;}

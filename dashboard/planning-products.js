@@ -5,9 +5,15 @@
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import { put, cellText, fmtNum, gramText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip } from './planning-common.js';
+import { openMeasurePlanDialog } from './planning-measure.js';
 
 const PAGE = 100;
 const SOURCE = Object.freeze({ elle: 'elle', 'csv-isemri': 'iş emri CSV', 'csv-siparis': 'sipariş CSV' });
+
+/** Kalıcı ölçü planının tek satırlık özeti: ürüne göre 3, 5 ... ölçü. */
+const planSummary = (plan) => (plan?.length
+  ? `${plan.length} ölçü: ${escapeHtml(plan.map((r) => r.label).join(' · '))}. Bu ürünün yeni iş emirleri bu ölçülerle gelir.`
+  : 'Kalıcı ölçü planı yok: ölçü satırları her iş emrinde ayrı tanımlanır. Buradan tanımlarsanız bu ürünün yeni iş emirleri hazır gelir.');
 
 /** @param {HTMLElement} host */
 export function renderProducts(host) {
@@ -27,12 +33,13 @@ export function renderProducts(host) {
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>Stok kodu</th><th>Ürün adı</th><th>Müşteri kodu</th><th>Hammadde</th>' +
       '<th class="num">Tam boy (mm)</th><th class="num">Net (g)</th><th class="num">Brüt (g)</th><th class="num">Planlanan (sn)</th>' +
-      '<th class="num">Program</th><th>Kaynak</th></tr></thead><tbody>' +
+      '<th class="num">Ölçü</th><th class="num">Program</th><th>Kaynak</th></tr></thead><tbody>' +
       st.items.map((p) =>
         `<tr class="pl-row" data-code="${escapeHtml(p.stockCode)}" tabindex="0">` +
         `<td class="mono"><b>${escapeHtml(p.stockCode)}</b></td><td>${cellText(p.name)}</td><td class="mono">${cellText(p.customerCode)}</td>` +
         `<td class="mono">${cellText(p.material)}</td><td class="num">${fmtNum(p.lengthMm, 1)}</td><td class="num">${gramText(p.netKg)}</td>` +
         `<td class="num">${gramText(p.grossKg)}</td><td class="num">${fmtNum(p.plannedSec, 1)}</td>` +
+        `<td class="num">${p.measurePlan?.length > 0 ? fmtNum(p.measurePlan.length) : '<span class="is-null" title="Kalıcı ölçü planı tanımlı değil">—</span>'}</td>` +
         `<td class="num">${p.programCount > 0 ? fmtNum(p.programCount) : '<span class="is-null" title="Hiçbir program bu ürüne eşlenmemiş">—</span>'}</td>` +
         `<td>${p.edited ? chip('info', '✎', 'elle') : `<span class="hint" style="margin:0">${escapeHtml(SOURCE[p.source] ?? p.source)}</span>`}</td></tr>`).join('') +
       '</tbody></table>';
@@ -105,6 +112,9 @@ export async function openProductDialog(code, onSaved = () => {}) {
     '</div><p class="hint" data-role="dara"></p>' +
     `<label class="fld"><span>Not</span><input name="note" value="${escapeHtml(p?.note ?? '')}" maxlength="500" autocomplete="off"></label>` +
     (p ? `<p class="hint">Kaynak: ${escapeHtml(SOURCE[p.source] ?? p.source)} · son güncelleme ${escapeHtml(dateTimeText(p.updatedAt))}${p.updatedBy ? ` · ${escapeHtml(p.updatedBy)}` : ''}</p>` : '') +
+    (p ? '<h4 class="sub">Ölçü satırları (ölçü kontrol föyü)</h4>' +
+      `<p class="hint" data-role="plan-summary">${planSummary(p.measurePlan)}</p>` +
+      '<button type="button" class="icon-btn" data-act="measure-plan">Ölçü satırlarını tanımla / düzenle…</button>' : '') +
     (p ? `<h4 class="sub">Bu ürünü üreten programlar</h4>${p.programs.length === 0
       ? '<p class="empty">Hiçbir program bu ürüne eşlenmemiş (Program eşleme sekmesinden bağlanır).</p>'
       : `<p>${p.programs.map((x) => `<span class="chip chip-none mono">${escapeHtml(x.name)}</span>`).join(' ')}</p>`}` : '') +
@@ -112,6 +122,15 @@ export async function openProductDialog(code, onSaved = () => {}) {
     `<div class="dt-actions"><button type="submit" class="icon-btn btn-primary">${isNew ? 'Ürünü ekle' : 'Kaydet'}</button></div></form>`;
 
   const form = m.body.querySelector('form');
+  form.querySelector('[data-act="measure-plan"]')?.addEventListener('click', () => {
+    openMeasurePlanDialog({ stockCode: p.stockCode }, async () => {
+      try {
+        p = await api(`/api/planning/products/${encodeURIComponent(code)}`);
+        form.querySelector('[data-role="plan-summary"]').innerHTML = planSummary(p.measurePlan);
+      } catch { /* özet yenilenemedi: kayıt yapıldı */ }
+      onSaved();
+    });
+  });
   const dara = () => {
     const n = parseInput(form.netG.value);
     const b = parseInput(form.grossG.value);

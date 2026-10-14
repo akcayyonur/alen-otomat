@@ -6,11 +6,30 @@
  *   ALEN ÜRÜN KODU · MÜŞTERİ ÜRÜN KODU · TARİH · MAKİNA NO · İŞ EMRİ NO · GKK RAPOR NO   (+ küçük KART NO: paketleme kartı bununla bulur)
  * Her basış bir KASA kaydıdır: o kasaya girdiğini tahmin ettiğimiz adet (önceki karttan bu yana tezgahın saydığı) ve tezgah sayacı arka planda
  * tutulur; kartta MİKTAR YOK. Kesin adet paketlemede girilir (Paketleme bölümü). Ret/hurda sistemde tutulmaz.
+ * İŞLEM İŞARETLERİ: kartta YIKAMA / KURUTMA / TAVLAMA satırları vardır, her birinde iki kutu ("gidecek" ve "yapıldı"); kartı basarken usta tikler,
+ * işaretler kasa kaydıyla saklanır ve kartta basılır.
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import { cellText, fmtNum, dateTimeText, openModal, chip, rememberedPerson } from './planning-common.js';
 import { openMeasureSheet } from './planning-measure.js';
+
+/** Kartın işlem satırları (backend/planning/card-steps.js ile AYNI liste; `card-steps.test.js` eşitliği sınar). */
+export const CARD_STEPS = Object.freeze([
+  Object.freeze({ key: 'wash', label: 'YIKAMA', to: 'Yıkamaya gidecek', done: 'Yıkandı' }),
+  Object.freeze({ key: 'dry', label: 'KURUTMA', to: 'Kurutmaya gidecek', done: 'Kurutuldu' }),
+  Object.freeze({ key: 'anneal', label: 'TAVLAMA', to: 'Tavlamaya gidecek', done: 'Tavlandı' }),
+]);
+const emptySteps = () => Object.fromEntries(CARD_STEPS.flatMap((s) => [[`${s.key}To`, false], [`${s.key}Done`, false]]));
+
+/** İşaretli kutuların okunur metni ("Yıkamaya gidecek · Kurutuldu"); hiçbiri işaretli değilse boş. */
+export const stepsText = (steps) => (steps ? CARD_STEPS.flatMap((s) => [steps[`${s.key}To`] ? s.to : null, steps[`${s.key}Done`] ? s.done : null]).filter(Boolean).join(' · ') : '');
+
+/** Tablo hücresi için işaretli işlemler (metin; renge bağlı değil). */
+export const stepsCell = (steps, reject = false) => {
+  const t = [reject ? 'RET' : '', stepsText(steps)].filter(Boolean).join(' · ');
+  return t ? `<span class="hint" style="margin:0">${escapeHtml(t)}</span>` : '<span class="is-null">—</span>';
+};
 
 const plain = (v) => (v === null || v === undefined ? '' : String(v));
 const sign = (n) => (n === null || n === undefined ? '' : n > 0 ? `+${fmtNum(n)}` : fmtNum(n));
@@ -21,14 +40,28 @@ export const crateStateChip = (state) => ({
   acik: chip('info', '▶', 'açık'),
   kapali: chip('none', '◔', 'paketleme bekliyor'),
   paketlendi: chip('ok', '✓', 'paketlendi'),
+  ret: chip('bad', '▲', 'ret: paketlemeye gitmez'),
   iptal: chip('bad', '✕', 'iptal'),
 }[state] ?? chip('none', '?', String(state)));
 
 /** Küçük uyarı listesi (planning-production.js'e bağımlı olmamak için burada). */
 const warningsList = (list) => (list?.length ? `<ul class="pl-warns">${list.map((x) => `<li class="notice">${escapeHtml(x)}</li>`).join('')}</ul>` : '');
 
+/** Kartın işlem satırları: her satırda iki kutu (gidecek / yapıldı); işaretli kutuda ✓ var, boş kutu çerçeveli (siyah-beyaz baskıda da ayırt edilir). */
+function stepRows(steps) {
+  const opt = (label, on) => `<span class="pl-c-opt" role="img" aria-label="${escapeHtml(label)}: ${on ? 'işaretli' : 'işaretsiz'}"><i class="pl-c-box${on ? ' is-on' : ''}" aria-hidden="true"></i>${escapeHtml(label)}</span>`;
+  return CARD_STEPS.map((s) => `<tr class="pl-c-step"><th scope="row">${s.label}</th><td>${opt(s.to, steps[`${s.key}To`])}${opt(s.done, steps[`${s.key}Done`])}</td></tr>`).join('');
+}
+
+/** "ÜRÜN RET" kutusu: ret edilen kasa PAKETLEMEYE GİTMEZ (tekrar işleme ya da hurdaya ayrılır); kartta açıkça yazar. */
+function rejectRow(on) {
+  const label = 'Ürün ret edildi (paketlemeye gitmez)';
+  return `<tr class="pl-c-step pl-c-reject${on ? ' is-on' : ''}"><th scope="row">ÜRÜN RET</th><td><span class="pl-c-opt" role="img" aria-label="${label}: ${on ? 'işaretli' : 'işaretsiz'}">` +
+    `<i class="pl-c-box${on ? ' is-on' : ''}" aria-hidden="true"></i>${label}</span></td></tr>`;
+}
+
 /**
- * Kart: 6 alanlı tablo. `cardNo` yoksa (önizleme) "basılınca verilir" yazılır.
+ * Kart: 6 alanlı tablo + 3 işlem satırı (yıkama, kurutma, tavlama) + ÜRÜN RET kutusu. `cardNo` yoksa (önizleme) "basılınca verilir" yazılır.
  * @param {{cardNo?: string|null, stockCode?: string|null, customerCode?: string|null, machineId?: string|null, woNo?: string|null,
  *          gkkReportNo?: string|null, issuedAt?: number|null, closedAt?: number|null, state?: string}} c
  */
@@ -46,6 +79,8 @@ export function cardHtml(c) {
     row('MAKİNA NO', machineNo ? String(Number(machineNo)) : plain(c.machineId)) +
     row('İŞ EMRİ NO', plain(c.woNo)) +
     row('GKK RAPOR NO', plain(c.gkkReportNo), 'pl-c-gkk') +
+    stepRows(c.steps ?? emptySteps()) +
+    rejectRow(!!c.reject) +
     '</tbody></table>' +
     `<p class="pl-c-foot">Sistemden basıldı ${escapeHtml(new Date(when).toLocaleString('tr-TR', { hour12: false }))}${c.state === 'iptal' ? ' · İPTAL EDİLDİ' : ''}</p>` +
     '</div>'
@@ -81,26 +116,58 @@ export async function openIssueCard(woNo, onDone = null) {
     m.body.innerHTML = '<p class="notice notice-sim">Kart yalnız üretimdeki ya da bitmiş iş emri için basılır.</p>';
     return;
   }
-  const st = { card: null, gkk: w.gkkReportNo ?? '', busy: false, error: null };
-  const preview = () => ({ cardNo: null, stockCode: w.stockCode, customerCode: w.customerCode, machineId: w.machineId, woNo: w.no, gkkReportNo: st.gkk });
+  const st = { card: null, gkk: w.gkkReportNo ?? '', busy: false, error: null, steps: emptySteps(), reject: false };
+  const preview = () => ({ cardNo: null, stockCode: w.stockCode, customerCode: w.customerCode, machineId: w.machineId, woNo: w.no, gkkReportNo: st.gkk, steps: st.steps, reject: st.reject });
+
+  /** İşlem kutuları (kartı basarken tiklenir): her işlem için "gidecek" ve "yapıldı". */
+  const stepsBox = () =>
+    '<fieldset class="pl-steps"><legend>Kartta işaretlenecekler</legend>' +
+    CARD_STEPS.map((s) =>
+      `<div class="pl-steps-row"><b>${s.label}</b>` +
+      `<label class="pl-steps-opt"><input type="checkbox" name="${s.key}To"${st.steps[`${s.key}To`] ? ' checked' : ''}> ${escapeHtml(s.to)}</label>` +
+      `<label class="pl-steps-opt"><input type="checkbox" name="${s.key}Done"${st.steps[`${s.key}Done`] ? ' checked' : ''}> ${escapeHtml(s.done)}</label></div>`).join('') +
+    '<div class="pl-steps-row pl-steps-reject"><b>ÜRÜN RET</b>' +
+    `<label class="pl-steps-opt"><input type="checkbox" name="reject"${st.reject ? ' checked' : ''}> Ürün ret edildi (paketlemeye gitmez)</label></div>` +
+    '<p class="hint" data-role="steps-hint"></p></fieldset>';
+  /** Aynı işlem için hem "gidecek" hem "yapıldı" işaretliyse uyarır (engellemez). */
+  const stepsHint = () => [
+    ...(st.reject ? ['RET işaretli: bu kasa paketlemeye gitmeyecek (Paketleme listesine düşmez); tekrar işleme ya da hurdaya ayrılacak.'] : []),
+    ...CARD_STEPS.filter((s) => st.steps[`${s.key}To`] && st.steps[`${s.key}Done`]).map((s) => `${s.label}: hem "${s.to}" hem "${s.done}" işaretli, doğru mu?`),
+  ].join(' ');
 
   function draw() {
     const c = st.card ?? preview();
     const controls = st.card
-      ? `<div class="notice"><b class="mono">${escapeHtml(st.card.cardNo)}</b> basıldı. Kartı kasaya atın ve kasayı paketlemeye gönderin.</div>${warningsList(st.card.warnings)}` +
+      ? (st.card.reject
+        ? `<div class="notice notice-sim"><b class="mono">${escapeHtml(st.card.cardNo)}</b> RET olarak basıldı. Kartı kasaya atın; bu kasa <b>paketlemeye GİTMEZ</b> (tekrar işleme ya da hurdaya ayrılır).</div>`
+        : `<div class="notice"><b class="mono">${escapeHtml(st.card.cardNo)}</b> basıldı. Kartı kasaya atın ve kasayı paketlemeye gönderin.</div>`) + `${warningsList(st.card.warnings)}` +
         '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Yeniden yazdır</button>' +
         '<button type="button" class="icon-btn" data-act="sheet">Ölçü kontrol föyünü yazdır…</button>' +
         '<button type="button" class="icon-btn" data-act="void">Yanlış basıldı: iptal et…</button>' +
         '<button type="button" class="icon-btn" data-act="close">Kapat</button></div>'
-      : '<p class="hint">Kartta bu alanlar basılır. Kasa dolduysa kartı oluşturun, kasaya atın.</p>' +
+      : '<p class="hint">Kartta bu alanlar basılır. Kasa dolduysa kartı oluşturun, kasaya atın. Kasa yıkamaya, kurutmaya ya da tavlamaya gidecekse veya bu işlemler yapıldıysa aşağıdan işaretleyin.</p>' +
+        stepsBox() +
         (w.gkkReportNo ? '' : '<label class="fld"><span>GKK rapor no (boşsa kartta boş çıkar; yazarsanız iş emrine de işlenir)</span><input name="gkk" maxlength="40" autocomplete="off"></label>') +
         (st.error ? `<p class="notice notice-sim">${escapeHtml(st.error)}</p>` : '') +
         `<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="issue"${st.busy ? ' disabled' : ''}>${st.busy ? 'Basılıyor…' : 'Kartı oluştur ve yazdır'}</button></div>`;
-    m.body.innerHTML = `<div class="pl-form-actions">${controls}</div>${cardHtml(c)}`;
+    m.body.innerHTML = `<div class="pl-form-actions">${controls}</div><div data-role="card">${cardHtml(c)}</div>`;
+    const hint = m.body.querySelector('[data-role="steps-hint"]');
+    if (hint) hint.textContent = stepsHint();
   }
   draw();
 
   // GKK yazılırken yalnız kartın hücresi güncellenir (yeniden çizme odağı kaybettirir).
+  // İşlem kutuları: yalnız kartın kendisi güncellenir (yeniden çizme tik odağını bozar)
+  m.body.addEventListener('change', (ev) => {
+    const name = ev.target.name;
+    if (ev.target.type !== 'checkbox' || !(name in st.steps || name === 'reject')) return;
+    if (name === 'reject') st.reject = ev.target.checked;
+    else st.steps[name] = ev.target.checked;
+    const card = m.body.querySelector('[data-role="card"]');
+    if (card) card.innerHTML = cardHtml(preview());
+    const hint = m.body.querySelector('[data-role="steps-hint"]');
+    if (hint) hint.textContent = stepsHint();
+  });
   m.body.addEventListener('input', (ev) => {
     if (ev.target.name !== 'gkk') return;
     st.gkk = ev.target.value;
@@ -119,7 +186,7 @@ export async function openIssueCard(woNo, onDone = null) {
       try {
         const gkk = st.gkk.trim();
         st.card = await post(`/api/planning/work-orders/${encodeURIComponent(woNo)}/cards`, {
-          person: rememberedPerson(), ...(gkk !== '' && gkk !== (w.gkkReportNo ?? '') ? { gkkReportNo: gkk } : {}),
+          person: rememberedPerson(), steps: st.steps, reject: st.reject, ...(gkk !== '' && gkk !== (w.gkkReportNo ?? '') ? { gkkReportNo: gkk } : {}),
         });
         onDone?.(st.card);
         st.busy = false;
@@ -175,7 +242,7 @@ export function cratesHtml(w) {
     `<tr><td class="mono"><b>${escapeHtml(k.cardNo)}</b></td><td>${k.closedAt ? escapeHtml(dateTimeText(k.closedAt)) : '<span class="is-null">açık kasa</span>'}</td>` +
     `<td class="num">${k.startTotal == null ? cellText(null) : escapeHtml(plain(k.startTotal))} → ${k.endTotal == null ? (k.state === 'acik' ? '…' : cellText(null)) : escapeHtml(plain(k.endTotal))}</td>` +
     `<td class="num">${k.countedQty == null ? cellText(null) : `~${fmtNum(k.countedQty)}`}</td><td class="num">${k.packedQty == null ? cellText(null) : fmtNum(k.packedQty)}</td>` +
-    `<td class="num">${k.packDiff == null ? cellText(null) : escapeHtml(sign(k.packDiff))}</td><td>${crateStateChip(k.state)}</td>` +
+    `<td class="num">${k.packDiff == null ? cellText(null) : escapeHtml(sign(k.packDiff))}</td><td>${stepsCell(k.steps, k.reject)}</td><td>${crateStateChip(k.state)}</td>` +
     `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="crate-card" data-id="${k.id}">Kart</button> <button type="button" class="icon-btn icon-btn-sm" data-act="crate-sheet" data-id="${k.id}">Ölçü föyü</button>` +
     `${k.state === 'paketlendi' ? '' : ` <button type="button" class="icon-btn icon-btn-sm" data-act="crate-void" data-id="${k.id}" data-card="${escapeHtml(k.cardNo)}">İptal…</button>`}</td></tr>`).join('');
   return (
@@ -184,9 +251,9 @@ export function cratesHtml(w) {
     `${canIssue ? '<div class="dt-actions"><button type="button" class="icon-btn" data-act="measure">Ölçü kontrolü…</button><button type="button" class="icon-btn btn-primary" data-act="issue-card">Ürün tanıtım kartı bas…</button></div>' : ''}</div>` +
     '<p class="hint">Her kart bir kasadır. <b>Sayılan</b> adet, önceki karttan bu yana tezgahın sayacından hesaplanır (tahmin); <b>kesin</b> adet paketlemede girilir; fark gizlenmez.</p>' +
     (c.items.length === 0 ? '<p class="empty">Henüz kart basılmadı.</p>'
-      : '<table class="tbl tbl-pl"><thead><tr><th>Kart no</th><th>Basıldı</th><th class="num">Tezgah sayacı</th><th class="num">Sayılan</th><th class="num">Paketlenen</th><th class="num">Fark</th><th>Durum</th><th></th></tr></thead>' +
+      : '<table class="tbl tbl-pl"><thead><tr><th>Kart no</th><th>Basıldı</th><th class="num">Tezgah sayacı</th><th class="num">Sayılan</th><th class="num">Paketlenen</th><th class="num">Fark</th><th>İşlem</th><th>Durum</th><th></th></tr></thead>' +
         `<tbody>${rows}</tbody></table>` +
-        `<p class="hint">${fmtNum(t.count)} kart · sayılan ~${fmtNum(t.counted)} · paketlenen ${fmtNum(t.packed)}${t.unpacked > 0 ? ` · <b>${t.unpacked} kasa paketleme bekliyor</b>` : ''}` +
+        `<p class="hint">${fmtNum(t.count)} kart · sayılan ~${fmtNum(t.counted)} · paketlenen ${fmtNum(t.packed)}${t.unpacked > 0 ? ` · <b>${t.unpacked} kasa paketleme bekliyor</b>` : ''}${t.rejected > 0 ? ` · <b>${t.rejected} kasa RET</b> (paketlemeye gitmedi)` : ''}` +
         `${t.unassigned != null && t.unassigned > 0 ? ` · kasaya atanmayan ~${fmtNum(t.unassigned)} adet (henüz kart basılmamış)` : ''}</p>`) +
     '</section>'
   );

@@ -496,6 +496,12 @@ test('HTTP: urun CRUD, CSV iceri alma, siparis arama, program esleme uclari', as
 
     const prog = (await j('/api/planning/programs')).json;
     assert.equal(prog.counts.suggested, 1);
+    // eslemede urun secmek icin DAR arama: yalniz stok kodu, ad, musteri kodu (urun karti ayrintisi / agirlik / hammadde YOK)
+    const ara = (await j('/api/planning/programs/product-search?q=SR001')).json;
+    assert.ok(ara.total >= 1 && ara.items.length >= 1);
+    assert.deepEqual(Object.keys(ara.items[0]).sort(), ['customerCode', 'name', 'stockCode']);
+    assert.equal((await j('/api/planning/programs/product-search?q=')).json.items.length >= 0, true);
+    assert.deepEqual((await j('/api/planning/programs/product-search?q=YOKBOYLEBIRURUN')).json, { total: 0, items: [] });
     const harita = await j('/api/planning/programs/map', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ program: 'SR001-013', stockCode: 'SR001.013' }) });
     assert.equal(harita.json.source, 'oneri-onay');
     assert.equal((await j('/api/planning/programs/map?program=SR001-013', { method: 'DELETE' })).status, 200);

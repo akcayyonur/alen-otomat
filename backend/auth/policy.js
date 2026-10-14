@@ -3,7 +3,7 @@
  *
  *   public   giris gerektirmez (statik dosyalar, oturum/giris uclari, saglik)
  *   local    yalniz sunucu bilgisayarindan (ajan -> ingest, ajanin tezgah listesi)
- *   viewer   giris yapmis herhangi biri (viewer, operator ya da admin): yalniz IZLEME
+ *   viewer   giris yapmis herhangi biri (viewer, operator ya da admin): yalniz IZLEME (telemetri; planlamada yalniz asagidaki VIEWER_PLANNING okumalari)
  *   operator operator (fabrika PC'sinin ortak hesabi) ya da yonetici: is emri baslat/bitir, durus nedeni (planlama T asamasi)
  *   admin    yalniz yonetici
  *
@@ -15,29 +15,42 @@
 const VIEWER_MACHINE = /^\/api\/machines\/[^/]+(?:\/(?:history|spans|summary|downtimes|export\.csv))?$/;
 
 /**
- * Fabrika PC'sinin (operator) kullanabildigi planlama uclari: YALNIZ bunlar, TEK YERDE. Viewer bunlari goremez; baska planlama ucu
- * (urun karti, siparis, ice aktarma, program esleme, is emri olusturma/duzenleme/iptal/geri alma) yoneticiye ozeldir.
+ * Planlamada IZLEYICININ (viewer) de okuyabildigi uclar: YALNIZ GET, TEK YERDE. Tezgah basi, is emirleri (liste, ayrinti, form, birlesik teknik resim),
+ * GKK rapor numaralari, ilk onay raporlari ve olcu raporlari. Siparis, urun karti, verimlilik, hammadde, ice aktarma, program esleme gibi baska
+ * hicbir planlama ucu izleyiciye acik DEGILDIR (yazan her uc zaten operator/admin).
+ */
+const VIEWER_PLANNING = Object.freeze([
+  /^\/api\/planning\/(?:summary|downtime-codes|gkk|first-approvals|measure-reports|crates)$/,
+  /^\/api\/planning\/shop\/(?:overview|stops)$/,
+  /^\/api\/planning\/work-orders$/,
+  /^\/api\/planning\/work-orders\/\d{10}$/,
+  /^\/api\/planning\/work-orders\/\d{10}\/(?:measurements|measure-report|drawings\.pdf|print\.pdf)$/,
+  /^\/api\/planning\/crates\/\d{1,12}(?:\/sheet)?$/,
+]);
+
+/**
+ * Fabrika PC'sinin (operator) kullanabildigi planlama uclari (yazma + program eslemesi icin okuma): YALNIZ bunlar, TEK YERDE. Viewer bunlari yapamaz; baska planlama ucu
+ * (urun karti, siparis, ice aktarma, program esleme, is emri olusturma/duzenleme/iptal/geri alma, GKK ve cizim yonetimi) yoneticiye ozeldir.
  * Operatorun baslatirken hangi is emri alanlarini yazabilecegi ayrica routes.js'te zorlanir.
  */
 const OPERATOR_PLANNING = Object.freeze([
-  ['GET', /^\/api\/planning\/(?:summary|downtime-codes|shop\/(?:overview|stops))$/],
-  ['GET', /^\/api\/planning\/work-orders$/],
-  ['GET', /^\/api\/planning\/work-orders\/\d{10}$/],
   ['POST', /^\/api\/planning\/work-orders\/\d{10}\/(?:start|finish)$/],
+  // ilk onay raporu: usta tezgah basinda numara alir (elle/duzeltme/silme yoneticiye ozel)
+  ['POST', /^\/api\/planning\/first-approvals$/],
   ['POST', /^\/api\/planning\/shop\/downtime-reasons$/],
   ['DELETE', /^\/api\/planning\/shop\/downtime-reasons\/\d{1,12}$/],
   // kasalar (Urun Tanitim Karti): ac / kapat / paketleme adedi / iptal ve okuma; kart numarasi sirasi tabani (PUT crates/sequence) yoneticiye ozel
-  ['GET', /^\/api\/planning\/crates$/],
-  ['GET', /^\/api\/planning\/crates\/\d{1,12}$/],
   ['POST', /^\/api\/planning\/work-orders\/\d{10}\/crates$/],
   ['POST', /^\/api\/planning\/work-orders\/\d{10}\/cards$/],
   ['POST', /^\/api\/planning\/work-orders\/\d{10}\/fields$/],
   // olcu kontrolu (EYS.FR.005): plan, saatlik olcum girisi, kartin foyu
-  ['GET', /^\/api\/planning\/work-orders\/\d{10}\/measurements$/],
   ['PUT', /^\/api\/planning\/work-orders\/\d{10}\/measure-plan$/],
   ['POST', /^\/api\/planning\/work-orders\/\d{10}\/measurements$/],
-  ['GET', /^\/api\/planning\/crates\/\d{1,12}\/sheet$/],
   ['POST', /^\/api\/planning\/crates\/\d{1,12}\/(?:close|pack|void)$/],
+  // program eslemesi: hangi torna programi hangi urunu uretiyor (ustalar bilir). Okuma + esle / kaldir / birebir onerileri onayla; urun karti DEGIL,
+  // yalniz dar urun aramasi (stok kodu, ad, musteri kodu) acilir
+  ['GET', /^\/api\/planning\/programs$/], ['GET', /^\/api\/planning\/programs\/product-search$/],
+  ['PUT', /^\/api\/planning\/programs\/map$/], ['DELETE', /^\/api\/planning\/programs\/map$/], ['POST', /^\/api\/planning\/programs\/confirm-exact$/],
 ]);
 
 /**
@@ -62,6 +75,7 @@ export function classify(method, pathname) {
   // Uretim raporu (vardiya adetleri) izleme verisidir: tezgah ag bilgisi icermez.
   if (m === 'GET' && (p === '/api/production' || p === '/api/production/export.csv' || p === '/api/production/runs' || p === '/api/production/runs.csv')) return 'viewer';
 
+  if (m === 'GET' && VIEWER_PLANNING.some((re) => re.test(p))) return 'viewer';
   if (OPERATOR_PLANNING.some(([mm, re]) => mm === m && re.test(p))) return 'operator';
 
   return 'admin';

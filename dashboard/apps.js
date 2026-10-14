@@ -4,7 +4,7 @@
  *   - CNC Telemetri: canli tezgah izleme, uretim raporu, program kutuphanesi, ayarlar
  *   - Planlama: is emri, siparis, urun karti, program esleme (sonra hammadde ve verimlilik)
  * Hangi rolun hangi uygulamayi gorecegi BURADA yalniz kolaylik icindir; yetkiyi sunucu verir (backend/auth/policy.js).
- * Birden cok uygulamasi olmayan kullanici (izleyici: yalniz Telemetri; operator: yalniz Planlama) secim ekranini hic gormez,
+ * Birden cok uygulamasi olmayan kullanici (operator: yalniz Planlama) secim ekranini hic gormez; izleyici artik ikisini de gorur (Planlama'da yalniz okur),
  * dogrudan kendi uygulamasina girer.
  * Bu dosya baska dashboard modullerini import etmez (dongu olmasin).
  */
@@ -24,9 +24,9 @@ export const APPS = Object.freeze([
   {
     key: 'planlama',
     title: 'Planlama',
-    desc: 'İş emri, sipariş ve ürün kartı; tezgah başı: iş emri başlat/bitir ve duruş nedenleri. Sonraki aşamalarda hammadde ve verimlilik.',
+    desc: 'İş emri, sipariş ve ürün kartı; tezgah başı: iş emri başlat/bitir ve duruş nedenleri; GKK rapor numaraları, ilk onay raporu, ölçü raporları, hammadde ve verimlilik. İzleyici hesap: tezgah başı, iş emirleri, GKK, ilk onay ve ölçü raporlarını yalnız okur.',
     entry: '#/planlama',
-    roles: ['admin', 'operator'],
+    roles: ['admin', 'operator', 'viewer'],
     icon: '<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="9" y="7" width="30" height="35" rx="4" fill="none" stroke="currentColor" stroke-width="3"/>' +
       '<path d="M17 7V5h14v2M16 19l3 3 5-6M16 31l3 3 5-6M28 20h6M28 32h6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   },

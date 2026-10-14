@@ -6,6 +6,11 @@
  * (program kutuphanesiyle ayni ayrim). Tum uclar yalniz yonetici icindir (izin tablosunda varsayilan reddet).
  */
 import { PlanningDb } from './planning-db.js';
+import { PlanningError } from './errors.js';
+import { Quality } from './quality.js';
+import { buildWorkOrderFormPdf } from './wo-form-pdf.js';
+import { parseSteps, parseReject, stepsToColumns, stepsText } from './card-steps.js';
+import { mergePdfs, PdfError } from '../pdf-merge.js';
 import { importCsv } from './importers.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
@@ -18,14 +23,7 @@ import { csvDocument } from '../csv.js';
 import { orderSegments, summarize, matrixRows, productRows, dayRows, splitByShift } from './efficiency.js';
 import { slotOf, slotPosition, parseValue, normalizePlan, evaluate, limits, CHECK_KINDS, CHECK_LABEL, SLOT_MIN } from './measure.js';
 
-export class PlanningError extends Error {
-  /** @param {string} message @param {number} [status] @param {string|null} [code] */
-  constructor(message, status = 400, code = null) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
+export { PlanningError };
 
 const fmtTime = (ms) => new Date(ms).toLocaleString('tr-TR', { hour12: false });
 const STOCK_CODE = /^[^\s/\\;,]{1,40}$/;
@@ -82,6 +80,8 @@ export class Planning {
     spans = () => [], downtimeConfig = { groups: [], codes: [] }, downtimeMinMs = DEFAULT_MIN_STOP_MS,
   } = {}) {
     this.db = new PlanningDb(dbFile);
+    /** GKK rapor numaralari, ilk onay raporlari ve teknik resimler (ayni veritabani dosyasi). */
+    this.quality = new Quality({ planning: this, db: this.db.db });
     this.listSeenPrograms = listSeenPrograms;
     this.listMachines = listMachines;
     this.productionEvents = productionEvents;
@@ -105,7 +105,7 @@ export class Planning {
   /* -------------------------------------------------------------- iceri alma */
 
   importCsv(buffer, opts) {
-    return importCsv(this.db, buffer, opts);
+    return importCsv(this.db, buffer, { ...opts, quality: this.quality });
   }
 
   /* ----------------------------------------------------------------- urunler */
@@ -360,8 +360,12 @@ export class Planning {
         ...snap, usedMaterial: f.usedMaterial ?? null, gkkReportNo: f.gkkReportNo ?? null,
         firstApprovalNo: f.firstApprovalNo ?? null, measuredNetKg: f.measuredNetKg ?? null, note: f.note ?? null, now, by,
       });
-      const last = this.db.latestMeasurePlan(product.codeKey); // ayni urunun en son duzenlenen olcu plani (bir kez tanimlanir)
+      // Olcu plani: urun kartindaki kalici plan ile ayni urunun en son duzenlenen is emri plani arasindan DAHA YENI olan kopyalanir
+      const fromCard = product.measurePlan?.length > 0 ? { plan: JSON.stringify(product.measurePlan), at: product.measurePlanAt ?? 0 } : null;
+      const fromOrder = this.db.latestMeasurePlan(product.codeKey);
+      const last = fromCard && (!fromOrder || fromCard.at >= fromOrder.at) ? fromCard : fromOrder;
       if (last) this.db.updateWorkOrder(no, { measure_plan: last.plan, measure_plan_at: last.at }, { by, now });
+      this.quality.inheritDrawings(no, product.codeKey, { by, now }); // ayni urunun teknik resimleri (dosya kopyalanmaz, baglanir)
       this.db.addWorkOrderEvent(no, 'olusturuldu', `${product.stockCode} · ${f.targetQty} adet · ${f.machineId ?? 'tezgah atanmadı (başlatırken seçilir)'}`, { by, now });
       return no;
     });
@@ -412,6 +416,21 @@ export class Planning {
     return core;
   }
 
+  /**
+   * İş emri formu (ön sayfa) + varsa teknik resimler (arka sayfalar) TEK PDF'te: ekranda gösterilen ve tek yazdırma işinde basılan dosya.
+   * @returns {Buffer}
+   */
+  workOrderPrintPdf(no, { now = Date.now() } = {}) {
+    const w = this.getWorkOrder(no, { now });
+    const form = buildWorkOrderFormPdf(w, { now });
+    const merged = this.quality.mergedDrawings(w.no);
+    if (!merged) return form;
+    try { return mergePdfs([form, merged.buffer]); } catch (err) {
+      if (err instanceof PdfError) throw new PlanningError(`Form ve çizimler birleştirilemedi: ${err.message}`, 422, 'merge-failed');
+      throw err;
+    }
+  }
+
   /** @param {{now?: number}} [o] now: canli uretimin hesaplandigi an (testler sabitler) */
   getWorkOrder(no, { now = Date.now() } = {}) {
     const w = this.#get(no);
@@ -424,6 +443,8 @@ export class Planning {
       consumption: { ...consumptionOf(w, progress ? progress.produced : null), fis: this.#fisOf(w) },
       events: this.db.workOrderEvents(w.no),
       line: w.lineId == null ? null : this.db.getLine(w.lineId),
+      drawings: this.quality.listDrawings(w.no),
+      approvals: this.quality.approvalsOfWo(w.no),
     };
   }
 
@@ -993,6 +1014,8 @@ export class Planning {
         count: items.length,
         open: items.some((c) => c.state === 'acik'),
         unpacked: items.filter((c) => c.state === 'kapali').length,
+        rejected: items.filter((c) => c.state === 'ret').length, // ret edilen kasalar paketlemeye gitmez
+        rejectedCounted: items.filter((c) => c.state === 'ret').reduce((a, c) => a + (c.countedQty ?? 0), 0),
         counted,
         packed: items.reduce((a, c) => a + (c.packedQty ?? 0), 0),
         unassigned: progress ? progress.produced - counted : null,
@@ -1001,13 +1024,14 @@ export class Planning {
   }
 
   /** Kasayi kapatir (islem icinde cagrilir): sayilan adet telemetriden, bitis sayaci canliysa tezgahtan. */
-  #closeCrateRow(c, { by, person, to, now, auto = false, event = 'kasa-kapandi' }) {
+  #closeCrateRow(c, { by, person, to, now, auto = false, event = 'kasa-kapandi', extra = '' }) {
     const { qty, approx } = this.#countBetween(c.machineId, c.openedAt, to);
     const live = Math.abs(now - to) <= 120_000 ? this.liveMachine(c.machineId) : null;
     const endTotal = live?.connected && Number.isInteger(live.partTotal) ? live.partTotal : null;
     this.db.updateCrate(c.id, { closed_at: to, closed_by: by, closed_person: person, end_total: endTotal, counted_qty: qty, approx_qty: approx });
     const parts = [`${c.cardNo} · ~${qty} adet (sayaç)`];
     if (person) parts.push(person);
+    if (extra) parts.push(extra);
     if (auto) parts.push('iş emri kapanırken otomatik kapatıldı');
     this.db.addWorkOrderEvent(c.woNo, event, parts.join(' · '), { by, now });
   }
@@ -1049,7 +1073,9 @@ export class Planning {
    * başlangıcından) şimdiye kadar tezgahın saydığı adet (telemetri, TAHMİN) ve tezgah sayacı kaydedilir; kesin adet paketlemede girilir.
    * Üretimdeki ya da bitmiş iş emrinde basılır (kasa iş emri bitirildikten sonra da doldurulabilir). Eski akıştan kalma AÇIK kasa varsa
    * o kapatılır ve kart olur. Kartta GKK rapor no boşsa basarken yazılabilir (iş emrine işlenir, geçmişe yazılır).
-   * @param {{person?: string, gkkReportNo?: string}} [input]
+   * @param {{person?: string, gkkReportNo?: string, steps?: {washTo?: boolean, washDone?: boolean, dryTo?: boolean, dryDone?: boolean, annealTo?: boolean, annealDone?: boolean}}} [input]
+   *   steps: kartta tiklenen işlemler (yıkamaya gidecek/yıkandı, kurutmaya gidecek/kurutuldu, tavlamaya gidecek/tavlandı); verilmezse hiçbiri işaretli değil
+   *   reject: kartta "ÜRÜN RET" tiki: ret edilen kasa PAKETLEMEYE GİTMEZ (tekrar işleme ya da hurdaya ayrılır); verilmezse ret değil
    */
   issueCard(woNo, input = {}, { by = null, now = Date.now() } = {}) {
     const w = this.#get(woNo);
@@ -1058,7 +1084,9 @@ export class Planning {
     }
     const person = text(input.person, 'Yapan kişi', 60);
     const gkk = input.gkkReportNo === undefined ? undefined : text(input.gkkReportNo, 'GKK rapor no', 40);
-    const items = this.db.cratesOfWo(w.no); // iptal edilmemiş, kart numarası sırasıyla
+    const steps = parseSteps(input.steps) ?? parseSteps({}); // işaretler her kartta açıkça yazılır (verilmeyen = işaretsiz)
+    const reject = parseReject(input.reject);
+    const items = this.db.cratesOfWo(w.no); // iptal edilmiş değil, kart numarası sırasıyla
     const open = items.find((c) => c.state === 'acik') ?? null;
     const last = [...items].reverse().find((c) => c.closedAt != null) ?? null;
     const to = Math.max(w.status === 'bitti' ? (w.finishedAt ?? now) : now, open?.openedAt ?? 0);
@@ -1079,12 +1107,14 @@ export class Planning {
           this.db.addWorkOrderEvent(w.no, 'guncellendi', `${changed.join('; ')} (ürün tanıtım kartı basılırken)`.slice(0, 500), { by, now });
         }
       }
-      this.#closeCrateRow(this.db.getCrate(cid), { by, person, to, now, event: 'kart-basildi' });
+      this.db.updateCrate(cid, { ...stepsToColumns(steps), reject: reject ? 1 : 0 });
+      this.#closeCrateRow(this.db.getCrate(cid), { by, person, to, now, event: 'kart-basildi', extra: [reject ? 'ÜRÜN RET (paketlemeye gitmez)' : '', stepsText(steps)].filter(Boolean).join(' · ') });
       return cid;
     });
 
     const v = this.#crateView(this.db.getCrate(id), now);
     const warnings = [];
+    if (reject) warnings.push(`${v.cardNo} RET olarak basıldı: bu kasa paketlemeye gitmez (Paketleme listesine düşmez); tekrar işleme ya da hurdaya ayrılır.`);
     if (v.countedQty === 0) warnings.push('Önceki karttan bu yana tezgahta hiç parça sayılmadı: kart gereksiz basılmış olabilir (tezgah verisi geliyor mu, doğru iş emri mi?).');
     if (last && !open && to - last.closedAt < 120_000) warnings.push(`Az önce (${Math.max(1, Math.round((to - last.closedAt) / 1000))} sn önce) ${last.cardNo} basıldı: aynı kasa için ikinci kart basıyor olabilirsiniz. Yanlışsa kartı iptal edin.`);
     if (v.endTotal == null && w.status === 'uretimde') warnings.push(`${w.machineId} tezgahından şu an veri gelmiyor: sayaç kaydedilemedi; kasanın adedi tahmin edilemeyebilir (kesin adet paketlemede girilir).`);
@@ -1112,6 +1142,7 @@ export class Planning {
     const c = this.#crate(id);
     if (c.state === 'iptal') throw new PlanningError('İptal edilmiş kasa paketlenemez.', 409, 'bad-status');
     if (c.state === 'acik') throw new PlanningError(`${c.cardNo} numaralı kasa hâlâ açık: önce kapatın.`, 409, 'crate-open');
+    if (c.state === 'ret') throw new PlanningError(`${c.cardNo} numaralı kasa RET edilmiş: paketlemeye gitmez (tekrar işleme ya da hurdaya ayrılır).`, 409, 'rejected');
     const q = typeof input.qty === 'number' ? input.qty : Number(String(input.qty ?? '').trim().replace(/\./g, '').replace(',', '.'));
     if (!Number.isInteger(q) || q < 1 || q > 1_000_000) throw new PlanningError('Paketlenen adet 1 ile 1.000.000 arasında bir tam sayı olmalı.');
     const person = text(input.person, 'Yapan kişi', 60);
@@ -1162,7 +1193,7 @@ export class Planning {
   /* --------------------------------------------------- olcu kontrolu (EYS.FR.005) */
 
   /** Is emrinin olcu plani (satir tanimlari): ayni urunun plani yeni is emrine kopyalanir; burada duzenlenir. @param {{label: string, nominal?: any, lower?: any, upper?: any}[]} rows */
-  setMeasurePlan(no, rows, { by = null, now = Date.now() } = {}) {
+  setMeasurePlan(no, rows, { by = null, now = Date.now(), saveToProduct = false } = {}) {
     const w = this.#get(no);
     if (w.status === 'iptal') throw new PlanningError('İptal edilmiş iş emrinin ölçü planı değiştirilemez.', 409, 'cancelled');
     let plan;
@@ -1171,9 +1202,20 @@ export class Planning {
     if (plan.length < used) throw new PlanningError(`${used}. satırda ölçüm kaydı var: ölçü satırları silinemez (satırı yeniden adlandırabilirsiniz).`, 409, 'rows-in-use');
     this.db.tx(() => {
       this.db.updateWorkOrder(w.no, { measure_plan: JSON.stringify(plan), measure_plan_at: now }, { by, now });
-      this.db.addWorkOrderEvent(w.no, 'olcu-plani', plan.length === 0 ? 'ölçü planı boşaltıldı' : `${plan.length} ölçü: ${plan.map((r) => r.label).join(', ')}`.slice(0, 300), { by, now });
+      this.db.addWorkOrderEvent(w.no, 'olcu-plani', (plan.length === 0 ? 'ölçü planı boşaltıldı' : `${plan.length} ölçü: ${plan.map((r) => r.label).join(', ')}`).slice(0, 280) + (saveToProduct ? ' · ürün kartına da kaydedildi' : ''), { by, now });
+      if (saveToProduct && this.db.getProduct(w.codeKey)) this.db.setProductMeasurePlan(w.codeKey, JSON.stringify(plan), now);
     });
     return this.getMeasurements(w.no, { now });
+  }
+
+  /** Urun kartinin KALICI olcu plani: her urunun olculeri (adi, nominal, sapmalar) ve sayisi farklidir; yeni is emirleri bunu kopyalar. */
+  setProductMeasurePlan(stockCode, rows, { now = Date.now() } = {}) {
+    const p = this.db.getProduct(foldTr(stockCode));
+    if (!p) throw new PlanningError(`Ürün bulunamadı: ${stockCode}`, 404);
+    let plan;
+    try { plan = normalizePlan(rows); } catch (err) { throw new PlanningError(err.message); }
+    this.db.setProductMeasurePlan(p.codeKey, JSON.stringify(plan), now);
+    return this.getProduct(p.stockCode);
   }
 
   /** Slot (30 dk sutun) verisi: degerler (+ tolerans durumu), kontrol satirlari, kim/ne zaman. */
@@ -1277,6 +1319,39 @@ export class Planning {
   }
 
   /**
+   * ÖLÇÜ RAPORLARI listesi (kalite kontrol ve paketlemeye giden raporlar): ölçüm girilmiş iş emirleri, en son ölçüm üstte. Her satırda sütun sayısı,
+   * tolerans dışı sütun sayısı, karta bağlanmamış (kart bekleyen) sütun ve kartlar (kart başına sütun sayısı).
+   */
+  measureReports({ q = '', limit = 50, offset = 0 } = {}, { now = Date.now() } = {}) {
+    const r = this.db.measureReportRows({ q, limit, offset });
+    return {
+      total: r.total,
+      items: r.items.map((row) => {
+        const w = this.#get(row.no);
+        const m = this.getMeasurements(row.no, { now });
+        return {
+          no: w.no, status: w.status, stockCode: w.stockCode, productName: w.productName, machineId: w.machineId, machineNumber: machineNumber(w.machineId),
+          planRows: w.measurePlan.length, columns: row.columns, lastAt: row.lastAt, pending: m.pending,
+          flagged: m.slots.filter((s) => s.outOfTol.length > 0 || CHECK_KINDS.some((k) => s.checks[k] === false)).length,
+          cards: this.db.cratesOfWo(w.no).map((c) => ({ id: c.id, cardNo: c.cardNo, state: c.state, columns: m.slots.filter((s) => s.card?.id === c.id).length })),
+        };
+      }),
+    };
+  }
+
+  /** Bir iş emrinin TÜM ölçümleri tek raporda (kartlara bölünmeden); her sütun hangi karta düştüğünü taşır. */
+  measureReport(no, { now = Date.now() } = {}) {
+    const w = this.#get(no);
+    const m = this.getMeasurements(w.no, { now });
+    return {
+      scope: 'is-emri', card: null,
+      wo: { no: w.no, status: w.status, stockCode: w.stockCode, productName: w.productName, customerCode: w.customerCode, machineId: w.machineId, machineNumber: machineNumber(w.machineId), firstApprovalNo: w.firstApprovalNo, gkkReportNo: w.gkkReportNo },
+      plan: m.plan, checks: m.checks, slots: m.slots, pending: m.pending,
+      cards: this.db.cratesOfWo(w.no).map((c) => ({ id: c.id, cardNo: c.cardNo, state: c.state, columns: m.slots.filter((s) => s.card?.id === c.id).length })),
+    };
+  }
+
+  /**
    * ÜRÜN TANITIM KARTININ ÖLÇÜ KONTROL FÖYÜ: kartın (kasanın) zaman aralığındaki ölçümler; kâğıt formun konumlarıyla (gündüz/gece blokları).
    * İş emri bitmişse son kartta bitişten sonra girilen ölçümler de görünür.
    */
@@ -1344,6 +1419,7 @@ export class Planning {
             })(),
             crateCount: this.db.cratesOfWo(w.no).length,
             measure: { rows: w.measurePlan.length, last: this.db.lastMeasurementAt(w.no) },
+            gkkReportNo: w.gkkReportNo, firstApprovalNo: w.firstApprovalNo, material: w.usedMaterial ?? w.material,
             // basilan kartlar (tek adimli akis): sayi ve en son kart
             cards: (() => {
               const items = this.db.cratesOfWo(w.no).filter((c) => c.closedAt != null);

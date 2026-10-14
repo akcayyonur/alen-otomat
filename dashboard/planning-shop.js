@@ -9,10 +9,12 @@
  */
 import { escapeHtml, stateOf } from './format.js';
 import { api, post } from './lib-common.js';
-import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson } from './planning-common.js';
+import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, isViewer } from './planning-common.js';
 import { openStartDialog, openFinishDialog, openEditFieldsDialog } from './planning-production.js';
 import { openCrateCard, openIssueCard } from './planning-card.js';
-import { openMeasureDialog } from './planning-measure.js';
+import { openMeasureDialog, openMeasureReport } from './planning-measure.js';
+import { openWorkOrderForm } from './planning-wo-form.js';
+import { createFirstApproval } from './planning-approvals.js';
 
 const REFRESH_MS = 10_000;
 const pad = (n) => String(n).padStart(2, '0');
@@ -39,6 +41,16 @@ export async function renderShop(host) {
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
   let last = '';
   let data = null;
+  const readOnly = isViewer(); // izleyici: her şeyi görür, hiçbir şeyi değiştiremez (sunucu da reddeder)
+
+  /** Üretimdeki iş emrinin GKK ve ilk onay numaraları (ustaların iş emrine yazdığı). */
+  function refsBlock(a) {
+    const approval = a.firstApprovalNo
+      ? `<b class="mono">${escapeHtml(a.firstApprovalNo)}</b>`
+      : (readOnly ? '<span class="is-null">yok</span>' : '<span class="is-null">alınmadı</span>');
+    return `<p class="hint shop-refs">GKK rapor no: ${a.gkkReportNo ? `<b class="mono">${escapeHtml(a.gkkReportNo)}</b>` : '<span class="is-null">yok</span>'}` +
+      ` · İlk onay: ${approval}${a.material ? ` · hammadde <span class="mono">${escapeHtml(a.material)}</span>` : ''}</p>`;
+  }
 
   /** Üretimdeki iş emrinin kart satırı: basılan kart sayısı, son kart ve "Ürün tanıtım kartı bas". */
   function cardBlock(a) {
@@ -49,8 +61,15 @@ export async function renderShop(host) {
     const legacy = a.crate ? ` · açık kasa <span class="mono">${escapeHtml(a.crate.cardNo)}</span> (kart basılınca kapanır)` : '';
     const ms = a.measure ?? { rows: 0, last: null };
     const msInfo = ms.rows === 0 ? 'Ölçü kontrolü: ölçüler henüz tanımlı değil' : ms.last ? `Son ölçü ${when(ms.last)} (${escapeHtml(dur(data.now - ms.last))} önce)` : 'Ölçü kontrolü: henüz ölçüm girilmedi';
+    const formBtn = `<button type="button" class="icon-btn shop-btn" data-act="wo-form" data-no="${escapeHtml(a.no)}" title="İş emri formu ve teknik resimler">İş emri formu</button>`;
+    if (readOnly) {
+      return `<div class="shop-crate"><p class="hint">${info}</p><p class="hint">${msInfo}</p>` +
+        `<div class="shop-actions">${formBtn}<button type="button" class="icon-btn shop-btn" data-act="measure-report" data-no="${escapeHtml(a.no)}">Ölçü raporu</button>` +
+        `${c.last ? `<button type="button" class="icon-btn shop-btn" data-act="crate-card" data-id="${c.last.id}">Son kartı göster</button>` : ''}</div></div>`;
+    }
     return `<div class="shop-crate"><p class="hint">${info}${legacy}</p><p class="hint">${msInfo}</p>` +
-      `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="measure" data-no="${escapeHtml(a.no)}">Ölçü kontrolü</button>` +
+      `<div class="shop-actions">${formBtn}<button type="button" class="icon-btn shop-btn" data-act="measure" data-no="${escapeHtml(a.no)}">Ölçü kontrolü</button>` +
+      `<button type="button" class="icon-btn shop-btn" data-act="measure-report" data-no="${escapeHtml(a.no)}">Ölçü raporu</button>` +
       `<button type="button" class="icon-btn shop-btn btn-primary" data-act="card-issue" data-no="${escapeHtml(a.no)}">Ürün tanıtım kartı bas</button>` +
       `${c.last ? `<button type="button" class="icon-btn shop-btn" data-act="crate-card" data-id="${c.last.id}">Son kartı yeniden yazdır</button>` : ''}</div></div>`;
   }
@@ -68,27 +87,31 @@ export async function renderShop(host) {
         `<div class="pl-meter" role="img" aria-label="${fmtNum(a.produced)} / ${fmtNum(a.targetQty)} adet"><span class="${over ? 'is-over' : ''}" style="width:${Math.min(100, a.pct ?? 0)}%"></span></div>` +
         `<p class="pl-meter-t"><b>${fmtNum(a.produced)} / ${fmtNum(a.targetQty)} adet</b> · %${fmtDec(a.pct ?? 0, 0)}${a.remaining > 0 ? ` · kalan ${fmtNum(a.remaining)}` : ''}</p>` +
         `<p class="hint">başlangıç ${escapeHtml(when(a.startedAt))}${a.eta ? ` · tahmini bitiş ${escapeHtml(when(a.eta.ms))}` : ''}${a.eta?.lateRisk ? ` ${chip('bad', '▲', 'termin riski')}` : ''}${a.warnings > 0 ? ` ${chip('info', '▲', `${a.warnings} uyarı`)}` : ''}</p>` +
+        refsBlock(a) +
         cardBlock(a) +
-        `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="edit-wo" data-no="${escapeHtml(a.no)}" title="İlk onay rapor no, ölçülen net gramaj, GKK rapor no...">İş emrini düzenle</button>` +
-        `<button type="button" class="icon-btn shop-btn btn-primary" data-act="finish" data-no="${escapeHtml(a.no)}">İş emrini bitir</button></div>`;
+        (readOnly ? '' : `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="edit-wo" data-no="${escapeHtml(a.no)}" title="İlk onay rapor no, ölçülen net gramaj, GKK rapor no...">İş emrini düzenle</button>` +
+          `<button type="button" class="icon-btn shop-btn" data-act="approval-new" data-no="${escapeHtml(a.no)}" title="İlk parça ölçülüp onaylanınca sıradaki ilk onay numarasını verir">İlk onay numarası al</button>` +
+          `<button type="button" class="icon-btn shop-btn btn-primary" data-act="finish" data-no="${escapeHtml(a.no)}">İş emrini bitir</button></div>`);
     } else {
       body =
         '<p class="hint shop-none">Bu tezgahta üretimde iş emri yok.</p>' +
         // Son kasa iş emri bittikten sonra da dolabilir: son 24 saatte biten iş emri için kart basılabilir.
         (m.finished
           ? `<div class="shop-crate"><p class="hint">Son biten iş emri: <b class="mono">${escapeHtml(m.finished.no)}</b> · <span class="mono">${escapeHtml(m.finished.stockCode)}</span> (${escapeHtml(when(m.finished.finishedAt))})</p>` +
-            `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="card-issue" data-no="${escapeHtml(m.finished.no)}">Ürün tanıtım kartı bas</button></div></div>`
+            `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="wo-form" data-no="${escapeHtml(m.finished.no)}">İş emri formu</button>` +
+            (readOnly ? '' : `<button type="button" class="icon-btn shop-btn" data-act="card-issue" data-no="${escapeHtml(m.finished.no)}">Ürün tanıtım kartı bas</button>`) + '</div></div>'
           : '') +
         (m.planned.length
           ? `<ul class="shop-planned">${m.planned.slice(0, 3).map((w) =>
             `<li><span><b class="mono">${escapeHtml(w.no)}</b> · <span class="mono">${escapeHtml(w.stockCode)}</span> · hedef ${fmtNum(w.targetQty)}<br><span class="shop-prod">${cellText(w.productName)}</span></span>` +
-            `<button type="button" class="icon-btn shop-btn btn-primary" data-act="start" data-no="${escapeHtml(w.no)}">Başlat</button></li>`).join('')}</ul>`
+            `<span class="shop-li-actions"><button type="button" class="icon-btn shop-btn" data-act="wo-form" data-no="${escapeHtml(w.no)}" title="İş emri formu ve teknik resimler">Form</button>` +
+            (readOnly ? '' : `<button type="button" class="icon-btn shop-btn btn-primary" data-act="start" data-no="${escapeHtml(w.no)}">Başlat</button>`) + '</span></li>').join('')}</ul>`
           : '<p class="hint">Bu tezgaha atanmış bekleyen iş emri yok.</p>') +
-        `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="pick">Başka iş emri başlat…</button></div>`;
+        (readOnly ? '' : `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="pick">Başka iş emri başlat…</button></div>`);
     }
     const s = m.stops;
     const stopBtn = s.pending > 0
-      ? `<button type="button" class="icon-btn shop-btn shop-stopbtn is-warn" data-act="stops"><span aria-hidden="true">▲</span> ${s.pending} duruşun nedeni bekliyor (${escapeHtml(dur(s.pendingMs))})</button>`
+      ? `<button type="button" class="icon-btn shop-btn shop-stopbtn is-warn" data-act="stops"><span aria-hidden="true">▲</span> ${s.pending} duruşun nedeni ${readOnly ? 'girilmemiş' : 'bekliyor'} (${escapeHtml(dur(s.pendingMs))})</button>`
       : '<button type="button" class="icon-btn shop-btn shop-stopbtn" data-act="stops">Duruşlar</button>';
     const ongoing = s.ongoing != null ? `<p class="hint shop-ongoing"><span aria-hidden="true">❙❙</span> Şu an duruyor: ${escapeHtml(dur(data.now - s.ongoing))} (${escapeHtml(hm(s.ongoing))}'den beri)</p>` : '';
     return `<article class="shop-card${m.active ? ' is-running' : ''}" data-machine="${escapeHtml(m.id)}">` +
@@ -123,9 +146,12 @@ export async function renderShop(host) {
     else if (act === 'finish') openFinishDialog(btn.dataset.no, refresh);
     else if (act === 'edit-wo') openEditFieldsDialog(btn.dataset.no, refresh);
     else if (act === 'pick') openPicker(machine, refresh);
-    else if (act === 'stops') openStopsDialog(machine, data.machines.find((x) => x.id === machine)?.name ?? machine, refresh);
+    else if (act === 'stops') openStopsDialog(machine, data.machines.find((x) => x.id === machine)?.name ?? machine, refresh, { readOnly });
     else if (act === 'card-issue') openIssueCard(btn.dataset.no, refresh);
     else if (act === 'measure') openMeasureDialog(btn.dataset.no, refresh);
+    else if (act === 'measure-report') openMeasureReport(btn.dataset.no);
+    else if (act === 'wo-form') openWorkOrderForm(btn.dataset.no);
+    else if (act === 'approval-new') createFirstApproval(btn.dataset.no, refresh);
     else if (act === 'crate-card') openCrateCard(Number(btn.dataset.id));
   };
 
@@ -183,7 +209,7 @@ async function codes() {
 }
 
 /** Bir tezgahın son 24 saatteki ölçülmüş duruşları; her biri için neden seç / kaldır. */
-export async function openStopsDialog(machineId, name, onChanged = () => {}) {
+export async function openStopsDialog(machineId, name, onChanged = () => {}, { readOnly = false } = {}) {
   const m = openModal({ title: `Duruşlar · ${name}`, wide: true });
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
   let r;
@@ -197,7 +223,7 @@ export async function openStopsDialog(machineId, name, onChanged = () => {}) {
   function draw() {
     const stops = r.stops;
     m.body.innerHTML =
-      `<p class="hint">Son 24 saatte ${r.minStopMinutes} dakikadan uzun ${stops.length} duruş. Süre tezgahtan ölçülür; siz yalnız nedenini seçersiniz. Bir duruşu birden çok nedene bölebilirsiniz (ör. 40 dk çubuk değişimi + 20 dk ayarcı bekleme).</p>` +
+      `<p class="hint">Son 24 saatte ${r.minStopMinutes} dakikadan uzun ${stops.length} duruş. Süre tezgahtan ölçülür${readOnly ? '; nedenleri fabrika ekranında ustalar girer' : '; siz yalnız nedenini seçersiniz. Bir duruşu birden çok nedene bölebilirsiniz (ör. 40 dk çubuk değişimi + 20 dk ayarcı bekleme)'}.</p>` +
       (stops.length === 0 ? '<p class="empty">Nedeni sorulacak duruş yok.</p>' : stops.map((s, i) => {
         const parts = Object.entries(s.states).map(([k, v]) => `${STATE_NOUN[k] ?? k} ${dur(v)}`).join(' · ');
         const info = stateOf(s.dominant);
@@ -207,9 +233,9 @@ export async function openStopsDialog(machineId, name, onChanged = () => {}) {
           `${s.ongoing ? ` ${chip('info', '❙❙', 'şu an sürüyor')}` : ''}</header>` +
           (s.reasons.length ? `<ul class="stop-reasons">${s.reasons.map((x) =>
             `<li><span class="chip chip-ok"><span aria-hidden="true">✓</span> <b>${escapeHtml(x.code)}</b> ${escapeHtml(x.name ?? '')}</span> <span class="hint">${escapeHtml(hm(x.from))}–${escapeHtml(hm(x.to))} (${escapeHtml(dur(x.to - x.from))})${x.person ? ` · ${escapeHtml(x.person)}` : ''}${x.note ? ` · ${escapeHtml(x.note)}` : ''}</span> ` +
-            `<button type="button" class="icon-btn icon-btn-sm" data-act="remove" data-id="${x.id}">Kaldır</button></li>`).join('')}</ul>` : '') +
+            (readOnly ? '' : `<button type="button" class="icon-btn icon-btn-sm" data-act="remove" data-id="${x.id}">Kaldır</button>`) + '</li>').join('')}</ul>` : '') +
           (s.answered ? '' : `<p class="stop-open"><span aria-hidden="true">▲</span> Nedeni belirsiz: <b>${escapeHtml(dur(s.uncoveredMs))}</b> ` +
-            `<button type="button" class="icon-btn shop-btn btn-primary" data-act="reason" data-i="${i}">Neden seç…</button></p>`) +
+            (readOnly ? '' : `<button type="button" class="icon-btn shop-btn btn-primary" data-act="reason" data-i="${i}">Neden seç…</button>`) + '</p>') +
           '</section>';
       }).join(''));
   }
@@ -222,7 +248,7 @@ export async function openStopsDialog(machineId, name, onChanged = () => {}) {
 
   m.body.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-act]');
-    if (!btn) return;
+    if (!btn || readOnly) return;
     if (btn.dataset.act === 'reason') {
       const stop = r.stops[Number(btn.dataset.i)];
       openReasonPicker(machineId, stop, reload);

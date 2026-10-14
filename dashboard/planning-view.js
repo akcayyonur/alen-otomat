@@ -1,5 +1,7 @@
 /**
- * Planlama uygulamasinin kabugu (YALNIZ yonetici): #/planlama, #/planlama/isemirleri | urunler | siparisler | programlar.
+ * Planlama uygulamasinin kabugu: #/planlama, #/planlama/tezgahbasi | paketleme | isemirleri | gkk | ilkonay | olcuraporlari | verimlilik | hammadde | urunler | siparisler | programlar.
+ * Roller: yonetici hepsini; operator (fabrika PC'si) tezgah basi, paketleme, GKK, ilk onay, olcu raporlari; izleyici (viewer) tezgah basi, is emirleri,
+ * GKK, ilk onay ve olcu raporlarini YALNIZ OKUR (yetkiyi sunucu verir, burasi yalniz gorunum).
  * Planlama, Telemetri'den AYRI bir uygulamadir (apps.js): kendi yan menusu vardir (renderPlanningNav), tezgah listesi yoktur.
  * Bolumler ayri modullerdedir; burada yan menu, bolum basligi, ozet satiri ve Excel CSV'si iceri alma penceresi bulunur.
  *
@@ -17,25 +19,30 @@ import { renderShop } from './planning-shop.js';
 import { renderPacking } from './planning-packing.js';
 import { renderMaterial } from './planning-material.js';
 import { renderEfficiency } from './planning-efficiency.js';
+import { renderGkk } from './planning-gkk.js';
+import { renderApprovals } from './planning-approvals.js';
+import { renderMeasureReports } from './planning-reports.js';
+import { TAB_ROLES, tabsForRole, defaultTabFor } from './planning-tabs.js';
 
-const ALL = ['admin', 'operator'];
-const ADMIN = ['admin'];
 const TABS = Object.freeze([
-  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Tezgah başına üretimdeki iş emri, bekleyenler ve duruş nedenleri. Duruşun süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', roles: ALL, plain: true, render: renderShop },
-  { key: 'paketleme', label: 'Paketleme', sub: 'kasa adedi gir', hint: 'Kasa kapandıktan sonra paketlemede belli bir adetle paketlenen kesin adedi girin; kasa kartı buradan da yeniden basılır.', roles: ALL, plain: true, render: renderPacking },
-  { key: 'isemirleri', label: 'İş emirleri', sub: 'aç, düzenle, form', hint: 'Siparişten ya da siparişsiz iş emri açın; tezgah atayın, formu yazdırın.', roles: ADMIN, render: renderWorkOrders },
-  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Verimlilik (kazanılan süre ÷ ayrılan süre), kullanılabilirlik ve performans; tezgah × gün × vardiya matrisi, günlük üretim kartları ve duruş nedeni dakikaları.', roles: ADMIN, plain: true, render: renderEfficiency },
-  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Hammadde ihtiyacı, gerçekleşen sarfiyat (sayaç × brüt gramaj, kg) ve Mikro sarfiyat fişi takibi.', roles: ADMIN, plain: true, render: renderMaterial },
-  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: 'Ürün kartları: hammadde, tam boy, net/brüt ağırlık ve planlanan çevrim süresi.', roles: ADMIN, render: renderProducts },
-  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: 'Siparişler ve satırları; satırdan doğrudan iş emri açılır.', roles: ADMIN, render: renderOrders },
-  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Tornalarda çalışmış programları ürün kartlarıyla eşleyin.', roles: ADMIN, render: renderPrograms },
+  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Tezgah başına üretimdeki iş emri, bekleyenler ve duruş nedenleri. Duruşun süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', roles: TAB_ROLES.tezgahbasi, plain: true, render: renderShop },
+  { key: 'paketleme', label: 'Paketleme', sub: 'kasa adedi gir', hint: 'Kasa kapandıktan sonra paketlemede belli bir adetle paketlenen kesin adedi girin; kasa kartı buradan da yeniden basılır. Kartında ÜRÜN RET tikli kasalar paketlemeye gitmez ("Ret edilenler"de görünür).', roles: TAB_ROLES.paketleme, plain: true, render: renderPacking },
+  { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca iş emri formu (ve arka sayfada teknik resimler) açılır; "Düzenle" ile iş emri değiştirilir. Siparişten ya da siparişsiz yeni iş emri açılır.', roles: TAB_ROLES.isemirleri, render: renderWorkOrders },
+  { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor numarası takip formu (EYS.FR.011): iş emrine yazılacak GK numarasını hammadde cinsinden bulun.', roles: TAB_ROLES.gkk, plain: true, importer: true, render: renderGkk },
+  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013): ilk parça onayı için numara alın; ürün, GK kodu, iş emri, tarih, operatör ve CNC no ile kaydedilir.', roles: TAB_ROLES.ilkonay, plain: true, importer: true, render: renderApprovals },
+  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'İş emirlerine bağlı ölçü kontrolü raporları: saatlik ölçümler kaydedilir; kalite kontrole ve paketlemeye ürünle birlikte giden rapor buradan açılır ve basılır.', roles: TAB_ROLES.olcuraporlari, plain: true, render: renderMeasureReports },
+  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Verimlilik (kazanılan süre ÷ ayrılan süre), kullanılabilirlik ve performans; tezgah × gün × vardiya matrisi, günlük üretim kartları ve duruş nedeni dakikaları.', roles: TAB_ROLES.verimlilik, plain: true, render: renderEfficiency },
+  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Hammadde ihtiyacı, gerçekleşen sarfiyat (sayaç × brüt gramaj, kg) ve Mikro sarfiyat fişi takibi.', roles: TAB_ROLES.hammadde, plain: true, render: renderMaterial },
+  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: 'Ürün kartları: hammadde, tam boy, net/brüt ağırlık ve planlanan çevrim süresi.', roles: TAB_ROLES.urunler, render: renderProducts },
+  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: 'Siparişler ve satırları; satırdan doğrudan iş emri açılır.', roles: TAB_ROLES.siparisler, render: renderOrders },
+  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Tornalarda çalışmış programları ürünlerle eşleyin: önerileri onaylayın ya da ürünü kendiniz seçin. Eşleme adedi belirlemez, yalnız iş emri ve raporlarda doğru ürünü gösterir.', roles: TAB_ROLES.programlar, render: renderPrograms },
 ]);
 
 const roleOf = () => getSession()?.user?.role ?? 'viewer';
 /** Rolun gorebildigi bolumler (sunucu da yetkiyi ayrica zorlar). */
-export const planningTabsFor = (role = roleOf()) => TABS.filter((t) => t.roles.includes(role)).map((t) => t.key);
-/** Giriste acilan bolum: operator tezgah basini, yonetici is emirlerini gorur. */
-export const defaultPlanningTab = (role = roleOf()) => (role === 'operator' ? 'tezgahbasi' : 'isemirleri');
+export const planningTabsFor = (role = roleOf()) => tabsForRole(role);
+/** Giriste acilan bolum: operator ve izleyici tezgah basini, yonetici is emirlerini gorur. */
+export const defaultPlanningTab = (role = roleOf()) => defaultTabFor(role);
 
 /** Yan menu (app.js cagirir): bolum dugmeleri; secili bolum isaretlenir. Adresler #/planlama/<bolum>. */
 export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
@@ -48,7 +55,7 @@ export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
       `<button class="mi${t.key === current.key ? ' is-active' : ''}" type="button" data-tab="${t.key}" aria-current="${t.key === current.key}">` +
       `<span class="mi-main"><span class="mi-name">${escapeHtml(t.label)}</span><span class="mi-sub">${escapeHtml(t.sub)}</span></span></button>`).join('');
 }
-const KIND_LABEL = Object.freeze({ isemri: 'iş emirleri listesi', siparis: 'sipariş dosyası' });
+const KIND_LABEL = Object.freeze({ isemri: 'iş emirleri listesi', siparis: 'sipariş dosyası', gkk: 'GKK rapor numaraları (EYS.FR.011)', ilkonay: 'ilk baskı onay listesi (EYS.FR.013)' });
 const MAX_UPLOAD = 64 * 1024 * 1024;
 const nf = new Intl.NumberFormat('tr-TR');
 /** Sayi metni (bos/yok 0). */
@@ -59,12 +66,14 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   const mine = TABS.filter((t) => t.roles.includes(roleOf()));
   const current = mine.find((t) => t.key === tab) ?? mine[0];
   const admin = roleOf() === 'admin';
-  // Ice aktarma ve sayilar yalniz yonetici + planlama bolumlerinde; tezgah basi (operator ekrani) sade kalir
+  // Ice aktarma ve sayilar yalniz yonetici + planlama bolumlerinde; tezgah basi (operator ekrani) sade kalir.
+  // GKK ve ilk onay bolumlerinde yalniz "CSV iceri al" dugmesi vardir (urun/siparis ozeti degil).
   const showAdminBar = admin && !current.plain;
+  const showImport = admin && (!current.plain || current.importer === true);
   host.innerHTML =
     '<section class="dt-block">' +
     `<div class="dt-block-head"><div><h3>${escapeHtml(current.label)}</h3><p class="hint">${escapeHtml(current.hint)}</p></div>` +
-    (showAdminBar ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="import">CSV içeri al…</button></div>' : '') + '</div>' +
+    (showImport ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="import">CSV içeri al…</button></div>' : '') + '</div>' +
     (showAdminBar ? '<p class="hint" data-role="summary"></p>' : '') +
     '<div data-role="tab"></div></section>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
@@ -92,7 +101,10 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
 
 function resultHtml(r) {
   const kind = KIND_LABEL[r.format] ?? r.format;
-  const tally = r.format === 'isemri'
+  const tally = r.format === 'gkk' || r.format === 'ilkonay'
+    ? `${n(r.totalRows)} kayıt okundu → <b>${n(r.added)}</b> yeni, <b>${n(r.updated)}</b> güncellendi, ${n(r.unchanged)} değişmedi` +
+      (r.format === 'gkk' ? `; ${n(r.freeNumbers)} önceden basılmış boş numara atlandı. Sıradaki numara: <b class="mono">${escapeHtml(r.next?.no ?? '—')}</b>` : `. Sıradaki kod: <b class="mono">${escapeHtml(r.next?.code ?? '—')}</b>`)
+    : r.format === 'isemri'
     ? `${n(r.totalRows)} iş emri satırı okundu → <b>${n(r.products.added)}</b> yeni ürün kartı, <b>${n(r.products.updated)}</b> güncellendi, ${n(r.products.unchanged)} değişmedi`
     : `${n(r.totalRows)} sipariş satırı okundu → <b>${n(r.added)}</b> yeni, <b>${n(r.updated)}</b> güncellendi, ${n(r.unchanged)} değişmedi; ` +
       `ürün kartları: ${n(r.products.added)} yeni, ${n(r.products.updated)} güncellendi` +
@@ -110,7 +122,9 @@ function openImportDialog(onDone) {
   m.body.innerHTML =
     '<p class="hint">Excel\'de ilgili sayfayı <b>Farklı Kaydet → CSV UTF-8</b> ile kaydedip seçin. Dosya türü başlıklardan kendiliğinden tanınır:</p>' +
     '<ul class="pl-list"><li><b>İş emirleri listesi</b> (PLANLANAN sayfası: ALEN KOD, MAMÜL ADI, MÜŞTERİ KODU …) → <b>ürün kartları</b> (her ürün için en son iş emrindeki değerler)</li>' +
-    '<li><b>Sipariş dosyası</b> (_SIPARIS sayfası: Mamul_Kodu, Evrak_No, Must_Sip_No …) → <b>sipariş satırları</b> ve ürün kartlarında eksik alanlar (tam boy, hammadde, ağırlıklar)</li></ul>' +
+    '<li><b>Sipariş dosyası</b> (_SIPARIS sayfası: Mamul_Kodu, Evrak_No, Must_Sip_No …) → <b>sipariş satırları</b> ve ürün kartlarında eksik alanlar (tam boy, hammadde, ağırlıklar)</li>' +
+    '<li><b>GKK rapor numarası takip formu</b> (EYS.FR.011: SIRA, ÜRÜN, RAPOR NO, ÜRETİCİ RAPOR TARİHİ, AÇIKLAMA) → <b>GKK rapor no</b> sekmesi; sayfa sonundaki önceden basılmış boş numaralar kayıt sayılmaz</li>' +
+    '<li><b>İlk baskı onay / numune takip listesi</b> (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU, GK- KODU …) → <b>İlk onay raporu</b> sekmesi; ilk boş basılı kod sıradaki numara olur</li></ul>' +
     '<p class="hint">Aynı dosyayı tekrar yüklemek güvenlidir. Elle düzenlediğiniz ürün kartlarının dolu alanları ezilmez. Büyük dosya (Excel\'in boş satırları dahil) sorun değil.</p>' +
     '<input type="file" accept=".csv,text/csv,.txt" data-role="file" aria-label="CSV dosyası">' +
     '<label class="chk"><input type="checkbox" data-role="hide-old"> Bu dosya <b>tam döküm</b>: dosyada olmayan eski sipariş satırlarını gizle ' +

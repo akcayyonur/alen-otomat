@@ -10,7 +10,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, fmtNum, openModal, rememberedPerson, rememberPerson } from './planning-common.js';
+import { put, fmtNum, openModal, rememberedPerson, rememberPerson, isAdminRole, printModal } from './planning-common.js';
 
 const SLOT_MS = 30 * 60_000;
 const pad = (n) => String(n).padStart(2, '0');
@@ -191,21 +191,41 @@ export async function openMeasureDialog(woNo, onDone = () => {}) {
 
 /* ====================================================================== plan düzenleyici */
 
-/** Ölçü satırları: ad, nominal, alt/üst sapma (en çok 10). @param {string} woNo @param {() => void} [onDone] */
-export async function openMeasurePlanDialog(woNo, onDone = () => {}) {
-  const m = openModal({ title: `Ölçü satırları · ${woNo}`, wide: true });
+/**
+ * Ölçü satırları: ad, nominal, alt/üst sapma (en çok 10). Her ürünün ölçüleri ve SAYISI farklıdır (biri 3, biri 5 ölçü).
+ * Hedef bir iş emri (`{woNo}`) ya da ürün kartının KALICI planı (`{stockCode}`; yeni iş emirleri bunu kopyalar) olabilir.
+ * @param {string|{woNo?: string, stockCode?: string}} target dize: iş emri no @param {() => void} [onDone]
+ */
+export async function openMeasurePlanDialog(target, onDone = () => {}) {
+  const t = typeof target === 'string' ? { woNo: target } : target;
+  const forProduct = !t.woNo;
+  const m = openModal({ title: forProduct ? `Ürün ölçü planı · ${t.stockCode}` : `Ölçü satırları · ${t.woNo}`, wide: true });
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
-  let data;
-  try { data = await api(`/api/planning/work-orders/${encodeURIComponent(woNo)}/measurements`); } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`; return; }
-  const rows = data.plan.map((r) => ({ label: r.label, nominal: fmt(r.nominal), lower: fmt(r.lower), upper: fmt(r.upper) }));
+  let head;
+  let plan;
+  let productCode = null;
+  try {
+    if (forProduct) {
+      const p = await api(`/api/planning/products/${encodeURIComponent(t.stockCode)}`);
+      head = `<b class="mono">${escapeHtml(p.stockCode)}</b> ${escapeHtml(p.name ?? '')}`;
+      plan = p.measurePlan;
+    } else {
+      const data = await api(`/api/planning/work-orders/${encodeURIComponent(t.woNo)}/measurements`);
+      head = `<b class="mono">${escapeHtml(data.woNo)}</b> · ${escapeHtml(data.stockCode)} ${escapeHtml(data.productName ?? '')}`;
+      plan = data.plan;
+      productCode = data.stockCode;
+    }
+  } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`; return; }
+  const rows = plan.map((r) => ({ label: r.label, nominal: fmt(r.nominal), lower: fmt(r.lower), upper: fmt(r.upper) }));
   if (rows.length === 0) rows.push({ label: '', nominal: '', lower: '', upper: '' });
   let error = null;
+  let toProduct = isAdminRole(); // yönetici bir iş emrinde tanımlıyorsa varsayılan: ürün kartına da kaydet
 
   function draw() {
     m.body.innerHTML =
-      `<p class="pl-wohead"><b class="mono">${escapeHtml(data.woNo)}</b> · ${escapeHtml(data.stockCode)} ${escapeHtml(data.productName ?? '')}</p>` +
-      '<p class="hint">Her satır ölçülecek bir özelliktir (kâğıt formdaki 1…10). <b>Nominal</b> ve <b>sapmalar</b> yazılırsa tolerans dışı değerler otomatik işaretlenir. ' +
-      'Alt sapmayı eksi işaretiyle yazın: <b>Ø34,2 −0,1/+0</b> → nominal 34,2 · alt −0,1 · üst 0. Sapma gerekmiyorsa boş bırakın. Aynı ürünün sonraki iş emirleri bu planı otomatik alır.</p>' +
+      `<p class="pl-wohead">${head}</p>` +
+      '<p class="hint">Her satır ölçülecek bir özelliktir; <b>kaç satır olacağı ürüne göre değişir</b> (3 ölçü, 5 ölçü ...; en çok 10). <b>Nominal</b> ve <b>sapmalar</b> yazılırsa tolerans dışı değerler otomatik işaretlenir. ' +
+      'Alt sapmayı eksi işaretiyle yazın: <b>Ø34,2 −0,1/+0</b> → nominal 34,2 · alt −0,1 · üst 0. Sapma gerekmiyorsa boş bırakın.</p>' +
       '<form autocomplete="off"><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th class="num">#</th><th>Ölçü adı</th><th>Nominal</th><th>Alt sapma</th><th>Üst sapma</th><th></th></tr></thead><tbody>' +
       rows.map((r, i) => `<tr data-i="${i}"><td class="num"><b>${i + 1}</b></td>` +
         `<td><input name="label${i}" maxlength="40" value="${escapeHtml(r.label)}" placeholder="ör. Ø34,2" class="ms-in-w"></td>` +
@@ -214,6 +234,10 @@ export async function openMeasurePlanDialog(woNo, onDone = () => {}) {
         `<td><input name="upper${i}" inputmode="decimal" value="${escapeHtml(r.upper)}" placeholder="0" class="ms-in"></td>` +
         `<td><button type="button" class="icon-btn icon-btn-sm" data-act="del" data-i="${i}" aria-label="${i + 1}. satırı sil">Sil</button></td></tr>`).join('') +
       '</tbody></table></div>' +
+      (!forProduct && isAdminRole() && productCode
+        ? `<label class="chk"><input type="checkbox" name="toProduct"${toProduct ? ' checked' : ''}> Ürün kartına da kaydet <span class="hint" style="margin:0">(${escapeHtml(productCode)}: sonraki iş emirleri bu ölçüleri hazır alır)</span></label>`
+        : forProduct ? '<p class="hint">Bu plan ürün kartında KALICI durur: bu ürün için açılacak yeni iş emirleri bu ölçülerle gelir. Açık iş emirleri etkilenmez.</p>'
+          : '<p class="hint">Aynı ürünün sonraki iş emirleri bu planı otomatik alır.</p>') +
       (error ? `<p class="notice notice-sim">${escapeHtml(error)}</p>` : '') +
       `<div class="dt-actions"><button type="button" class="icon-btn" data-act="add"${rows.length >= 10 ? ' disabled' : ''}>＋ Ölçü ekle</button>` +
       '<button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">Kaydet</button></div></form>';
@@ -221,6 +245,7 @@ export async function openMeasurePlanDialog(woNo, onDone = () => {}) {
   const read = () => {
     const f = m.body.querySelector('form');
     rows.forEach((r, i) => { r.label = f.elements[`label${i}`].value; r.nominal = f.elements[`nominal${i}`].value; r.lower = f.elements[`lower${i}`].value; r.upper = f.elements[`upper${i}`].value; });
+    if (f.elements.toProduct) toProduct = f.elements.toProduct.checked;
   };
   m.body.addEventListener('click', (ev) => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
@@ -233,7 +258,8 @@ export async function openMeasurePlanDialog(woNo, onDone = () => {}) {
     read();
     const payload = rows.filter((r) => r.label.trim() !== '' || r.nominal.trim() !== '' || r.lower.trim() !== '' || r.upper.trim() !== '');
     try {
-      await put(`/api/planning/work-orders/${encodeURIComponent(woNo)}/measure-plan`, { rows: payload });
+      if (forProduct) await put(`/api/planning/products/${encodeURIComponent(t.stockCode)}/measure-plan`, { rows: payload });
+      else await put(`/api/planning/work-orders/${encodeURIComponent(t.woNo)}/measure-plan`, { rows: payload, ...(toProduct && isAdminRole() ? { saveToProduct: true } : {}) });
       m.close();
       onDone();
     } catch (err) {
@@ -271,14 +297,15 @@ export function sheetHtml(sheet) {
     days.get(key).cells.set(index, s);
   }
   if (days.size === 0) {
-    const { date } = toForm(sheet.card.issuedAt ?? Date.now());
+    const { date } = toForm(sheet.card?.issuedAt ?? sheet.slots.at(-1)?.slot ?? Date.now());
     days.set(dateKeyOf(date), { date, cells: new Map() });
   }
   const plan = sheet.plan;
   const block = (cells, from, to) => {
     const idx = Array.from({ length: to - from }, (_, i) => from + i);
     const head = `<tr><th class="ms-lbl">ÖLÇÜ KONTROLÜ</th>${idx.map((i) => `<th>${slotLabel(i)}</th>`).join('')}</tr>`;
-    const rows = Array.from({ length: 10 }, (_, r) => {
+    // Satır sayısı ürüne göre değişir: tanımlı ölçü kadar satır basılır (3 ölçü, 5 ölçü ...); hiç tanımlı değilse kâğıt gibi 10 boş satır.
+    const rows = Array.from({ length: plan.length > 0 ? plan.length : 10 }, (_, r) => {
       const p = plan[r];
       const label = p ? `${r + 1}. ${escapeHtml(p.label)}${limitText(p) ? `<small>${escapeHtml(limitText(p))}</small>` : ''}` : `${r + 1}.`;
       return `<tr><th class="ms-lbl">${label}</th>${idx.map((i) => {
@@ -296,18 +323,26 @@ export function sheetHtml(sheet) {
   const w = sheet.wo;
   return [...days.values()].map(({ date, cells }) =>
     '<div class="pl-ms">' +
-    '<div class="pl-ms-head"><div class="pl-ms-title">ÖLÇÜ KONTROL FÖYÜ</div><div class="pl-ms-meta">' +
-    `<span><span class="pl-c-label">KART NO:</span> <b>${escapeHtml(sheet.card.cardNo)}</b></span>` +
+    `<div class="pl-ms-head"><div class="pl-ms-title">${sheet.card ? 'ÖLÇÜ KONTROL FÖYÜ' : 'ÖLÇÜ KONTROL RAPORU'}</div><div class="pl-ms-meta">` +
+    (sheet.card ? `<span><span class="pl-c-label">KART NO:</span> <b>${escapeHtml(sheet.card.cardNo)}</b></span>` : '') +
     `<span><span class="pl-c-label">İŞ EMRİ NO:</span> <b>${escapeHtml(w.no)}</b></span>` +
     `<span><span class="pl-c-label">ALEN ÜRÜN KODU:</span> <b>${escapeHtml(w.stockCode)}</b></span>` +
     `<span><span class="pl-c-label">MAKİNA NO:</span> <b>${escapeHtml(String(w.machineNumber ?? w.machineId ?? ''))}</b></span>` +
     `<span><span class="pl-c-label">TARİH:</span> <b>${escapeHtml(date.toLocaleDateString('tr-TR'))}</b></span></div></div>` +
+    (sheet.card ? '' : cardsLine(sheet)) +
     block(cells, 0, 24) +
     '<p class="pl-ms-note">* Kontrol Planı ile farklı bir frekans belirtilmedikçe 2 Adet numune kontrol edilip hatalı ürün bulunması durumunda makine durdurularak bölüm sorumlusuna bilgi verilir. ' +
     '*Görsel kontrol esnasında çapak, yüzey kontrolü (çapak vb.) çatlak ve kademe kontrolleri yapılır.</p>' +
     block(cells, 24, 48) +
     '<p class="pl-ms-foot">EYS.FR.005 · YAYIN TAR: 18.09.2024 · REV NO: 2 · REV TARİHİ: 02.03.2026 · Sistemden basıldı ' + escapeHtml(new Date().toLocaleString('tr-TR', { hour12: false })) + '</p>' +
     '</div>').join('');
+}
+
+/** İş emri raporunun üstündeki satır: hangi kartta kaç sütun var, karta bağlanmamış (kart bekleyen) kaç sütun. */
+function cardsLine(sheet) {
+  const parts = (sheet.cards ?? []).map((c) => `${escapeHtml(c.cardNo)} (${c.columns} sütun)`);
+  if (sheet.pending > 0) parts.push(`kart bekleyen: ${sheet.pending} sütun`);
+  return parts.length ? `<p class="pl-ms-cards"><span class="pl-c-label">KARTLAR:</span> ${parts.join(' · ')}</p>` : '';
 }
 
 /** Ürün tanıtım kartının ölçü kontrol föyünü göster ve yazdır (A4 yatay). @param {number} crateId */
@@ -321,10 +356,22 @@ export async function openMeasureSheet(crateId) {
     '<div class="dt-actions pl-form-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Yazdır</button></div>' +
     `<p class="hint pl-form-actions">${fmtNum(sheet.slots.length)} sütun ölçüm bu karta (${escapeHtml(sheet.card.cardNo)}) ait. Föy A4 yatay basılır; ölçü satırları ${sheet.plan.length === 0 ? 'tanımlı değil (iş emrinden tanımlanır)' : `${sheet.plan.length} adet`}.</p>` +
     `<div class="pl-ms-scroll">${sheetHtml(sheet)}</div>`;
-  m.body.querySelector('[data-act="print"]').addEventListener('click', () => {
-    document.body.classList.add('pl-printing');
-    const done = () => { document.body.classList.remove('pl-printing'); window.removeEventListener('afterprint', done); };
-    window.addEventListener('afterprint', done);
-    window.print();
-  });
+  m.body.querySelector('[data-act="print"]').addEventListener('click', printModal);
+}
+
+/**
+ * Bir iş emrinin TÜM ölçümleri tek raporda (kartlara bölünmeden): kalite kontrole ve paketlemeye giden rapor. Herkes görür (izleyici dahil).
+ * @param {string} woNo
+ */
+export async function openMeasureReport(woNo) {
+  const m = openModal({ title: `Ölçü raporu · ${woNo}`, wide: true });
+  m.dlg.classList.add('pl-form-dlg');
+  m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
+  let rep;
+  try { rep = await api(`/api/planning/work-orders/${encodeURIComponent(woNo)}/measure-report`); } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Rapor alınamadı: ${escapeHtml(err.message)}</p>`; return; }
+  m.body.innerHTML =
+    '<div class="dt-actions pl-form-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Yazdır</button></div>' +
+    `<p class="hint pl-form-actions">${fmtNum(rep.slots.length)} sütun ölçüm · ${rep.plan.length === 0 ? 'ölçü satırları tanımlı değil' : `${rep.plan.length} ölçü satırı`}. Rapor A4 yatay basılır.</p>` +
+    `<div class="pl-ms-scroll">${rep.slots.length === 0 && rep.plan.length === 0 ? '<p class="empty">Bu iş emrinde ölçü yok.</p>' : sheetHtml(rep)}</div>`;
+  m.body.querySelector('[data-act="print"]').addEventListener('click', printModal);
 }

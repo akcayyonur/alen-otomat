@@ -3,6 +3,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
+import { getSession } from './auth-view.js';
 
 export const put = (path, obj) =>
   api(path, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
@@ -116,3 +117,40 @@ const WO_STATUS = Object.freeze({
   planlandi: ['none', '◔', 'planlandı'], uretimde: ['info', '▶', 'üretimde'], bitti: ['ok', '✓', 'bitti'], iptal: ['bad', '✕', 'iptal'],
 });
 export const woStatusChip = (s) => chip(...(WO_STATUS[s] ?? ['none', '?', String(s)]));
+
+/* ---- roller: planlama ekranlari hangi dugmeleri gosterecegini buradan okur (YETKIYI sunucu verir; bu yalniz gorunum) ---- */
+/** 'admin' | 'operator' | 'viewer' (izleyici). */
+export const planningRole = () => getSession()?.user?.role ?? 'viewer';
+export const isViewer = () => planningRole() === 'viewer';
+export const isAdminRole = () => planningRole() === 'admin';
+
+/** Acik .pl-form-dlg penceresini tarayicinin yazdir penceresiyle basar (styles.css: body.pl-printing). */
+export function printModal() {
+  document.body.classList.add('pl-printing');
+  const done = () => { document.body.classList.remove('pl-printing'); window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  window.print();
+}
+
+/** Bayt -> "123 KB" / "1,2 MB". */
+export const sizeText = (bytes) => (bytes == null ? '' : bytes < 1048576 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1048576).toFixed(1).replace('.', ',')} MB`);
+
+/**
+ * Bir LISTEYI kagit formun duzeninde yazdirir (GKK rapor numaralari EYS.FR.011, ilk baskı onay listesi EYS.FR.013):
+ * baslik, form no, tarih ve satirlar; sayfa degisince sutun basliklari tekrarlanir.
+ * @param {{title: string, formNo: string, heads: string[], rows: (string|number|null)[][], note?: string}} o
+ */
+export function openListPrint({ title, formNo, heads, rows, note = '' }) {
+  const m = openModal({ title: `Yazdır · ${title}`, wide: true });
+  m.dlg.classList.add('pl-form-dlg');
+  m.body.innerHTML =
+    '<div class="dt-actions pl-form-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Yazdır</button></div>' +
+    `<p class="hint pl-form-actions">${rows.length} satır, A4 dikey. Listeyi yazdırmadan önce ekranda süzün ya da arayın: süzülmüş satırlar basılır.</p>` +
+    '<div class="pl-form pl-lf">' +
+    `<div class="pl-f-head"><div class="pl-f-title pl-lf-title">${escapeHtml(title)}</div><div class="pl-f-no"><span class="pl-f-label">${escapeHtml(formNo)}</span> · ${escapeHtml(new Date().toLocaleDateString('tr-TR'))}</div></div>` +
+    `<table class="pl-lf-t"><thead><tr>${heads.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>` +
+    `<tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c == null ? '' : escapeHtml(String(c))}</td>`).join('')}</tr>`).join('')}</tbody></table>` +
+    `<p class="pl-f-foot">${note ? `${escapeHtml(note)} · ` : ''}Sistemden basıldı · ${escapeHtml(new Date().toLocaleString('tr-TR', { hour12: false }))}</p></div>`;
+  m.body.querySelector('[data-act="print"]').addEventListener('click', printModal);
+  return m;
+}

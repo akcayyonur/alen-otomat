@@ -137,6 +137,11 @@ const STATIC_FILES = {
   '/planning-efficiency.js': ['../dashboard/planning-efficiency.js', 'text/javascript; charset=utf-8'],
   '/planning-measure.js': ['../dashboard/planning-measure.js', 'text/javascript; charset=utf-8'],
   '/planning-packing.js': ['../dashboard/planning-packing.js', 'text/javascript; charset=utf-8'],
+  '/planning-gkk.js': ['../dashboard/planning-gkk.js', 'text/javascript; charset=utf-8'],
+  '/planning-approvals.js': ['../dashboard/planning-approvals.js', 'text/javascript; charset=utf-8'],
+  '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],
+  '/planning-reports.js': ['../dashboard/planning-reports.js', 'text/javascript; charset=utf-8'],
+  '/planning-tabs.js': ['../dashboard/planning-tabs.js', 'text/javascript; charset=utf-8'],
   '/format.js': ['../dashboard/format.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['../dashboard/styles.css', 'text/css; charset=utf-8'],
 };

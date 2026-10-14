@@ -67,6 +67,7 @@ hiç okunmaz** (log: ilgili ajanın `ajan.log` / `ajan22.log` dosyasında). Boş
 logs\backend.log      backend çıktısı
 logs\ajan.log         ajan çıktısı (11TB) — bağlantı sorunları burada
 logs\ajan22.log       22TB ajanının çıktısı (22TB paketi kuruluysa)
+logs\ajan.bekci.log   ajan bekçisinin kaydı (ajan çıkarsa/donarsa yeniden başlatır; neden ve çıkış kodu burada) — ajan22 için ajan22.bekci.log
 data\telemetry.db     veritabanı (yedeklenecek tek dosya)
 ```
 

@@ -31,8 +31,8 @@ using Syntec.Telemetri;
 [assembly: AssemblyDescription("Syntec kontrolcusunden uretim verisi okuyup CNC Telemetri backend'ine gonderir")]
 [assembly: AssemblyCompany("alen-otomat")]
 [assembly: AssemblyProduct("CNC Telemetri")]
-[assembly: AssemblyVersion("0.3.0.0")]
-[assembly: AssemblyFileVersion("0.3.0.0")]
+[assembly: AssemblyVersion("0.4.2.0")]
+[assembly: AssemblyFileVersion("0.4.2.0")]
 
 /// Console.Out'u hem konsola hem dosyaya yazar (--log).
 ///
@@ -70,7 +70,13 @@ class DosyaYazici : TextWriter
     public override void Write(char value) { Yaz(value.ToString()); }
     public override void Write(string value) { Yaz(value); }
     public override void Write(char[] buffer, int index, int count) { Yaz(new string(buffer, index, count)); }
-    public override void WriteLine(string value) { Yaz(value + Environment.NewLine); }
+    // Her SATIRIN basina tarih-saat: olay satirlari ("okuma takildi", "baglandi"...) eskiden zamansizdi,
+    // kesintileri Windows olay gunluguyle karsilastirmak icin yalnizca dakikalik ozet satirlarindan
+    // tahmin edilebiliyordu (2026-10-14 incelemesi). Yarim satir yazimlari (Write) oldugu gibi gecer.
+    public override void WriteLine(string value)
+    {
+        Yaz(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + value + Environment.NewLine);
+    }
 
     void Yaz(string metin)
     {
@@ -224,6 +230,11 @@ static class Agent
             Yardim();
             return 0;
         }
+
+        // --supervise: bu surec ajan DEGIL, ajanin bekcisi (Bekci.cs). Asil ajani ayni exe'yi
+        // --supervise'siz calistirarak alt surec olarak baslatir; olursa ya da donarsa yeniden baslatir.
+        // Syntec tiplerine hic dokunmaz (donabilecek bir sey yuklemez).
+        if (arg.ContainsKey("supervise")) return Bekci.Calistir(argv, arg);
 
         // --log: cikti dosyaya da yazilir (servis olarak calisirken kabuk
         // yonlendirmesi yerine). Baslik satirlari dahil her sey loglansin diye
@@ -866,6 +877,9 @@ static class Agent
         Console.WriteLine("                       klasordeki Syntec paketinden anlasilir.");
         Console.WriteLine("  --dll <dosya>        istemci DLL'i: 11TB Syntec.RemoteCNC.Win32.dll,");
         Console.WriteLine("                       22TB Syntec.OpenCNC.dll (modelden otomatik secilir)");
+        Console.WriteLine("  --supervise          BEKCI kipi (--log gerekli): ajani alt surec olarak calistirir; cikarsa ya da");
+        Console.WriteLine("                       gunlugu --stale-sec (varsayilan 240) saniye degismezse yeniden baslatir.");
+        Console.WriteLine("                       Diger bayraklar ajana aynen iletilir. Kendi kaydi: <log>.bekci.log");
         Console.WriteLine();
         Console.WriteLine("Bu program Syntec dll'lerinin bulundugu klasorden calistirilmali. Iki model");
         Console.WriteLine("(11TB ve 22TB) ayni surecte calismaz: her biri kendi paketinden ayri bir ajandir.");

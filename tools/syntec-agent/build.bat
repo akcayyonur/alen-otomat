@@ -23,7 +23,7 @@ if not exist "%CSC%" (
 
 echo [build] derleniyor...
 "%CSC%" /nologo /target:exe /platform:x86 /optimize+ ^
-        /out:syntec-agent.exe Agent.cs SyntecReader.cs
+        /out:syntec-agent.exe Agent.cs Bekci.cs SyntecReader.cs
 if errorlevel 1 (
   echo [build] derleme BASARISIZ
   exit /b 1

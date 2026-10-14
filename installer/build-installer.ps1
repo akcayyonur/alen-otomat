@@ -248,7 +248,7 @@ if ($bloke -gt 0) { Bilgi "11TB paketinde $bloke dosyanin internet (bloke) isare
 $ajanExe = Join-Path $ajanDizin 'syntec-agent.exe'
 $kaynak  = Join-Path $Kok 'tools\syntec-agent'
 $cikti = & $csc /nologo /target:exe /platform:x86 /optimize+ "/out:$ajanExe" `
-    (Join-Path $kaynak 'Agent.cs') (Join-Path $kaynak 'SyntecReader.cs') 2>&1
+    (Join-Path $kaynak 'Agent.cs') (Join-Path $kaynak 'Bekci.cs') (Join-Path $kaynak 'SyntecReader.cs') 2>&1
 if ($LASTEXITCODE -ne 0) { $cikti | ForEach-Object { Bilgi $_ }; Vazgec 'ajan derlenemedi' }
 
 # /platform:x86 sessizce atlanirsa calisma aninda BadImageFormatException gelir;

@@ -236,7 +236,7 @@ if ($paketliAjanVar) {
     $argv = @(
         '/nologo', '/target:exe', '/platform:x86', '/optimize+',
         "/out:$cikti",
-        (Join-Path $kaynak 'Agent.cs'),
+        (Join-Path $kaynak 'Agent.cs'), (Join-Path $kaynak 'Bekci.cs'),
         (Join-Path $kaynak 'SyntecReader.cs')
     )
     & $csc @argv | Out-Null
@@ -309,7 +309,9 @@ if ($ajanExe) {
     # Tezgah listesi backend'den gelir; ajanin yaninda liste dosyasi tutulmaz.
     # --ingest yalnizca varsayilan olmayan portta verilir: komut satirinda URL
     # yoksa hem sadelesir hem de supheli gorunmez (varsayilan zaten 127.0.0.1:3000).
-    $ajanArg = '--log "{0}"' -f $ajanLog
+    # --supervise: gorev ajanin kendisini degil BEKCISINI calistirir (Bekci.cs); bekci ajani alt surec
+    # olarak baslatir, cikarsa ya da donarsa yeniden baslatir (2026-10-14: ajan sessizce durmustu).
+    $ajanArg = '--supervise --log "{0}"' -f $ajanLog
     if ($Port -ne 3000) { $ajanArg = "--ingest http://127.0.0.1:$Port/api/ingest $ajanArg" }
     # Paketli kurulumda model acik yazilir (11TB gorevi eskiden bayraksizdi, klasorden anlasilirdi).
     if ($paketliAjanVar) { $ajanArg = "--model 11TB $ajanArg" }
@@ -320,7 +322,7 @@ if ($ajan22Exe) {
     # 22TB tezgah yoksa bu ajan bos listeyle bekler (CPU/bellek ihmal edilebilir) ve ayarlar
     # ekranindan bir tezgaha 22TB modeli secilince kendiliginden okumaya baslar.
     $ajan22Log = Join-Path $LogDizin 'ajan22.log'
-    $ajan22Arg = '--model 22TB --log "{0}"' -f $ajan22Log
+    $ajan22Arg = '--model 22TB --supervise --log "{0}"' -f $ajan22Log
     if ($Port -ne 3000) { $ajan22Arg = "--ingest http://127.0.0.1:$Port/api/ingest $ajan22Arg" }
     GorevKur $Ajan22Gorev $ajan22Exe $ajan22Arg (Split-Path -Parent $ajan22Exe) 30
 }

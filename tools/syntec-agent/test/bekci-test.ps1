@@ -31,7 +31,8 @@ $exe = Join-Path $d 'syntec-agent.exe'
 $log = Join-Path $d 'ajan.log'
 $bekciLog = Join-Path $d 'ajan.bekci.log'
 $ingest = "http://127.0.0.1:$port/api/ingest"
-$baslangicArgs = @('--supervise', '--model', '11TB', '--ingest', $ingest, '--log', $log, '--stale-sec', '75')
+# Bu test ESKI (tek surec) kipi dener; torna basina surec kipi bekci-isci-test.ps1'de
+$baslangicArgs = @('--supervise', '--tek-surec', '--model', '11TB', '--ingest', $ingest, '--log', $log, '--stale-sec', '75')
 
 Add-Type -Namespace NtK -Name P -MemberDefinition '[System.Runtime.InteropServices.DllImport("ntdll.dll")] public static extern int NtSuspendProcess(System.IntPtr h); [System.Runtime.InteropServices.DllImport("ntdll.dll")] public static extern int NtResumeProcess(System.IntPtr h);'
 

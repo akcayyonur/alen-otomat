@@ -554,6 +554,26 @@ Not: Görev Zamanlayıcı'nın "hata olursa yeniden başlat" ayarı yalnız sür
 - **Bekçinin ÇÖZMEDİKLERİ:** (1) kök neden hâlâ bilinmiyor (yukarıdaki olay günlüğü + bir sonraki olaydaki iş parçacığı dökümü gerekir); (2) ajanın `PARK EDİLDİ` durumu (bir tezgahın okuması art arda 3 kez takılınca o tezgah için çağrı açılmaz, "ajan görevini yeniden başlatın") bekçi tarafından yakalanmaz,
   çünkü ajan sağlıklı görünür ve özet yazmaya devam eder; (3) yeniden başlatma, ajanın bellekteki tamponunu (en çok 20.000 mesaj) siler. Donma sırasında geçen süre durum şeridinde `NO_DATA` kalır, parça sayaçlarındaki artış ajan dönünce sayılır ("vardiyası yaklaşık" işareti).
 
+#### Torna başına süreç (ajan 0.5.0, 2026-10-15) — bekçinin ikinci olayı
+
+**Olay (fabrika PC'si, 2026-10-14 akşamı; elektrik kesintisi sonrası):** PC 15:57'de açıldı, tornalar tek tek bağlandı (16:10'da CNC-04, sonra 03/06/07). **16:50'de 11TB ajanının dört tornası (03, 04, 06, 07) AYNI SANİYEDE takıldı**; o sırada 01 ve 02 yeni bağlanıp kimlik okumuştu.
+Sonrasında **17,5 saat tek okuma olmadı** (`okunan=2059` sabit; yalnız CNC-08 = 22TB ajanı veri verdi, 55.530 okuma, 0 düşen). Ajanın **ana döngüsü yaşıyordu** (her dakika özet satırı yazıyordu), bu yüzden bekçinin "günlük dosyası değişmedi" kalp atışı hiç tetiklenmedi (bekçi günlüğünde yalnız iki başlangıç var). Günlükte:
+takılan dört torna için `[1/3]` satırı bir kez çıktı, sonra HİÇ ek satır yok ("PARK EDİLDİ" bile yok), özet satırı "KOPUK (okuma 15 sn'dir yanıt vermiyor)" demeye devam etti; 01 ve 02 için `baglandi` + kimlik satırları var ama sonrasında hiçbir okuma/uyarı yok; CNC-05 (.98) bu çalışmada hiç bağlanmadı.
+**Kesin mekanizma KANITLANMADI** (aday: takılan native çağrı sürecin başka çağrılarını da bekletiyor; kurtarma yolunda `Baglan`/`new Thread` zaman aşımsız, yani toparlanma sürecin kendi içinde güvenilmez; torna tarafı bilinmiyor). Aynı "hepsi birden takıldı" örüntüsü 9 Ekim 23:54, 14 Ekim 04:21'de de vardı.
+**Tasarım ilkesi: tek güvenilir toparlanma sürecin ölmesidir** (TCP kapanınca tornadaki oturumlar da serbest kalır) ve bir tornanın takılması diğerlerini etkilememeli.
+
+**Çözüm (varsayılan kip): bekçi HER TORNA İÇİN AYRI ajan süreci açar** (`syntec-agent.exe --supervise --log <dosya> [--model ...]`; görev argümanları DEĞİŞMEDİ, kurulum/Görev Zamanlayıcı aynı). `Bekci.cs` `IsciKipi`:
+- Tezgah listesini backend'den alır (`/api/agent/machines`; model `--model`, yoksa klasördeki Syntec paketinden: ajanla aynı kural) ve `--list-sec` (60) sn'de bir eşitler: yeni tornaya süreç açar (1,5 sn arayla), listeden çıkanın sürecini kapatır, **IP değişirse** yeniden başlatır; backend yokken çalışan süreçlere dokunmaz.
+  Her süreç `ajan --host <ip> --machine-id <id>` ile açılır (tek tornalı eski kip); çıktısı (stdout/stderr) bekçiye borulanır ve **ortak ajan günlüğüne (`--log`) tek dosyada, her satır tarih-saatli ve `[CNC-xx]` etiketli** yazılır (eskisi gibi tek dosya gönderilir). Bekçi kaydı ayrı: `<log>.bekci.log`.
+- **Üç yeniden başlatma nedeni (yalnız o süreç):** (1) süreç çıktı (5→10→20→40→60 sn geri çekilme); (2) **DONMUŞ**: `--stale-sec` (240) sn hiç çıktı yok; (3) **İLERLEME YOK**: `--idle-sec` (300) sn ajan özet satırındaki `okunan=` sayacı artmadı (süreç yaşıyor, günlük yazıyor ama tornadan okuyamıyor: 14 Ekim olayı). Öldürmeden önce **iş parçacığı dökümü** ve ajanın son bildirdiği KOPUK nedeni bekçi günlüğüne yazılır.
+  İlerlemesiz yeniden başlatmalar üst üste olursa eşik büyür (300→600→1200→1800 sn tavan; ilerleme görülünce sıfırlanır): kapalı/ulaşılamayan torna (ör. CNC-05) bosuna zorlanmaz.
+- **5 dakikada bir tek satır** `isciler: CNC-01 okuyor (okunan N, yeniden baslatma M) | CNC-02 OKUMA YOK 7 dk ...` (`ajan.bekci.log`): uzaktan teşhis için hangi tornanın ne zamandır okumadığı tek bakışta görünür.
+- Bekçi öldürülürse (görev durdurulunca) tüm torna süreçleri job nesnesiyle ölür. Eski kip: `--tek-surec` ya da `--host/--machines`/`machines.txt` varsa (tüm tornalar tek ajan sürecinde, eski bekçi kuralları).
+- **Test (buradan, SAHTE DLL ile; gerçek torna/fabrika PC'sine bağlanılamaz):** `tools/syntec-agent/test/bekci-isci-test.ps1` (24 kontrol: torna başına süreç, `MOCK_HANG_HOST` ile tamamen cevap vermeyen tornada İLERLEME YOK ve YALNIZ o sürecin yeniden başlaması / sağlam tornanın pid'sinin değişmemesi, liste ekleme/çıkarma/IP değişimi, dışarıdan öldürülen sürecin yeniden başlaması, bekçi ölünce hepsinin ölmesi, `--model` olmadan model çıkarımı) ~3 dk; eski kip testi `bekci-test.ps1` (`--tek-surec`, 17 kontrol) aynen geçiyor.
+  `--summary-sec` (ajan özet aralığı, varsayılan 60) yalnız testlerde kısaltılır. **Fabrika PC'sinde gerçek tornalarla DENENMEDİ.**
+- **Devreye alma (fabrika PC'si, yönetici PowerShell; dosya bu PC'den taşınır, `*.exe` depoya girmez):** iki ajan görevini durdur (`Stop-ScheduledTask`), yeni `syntec-agent.exe`'yi `C:\CNC-Telemetri\agent\` ve `agent22\` klasörlerine kopyala, görevleri başlat; `ajan.bekci.log`'da `kip: TORNA BASINA SUREC` ve 5 dk sonra `isciler:` satırı görünmeli; Görev Yöneticisi'nde 11TB için bekçi + torna başına süreç, 22TB için bekçi + 1 süreç.
+- **Hâlâ bilinmeyen:** 16:50 olayının kök nedeni (bu sürüm toparlar ve bir sonraki olayda `ILERLEME YOK` satırının dökümü + "ajanın son bildirdiği durum" ipucu bırakır; aynı anda birden çok torna `OKUMA YOK` oluyorsa ortak neden (ağ/PC) güçlenir, yalnız biri oluyorsa o tornadır); CNC-05 (.98) neden bağlanmıyor (torna kapalı mı, IP doğru mu).
+
 ### Derleme (Windows)
 ```bat
 cd tools\syntec-agent
@@ -989,7 +1009,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `dashboard/auth-view.js` · `users-view.js` | Giriş/ilk kurulum ekranı, oturum, üst çubuk (kullanıcı/çıkış), 401 koruması · Ayarlar > Kullanıcılar (yalnız admin). |
 | `tools/syntec-agent/SyntecReader.cs` | **Okuma + durum eşlemesi (tek kaynak).** |
 | `tools/syntec-agent/Agent.cs` | Sürekli çalışan servis: tezgah başına iş parçacığı, yeniden bağlanma, tamponlama. |
-| `tools/syntec-agent/Bekci.cs` | **Ajan bekçisi** (`--supervise`): ajanı alt süreç olarak çalıştırır, çıkarsa/donarsa yeniden başlatır; testi `tools/syntec-agent/test/bekci-test.ps1`. Bkz. §6 "Ajan bekçisi". |
+| `tools/syntec-agent/Bekci.cs` | **Ajan bekçisi** (`--supervise`): VARSAYILAN olarak her torna için ayrı ajan süreci açıp izler (çıktı/ilerleme/donma, yalnız takılan süreci yeniden başlatır); `--tek-surec` eski kip; testleri `tools/syntec-agent/test/bekci-isci-test.ps1` ve `bekci-test.ps1`. Bkz. §6 "Ajan bekçisi" ve "Torna başına süreç". |
 | `tools/syntec-probe/` | Tek seferlik saha teşhis aracı. |
 | `kurulum/` | İzleme PC'si kurulum betiği (`kurulum.ps1`) ve belgesi. |
 | `installer/` | Setup.exe üretimi (Inno Setup): `build-installer.ps1`, `cnc-telemetri.iss`. DLL'ler pakete derleme anında girer, depoda yok. |
@@ -1052,8 +1072,8 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 - [ ] **22TB: gönderme testi ve uzun süreli kararlılık.** Tek kontrollü gönderme (yeni test adı, yeni/boş klasör) → başarılıysa
       `config/drivers.json`'da `models[22TB].fileTransfer.sendEnabled = true`; ajanı saatlerce açık bırakıp takılma/oturum
       sızıntısı olmadığını doğrula (22B oturumu 5 TCP açıyor, oturum sınırı ölçülmedi).
-- [ ] **Ajan bekçisini fabrika PC'sinde devreye al (0.4.2)** ve **2026-10-14 04:21 donmasının kök nedenini bul:** yeni `syntec-agent.exe` iki ajan klasörüne + görevlere `--supervise` (bkz. §6 "Ajan bekçisi"); olay günlüğünü (Application/System/Defender, 04:19–04:40) oku;
-      bir sonraki olayda `ajan.bekci.log`'daki iş parçacığı dökümüne bak. Bekçi çalışırken en az bir gece/hafta sonu izle: `ajan.bekci.log`'da kaç yeniden başlatma var, sebepleri (çıkış kodu / donma) ne, kaç "SISTEM DURAKLAMASI" satırı var ve saatleri ajan boşluklarıyla örtüşüyor mu (PC duraklaması mı, yoksa yalnız ağ/torna mı). `PARK EDİLDİ` durumunu otomatik toparlamak ayrı iş (gereksiz oturum sızdırmama dengesi).
+- [ ] **Ajan 0.5.0 (torna başına süreç) fabrika PC'sinde devreye alınacak** (bkz. §6 "Torna başına süreç"): yeni `syntec-agent.exe` iki ajan klasörüne (görevler durdurulup) kopyalanır, görevler başlatılır; **gerçek tornalarla ilk kez orada denenecek**. İlk gün `ajan.bekci.log`'da `isciler:` satırlarına, `ILERLEME YOK` / `ISCI CIKTI` olaylarına ve
+      iş parçacığı dökümlerine bak: 16:50 olayının kök nedeni (14 Ekim) ve 04:21 / 23:54 duraklamaları için ipucu; CNC-05 (.98) bağlanmıyorsa torna/IP kontrolü. `PARK EDİLDİ` artık tek tornaya özel süreçte (bekçi `ILERLEME YOK` ile o süreci yeniden başlatır).
 - [ ] **İki ajanlı kurulum (agent\ + agent22\) yükseltilmiş oturumda denenmedi**: iki görev, SYSTEM hesabı, ikinci
       ajanın log/bellek davranışı. Yalnız paket duman testi (iki ajan da kendi DLL'ini yüklüyor) yapıldı.
 - [ ] **Gerçek tezgahta ajanı çalıştır** — şimdiye kadar yalnızca sahte DLL ile

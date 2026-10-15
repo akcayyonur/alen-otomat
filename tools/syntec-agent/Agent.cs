@@ -31,8 +31,8 @@ using Syntec.Telemetri;
 [assembly: AssemblyDescription("Syntec kontrolcusunden uretim verisi okuyup CNC Telemetri backend'ine gonderir")]
 [assembly: AssemblyCompany("alen-otomat")]
 [assembly: AssemblyProduct("CNC Telemetri")]
-[assembly: AssemblyVersion("0.4.2.0")]
-[assembly: AssemblyFileVersion("0.4.2.0")]
+[assembly: AssemblyVersion("0.5.0.0")]
+[assembly: AssemblyFileVersion("0.5.0.0")]
 
 /// Console.Out'u hem konsola hem dosyaya yazar (--log).
 ///
@@ -117,6 +117,8 @@ static class Agent
     static string Model;
     static int AralikMs;
     static int YenidenDenemeMs;
+    /// Ozet satirinin (okunan=...) yazilma araligi, saniye. Bekci ilerlemeyi bu satirdan izler; testlerde kisaltilir.
+    static int OzetSn = 60;
 
     /// Backend'e gonderilmeyi bekleyen mesajlar.
     static readonly List<string> Tampon = new List<string>();
@@ -266,6 +268,7 @@ static class Agent
         AralikMs = int.Parse(Get(arg, "interval", "1000"));
         YenidenDenemeMs = int.Parse(Get(arg, "retry", "10000"));
         OkumaZamanAsimiMs = int.Parse(Get(arg, "read-timeout", "15000"));
+        OzetSn = Math.Max(2, int.Parse(Get(arg, "summary-sec", "60")));
         // Test icin: N saniye sonra kendiliginden duzgun kapan (Ctrl+C ile ayni yol).
         int sure = int.Parse(Get(arg, "duration", "0"));
         if (sure > 0)
@@ -789,7 +792,7 @@ static class Agent
     /// Dakikada bir ozet satiri - servis olarak calisirken log dosyasina duser.
     static void DurumDongusu()
     {
-        DateTime sonrakiOzet = DateTime.Now.AddMinutes(1);
+        DateTime sonrakiOzet = DateTime.Now.AddSeconds(OzetSn);
         DateTime sonrakiEsitleme = DateTime.Now.AddSeconds(EsitlemeAraligiSn());
         while (Calisiyor)
         {
@@ -805,7 +808,7 @@ static class Agent
             }
 
             if (DateTime.Now < sonrakiOzet) continue;
-            sonrakiOzet = DateTime.Now.AddMinutes(1);
+            sonrakiOzet = DateTime.Now.AddSeconds(OzetSn);
 
             int bekleyen;
             lock (TamponKilit) bekleyen = Tampon.Count;
@@ -877,9 +880,14 @@ static class Agent
         Console.WriteLine("                       klasordeki Syntec paketinden anlasilir.");
         Console.WriteLine("  --dll <dosya>        istemci DLL'i: 11TB Syntec.RemoteCNC.Win32.dll,");
         Console.WriteLine("                       22TB Syntec.OpenCNC.dll (modelden otomatik secilir)");
-        Console.WriteLine("  --supervise          BEKCI kipi (--log gerekli): ajani alt surec olarak calistirir; cikarsa ya da");
-        Console.WriteLine("                       gunlugu --stale-sec (varsayilan 240) saniye degismezse yeniden baslatir.");
-        Console.WriteLine("                       Diger bayraklar ajana aynen iletilir. Kendi kaydi: <log>.bekci.log");
+        Console.WriteLine("  --summary-sec <sn>   ozet satirinin (okunan=...) araligi (varsayilan 60; yalniz testler icin kisaltilir)");
+        Console.WriteLine("  --supervise          BEKCI kipi (--log gerekli). VARSAYILAN: HER TORNA AYRI ALT SUREC (bir tornanin takilmasi");
+        Console.WriteLine("                       digerlerini etkilemez); tezgah listesini backend'den alir ve dakikada bir esitler.");
+        Console.WriteLine("                       Bir alt surec cikarsa, --stale-sec (varsayilan 240) sn hic cikti vermezse ya da");
+        Console.WriteLine("                       --idle-sec (varsayilan 300) sn tek okuma yapamazsa yalniz o surec yeniden baslatilir.");
+        Console.WriteLine("                       --tek-surec: eski kip (tum tezgahlar tek ajan surecinde; --host/--machines ile otomatik).");
+        Console.WriteLine("                       --list-sec <sn>: tezgah listesi esitleme araligi (varsayilan 60).");
+        Console.WriteLine("                       Cikti --log dosyasina yazilir; bekcinin kendi kaydi: <log>.bekci.log");
         Console.WriteLine();
         Console.WriteLine("Bu program Syntec dll'lerinin bulundugu klasorden calistirilmali. Iki model");
         Console.WriteLine("(11TB ve 22TB) ayni surecte calismaz: her biri kendi paketinden ayri bir ajandir.");

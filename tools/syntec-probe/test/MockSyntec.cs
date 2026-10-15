@@ -11,8 +11,11 @@ namespace Syntec.Remote
         // Saha hatalarini taklit etmek icin (ortam degiskeniyle):
         //   MOCK_HANG_AFTER=n   READ_status n. cagridan sonra SONSUZA dek takilir
         //   MOCK_EMPTY_STATUS=1 fonksiyonlar "basarili" doner ama Status bos (yarim baglanti)
+        //   MOCK_HANG_HOST=ip   o IP'li tezgahin READ_status'u ILK cagridan itibaren (ve yeni nesnelerle de) SONSUZA dek takilir:
+        //                       yarim acilmis / cevap vermeyen torna (CNC-02 gibi); diger IP'ler normal okur
         static readonly int HangAfter = ParseInt(Environment.GetEnvironmentVariable("MOCK_HANG_AFTER"));
         static readonly bool EmptyStatus = Environment.GetEnvironmentVariable("MOCK_EMPTY_STATUS") == "1";
+        static readonly string HangHost = Environment.GetEnvironmentVariable("MOCK_HANG_HOST");
         static int ParseInt(string s) { int n; return int.TryParse(s, out n) ? n : 0; }
 
         public SyntecRemoteCNC(string ip) { host = ip; }
@@ -38,6 +41,7 @@ namespace Syntec.Remote
                                  out string mode, out string status, out string alarm, out string emg)
         {
             tik++;
+            if (!string.IsNullOrEmpty(HangHost) && host == HangHost) System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
             mainProg = "BERG\\140100187";
             curProg = "BERG\\140100187";
             curSeq = 12;

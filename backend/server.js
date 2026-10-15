@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { parseTelemetry } from '../shared/schema.js';
 import { loadDrivers } from '../shared/drivers.js';
 import { loadDowntimeCodes } from '../shared/downtime-codes.js';
+import { loadFeatures } from '../shared/features.js';
 import { loadInventory, loadConfig, validateMachines, saveMachines, agentMachines } from '../shared/inventory.js';
 import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
 import { Library } from './programs/library.js';
@@ -93,13 +94,15 @@ const planning = new Planning({
   spans: (machineId, fromMs, toMs) => store.db.spans(machineId, fromMs, toMs), // olculmus duruslar
   downtimeConfig: loadDowntimeCodes(), // duruş nedeni kodlari (config/downtime-codes.json)
 });
-const planningRoutes = createPlanningRoutes({ planning });
+// Kurulumda kapali bolumler (config/features.json; FEATURES_FILE ile degistirilir): hatali dosya sunucuyu baslatmaz.
+const features = loadFeatures(process.env.FEATURES_FILE);
+const planningRoutes = createPlanningRoutes({ planning, closedSections: features.closedSections });
 
 // Kimlik dogrulama: her istek once kapidan (gate) gecer; izin tablosu backend/auth/policy.js'te.
 const authDb = new AuthDb(AUTH_DB_FILE);
 const auth = new Auth({ db: authDb });
 const gate = createGate({ auth, disabled: AUTH_DISABLED });
-const authRoutes = createAuthRoutes({ auth, disabled: AUTH_DISABLED });
+const authRoutes = createAuthRoutes({ auth, disabled: AUTH_DISABLED, sessionExtra: { closedSections: features.closedSections } });
 
 /** @type {Set<import('node:http').ServerResponse>} */
 const clients = new Set();
@@ -577,6 +580,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[backend] canli akis -> GET  http://localhost:${PORT}/api/stream`);
   console.log(`[backend] veritabani -> ${DB_FILE}`);
   console.log(`[backend] planlama   -> ${PLANNING_DB_FILE}`);
+  if (features.closedSections.length > 0) console.log(`[backend] KAPALI bölümler (config/features.json): ${features.closedSections.join(', ')}`);
   console.log(
     `[backend] kutuphane  -> ${LIBRARY_DB_FILE}` +
       (TRANSFER_DISABLED ? '  (tezgaha GONDERME KAPALI: TRANSFER_DISABLED=1)' : ''),

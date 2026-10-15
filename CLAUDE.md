@@ -516,6 +516,12 @@ cd installer
   0.1.3 de işaretlenirse sıradaki adım: görevleri Windows Hizmeti'ne taşımak.
 - Güncellemede `config/machines.json` **ezilmez** (ayarlar ekranının yazdığı liste),
   `data/` ve `logs/` kaldırmada silinmez.
+- **`config/` dosyalarının hepsi kurulur (2026-10-15 düzeltmesi):** `cnc-telemetri.iss` önceden yalnız `drivers.json` ve `machines.json`'ı tek tek listeliyordu; **`downtime-codes.json` listede yoktu**,
+  yani Setup ile kurulan/güncellenen PC'de sunucu açılışta duruş kodlarını okuyamayıp BAŞLAMAZDI (0.11.0'dan beri gizli hata; duman testi pakete bakıp kuruluma bakmadığı için yakalamıyordu). Artık `config/*` jokeriyle (`Excludes: machines.json`) alınır;
+  `machines.json` kendi satırında (`onlyifdoesntexist`) kalır. Inno Setup'la sahte paketle derlenerek doğrulandı (jokerin `machines.json`'ı dışarıda bıraktığı ve `downtime-codes.json`/`features.json`'ı aldığı).
+- **Kurulumda kapalı Planlama bölümleri (0.18.0, 2026-10-15, kullanıcı kararı):** henüz rafine edilmeyen bölümler bir kuruluma girmeden kapatılır. `build-installer.ps1 -KapaliBolumler` (**varsayılan `paketleme, hammadde`**; `@()` = hepsi açık; geçerli: `paketleme`, `hammadde`)
+  paketin `config/features.json` dosyasını yazar (depodaki dosya her şeyi AÇIK bırakır: geliştirme/demo etkilenmez). Duman testi paketlenmiş sunucuda tek kullanımlık yönetici hesabıyla (geçici veritabanı, rastgele şifre) oturumun bölüm listesini ve kapalı uçların 403 verdiğini denetler.
+  Yeniden açmak = yeni kurulum paketi (`-KapaliBolumler @()`); kurulu PC'de `C:/CNC-Telemetri/config/features.json` düzenlenip sunucu yeniden başlatılarak da olur ama arayüzde düğme YOK (bilinçli). Ayrıntı: aşağıda "Kurulumda kapalı bölümler".
 - **Denenmedi:** Setup.exe'nin yükseltilmiş (UAC) kurulumu — görevler, güvenlik
   duvarı, açılışta başlatma. Ajan SYSTEM hesabıyla gerçek tezgahta çalıştırılmadı.
   Masaüstü uygulamasının pencere ve UAC yolları da elle denenmedi (mantığı gerçek
@@ -928,6 +934,16 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
 - **Dosyalar:** `backend/planning/card-steps.js` `parseReject`, `planning-db.js` (sütun, durum, süzgeç), `planning.js` (`issueCard`, `packCrate`, toplamlar), `dashboard/planning-card.js` (`rejectRow`, kutu, rozet), `planning-packing.js` (süzgeç). Testi `card-steps.test.js` (9).
 - **Sınırlar / DENENMEDİ:** ret kararı kart BASILIRKEN verilir; kart basıldıktan sonra kasa ret çıkarsa (kalite kontrolde) bu işaretlenemez: kart iptal edilip yenisi basılır (ya da ileride "ret olarak işaretle" düğmesi eklenir; yapılmadı); ret kasanın tekrar işleme/hurda kararı, adam-saat, sağlam/hurda miktarı sistemde izlenmez (ret/hurda sistemde tutulmaz kararı); gerçek yazıcıdan A5 baskı denenmedi.
 
+**Kurulumda kapalı bölümler — Paketleme ve Hammadde (0.18.0, 2026-10-15, kullanıcı kararı):** bu iki bölüm rafine edilene kadar kurulumlarda KAPALI; **hiç kimse (yönetici ve fabrika operatörü dahil) görmez**.
+- **Mekanizma:** `config/features.json` → `{"closedSections": [...]}` (`shared/features.js`: `paketleme`, `hammadde` kapatılabilir; bilinmeyen bölüm ya da yanlış yazılmış anahtar sunucuyu BAŞLATMAZ: sessizce açık kalan bir "kapalı" bölüm en kötü hata). Ortam değişkeni `FEATURES_FILE` dosyayı değiştirir (test/demo).
+  Sunucu açılışta `[backend] KAPALI bölümler ...` yazar. Oturum (`GET /api/session`, yalnız giriş yapmışa) `closedSections` verir; arayüz menüyü, açılış sekmesini ve yetkisiz adres korumasını (`#/planlama/paketleme` → kendi açılış sekmesi) bundan kurar (`auth-view.js` `closedSections`, `planning-tabs.js` `tabsForRole(role, closed)`, `planning-common.js` `sectionClosed`).
+- **Sunucu zorlar** (`planning/routes.js` `sectionOf`, kimlik/rol fark etmez, yönetici bile): `/api/planning/material/*` (ihtiyaç, sarfiyat, CSV, Mikro fişi + geri alma) ve `POST /api/planning/crates/:id/pack` (kesin paketleme adedi) → **403 `{code: 'section-closed', section}`**.
+- **Paketleme kapalıyken ÇALIŞANLAR:** ürün tanıtım kartı basma, kartı yeniden yazdırma (Tezgah başı "Son kartı yeniden yazdır", iş emri ayrıntısında "Kart"), ölçü föyü, ÜRÜN RET, kasa listesi (`GET /crates`), iptal. Yalnız Paketleme sekmesi ve kesin adet girişi kapanır.
+  Kimse kesin adet giremeyeceği için şu bilgiler gösterilmez: iş emri ayrıntısındaki kart tablosunda "Paketlenen" ve "Fark" sütunları, "N kasa paketleme bekliyor", durum rozeti "paketleme bekliyor" yerine "✓ kart basıldı"; Tezgah başı bilgi satırındaki "paketleme bekleyen kasa" sayacı. (Kartın gerçek hayattaki "kasayı paketlemeye gönderin" notu kalır: fiziksel iş akışı.)
+- **Hammadde kapalıyken:** Hammadde sekmesi ve uçları kapanır; iş emri ayrıntısındaki **"Hammadde · sarfiyat" bilgi paneli KALIR** (hammadde, adet, sarfiyat kg, çubuk, beklenen talaş: kullanıcı "bilgi olarak iyi" dedi) ama **"Mikro sarfiyat fişi" kutusu gösterilmez** (fiş işaretlenemeyeceği için "bekliyor" hep orada kalırdı).
+- **Dosyalar / testler:** `shared/features.js`, `config/features.json`, `backend/planning/routes.js`, `backend/auth/http.js` (`sessionExtra`), `backend/server.js`; `backend/features.test.js` (8 test: dosya doğrulama, sekmeler, uçlar, **gerçek sunucu sürecinde** oturum + 403 + kart/ret/föy akışının açık kalması, hatalı dosyada başlamama). Demo/tarayıcıda yönetici ve operatör hesabıyla denendi (menü, kapalı adreslerin yönlendirilmesi, kart tablosu).
+- **Denenmedi:** Setup.exe ile gerçek kurulum (paket derlenmedi); gerçek fabrika PC'sinde. **Yeniden açma:** yalnız yeni kurulum (`-KapaliBolumler @()` ya da yalnız biri) ya da kurulu PC'de dosyayı elle düzenleyip sunucuyu yeniden başlatmak.
+
 ### Kimlik doğrulama (0.5.0, 2026-10-12): admin ve viewer
 
 Dashboard ve API giriş ister (`backend/auth/`, ayrı veritabanı `data/auth.db`, bağımlılık yok). Üç rol (üçüncüsü `operator`, 0.11.0: fabrika PC'sinin ortak hesabı, bkz. yukarıdaki "T aşaması"):
@@ -996,6 +1012,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 |---|---|
 | `shared/schema.js` | Normalize telemetri sözleşmesi + ingest doğrulaması. Alan eklemek buradan başlar. |
 | `shared/drivers.js` · `config/drivers.json` | Sürücü kaydı (hangi protokol destekleniyor) ve kontrolcü modelleri (`models`: 11TB / 22TB). |
+| `shared/features.js` · `config/features.json` | Kurulumda KAPALI Planlama bölümleri (paketleme, hammadde): doğrulama + yükleme; sunucu uçları reddeder, oturum arayüze bildirir. Bkz. §6 "Kurulumda kapalı bölümler". |
 | `shared/inventory.js` · `config/machines.json` | Tezgah envanteri (model çözümü, `agentMachines` süzgeci); ayarlar ekranı buraya yazar. |
 | `backend/db.js` | SQLite: `samples` (detay, 7 gün) + `spans` (durum aralıkları, 400 gün). Raporlar `spans`'ten gelir, satır sayısından bağımsız hızlı. **Yeniden başlamada** (`resumeTimelines`) PC'nin kapalı kaldığı süre `NO_DATA` yazılır — ani kapanışta açık kalan aralık yeniden başlama anında değil, tezgahın son kaydedilen örneğinde biter; testi `backend/restart.test.js`. |
 | `backend/store.js` | Canlı durum (bellek) + aralık yönetimi + veri boşluğu tespiti; her mesajda `PartTracker` ile üretim olayı yazar. |
@@ -1029,7 +1046,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 
 | Uç nokta | İş |
 |---|---|
-| `GET /api/session` · `POST /api/auth/login` · `/setup` · `/logout` · `/password` | Oturum durumu · giriş · ilk yönetici (yalnız localhost) · çıkış · kendi şifreni değiştir. |
+| `GET /api/session` · `POST /api/auth/login` · `/setup` · `/logout` · `/password` | Oturum durumu (giriş yapmışsa `closedSections`: kurulumda kapalı Planlama bölümleri; kapalı bölümün uçları 403 `section-closed`) · giriş · ilk yönetici (yalnız localhost) · çıkış · kendi şifreni değiştir. |
 | `GET/POST /api/users` · `DELETE /api/users/:id` · `PUT /api/users/:id/password` · `GET /api/auth/audit` | **Yalnız admin:** hesap yönetimi ve giriş olayları. |
 | `POST /api/ingest` | **Yalnız sunucu bilgisayarından (giriş gerekmez).** Ajandan telemetri (tek mesaj ya da dizi). Kısmi kabul: geçerliler yazılır, geçersizler 207 ile raporlanır. **Gövde sınırı 40 MB** (diğer uçlarda 1 MB): ajan backend kapalıyken en çok 20.000 mesajı tamponlar ve geri gelince HEPSİNİ tek istekte yollar; eski 1 MB sınır ~2.500 mesajda (7 tezgahta birkaç dakikalık kesinti) paketi reddediyor, ajan aynı paketi sonsuza dek yeniden deniyor ve veri kalıcı kayboluyordu (2026-10-13'te bulundu, düzeltildi; 20.000 mesaj ≈ 8 MB ≈ 0,3 sn). **Tek mesajın yazılamaması paketi düşürmez** (o mesaj reddedilir + günlüğe yazılır; hiçbiri yazılamazsa 500 ve ajan tamponu korur). |
 | `GET /api/stream` | SSE, saniyede bir filo anlık görüntüsü. |
@@ -1082,6 +1099,8 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       sızıntısı olmadığını doğrula (22B oturumu 5 TCP açıyor, oturum sınırı ölçülmedi).
 - [ ] **Ajan 0.5.0 (torna başına süreç) gözlenecek** (bkz. §6 "Torna başına süreç"; 2026-10-15'te fabrika PC'sinde devreye alındı, 8/8 tornadan veri akıyor): uzun süreli kararlılık ve ilk gerçek takılma / elektrik kesintisi sonrası davranış. `ajan.bekci.log`'da `isciler:` satırlarına, `ILERLEME YOK` / `ISCI CIKTI` olaylarına ve
       iş parçacığı dökümlerine bak: 16:50 olayının kök nedeni (14 Ekim) ve 04:21 / 23:54 duraklamaları için ipucu. `PARK EDİLDİ` artık tek tornaya özel süreçte (bekçi `ILERLEME YOK` ile o süreci yeniden başlatır).
+- [ ] **Setup.exe (0.18.0) fabrika PC'sinde ilk kurulum/güncelleme:** `C:/CNC-Telemetri/data` yedeği al; sessiz saatte kur; açılışta `[backend] KAPALI bölümler: paketleme, hammadde` satırını ve `config/downtime-codes.json`'ın kurulduğunu doğrula (önceki Setup'lar bu dosyayı kurmuyordu);
+      menüde Paketleme/Hammadde yok, kart basma/ölçü föyü/ret çalışıyor mu bak. Bölümleri açmaya hazır olunca yeni paket: `build-installer.ps1 -KapaliBolumler @()`.
 - [ ] **İki ajanlı kurulum (agent\ + agent22\) yükseltilmiş oturumda denenmedi**: iki görev, SYSTEM hesabı, ikinci
       ajanın log/bellek davranışı. Yalnız paket duman testi (iki ajan da kendi DLL'ini yüklüyor) yapıldı.
 - [ ] **Gerçek tezgahta ajanı çalıştır** — şimdiye kadar yalnızca sahte DLL ile

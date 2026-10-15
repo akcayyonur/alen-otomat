@@ -1,0 +1,4 @@
+{
+  "_aciklama": "Kurulumda KAPALI bölümler. Geçerli: paketleme, hammadde. Depodaki dosya hepsini açık bırakır; kurulum paketi build-installer.ps1 -KapaliBolumler ile kendi listesini yazar. Değişiklikten sonra sunucu yeniden başlatılır.",
+  "closedSections": []
+}

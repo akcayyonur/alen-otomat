@@ -112,15 +112,33 @@ const intParam = (url, name, fallback, { min = 0, max = 1000 } = {}) => {
 };
 
 /**
- * @param {{planning: import('./planning.js').Planning}} deps
+ * Bir uc, kurulumda KAPATILABILEN bir bolume mi ait? (shared/features.js; bolum anahtari = sekme anahtari)
+ *   hammadde   /material/*  (ihtiyac, sarfiyat, Mikro fisi)
+ *   paketleme  POST /crates/:id/pack  (kesin paketleme adedi girisi). Kart basma, yeniden yazdirma, olcu foyu, ret, kasa LISTESI acik kalir.
+ */
+function sectionOf(method, path) {
+  if (/^\/api\/planning\/material(?:\/|$)/.test(path)) return 'hammadde';
+  if (method === 'POST' && /^\/api\/planning\/crates\/\d{1,12}\/pack$/.test(path)) return 'paketleme';
+  return null;
+}
+
+/**
+ * @param {{planning: import('./planning.js').Planning, closedSections?: string[]}} deps closedSections: bu kurulumda kapali bolumler (config/features.json)
  * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, url: URL) => Promise<boolean>}
  */
-export function createPlanningRoutes({ planning }) {
+export function createPlanningRoutes({ planning, closedSections = [] }) {
+  const closed = new Set(closedSections);
   return async function handle(req, res, url) {
     const path = url.pathname;
     if (!path.startsWith('/api/planning')) return false;
     const method = req.method;
     let m;
+
+    // Kapali bolum: kimlik/rol fark etmez (yonetici dahil) reddedilir; arayuz zaten gostermez, bu eski sekme / elle istek icindir.
+    const section = closed.size > 0 ? sectionOf(method, path) : null;
+    if (section && closed.has(section)) {
+      return sendJson(res, 403, { error: 'Bu bölüm bu kurulumda kapalı.', code: 'section-closed', section }), true;
+    }
 
     try {
       if (method === 'GET' && path === '/api/planning/summary') return sendJson(res, 200, planning.summary()), true;

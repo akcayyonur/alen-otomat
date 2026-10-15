@@ -16,6 +16,8 @@ let session = null;
 export const getSession = () => session;
 export const isAdmin = () => session?.user?.role === 'admin';
 export const authDisabled = () => session?.authDisabled === true;
+/** Bu kurulumda KAPALI Planlama bolumleri (config/features.json; sunucu /api/session ile verir): paketleme, hammadde. */
+export const closedSections = () => session?.closedSections ?? [];
 export const roleLabel = (role) => ROLE_LABEL[role] ?? role;
 
 /* ------------------------------------------------------------------------- ag */

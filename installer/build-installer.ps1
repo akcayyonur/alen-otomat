@@ -24,6 +24,13 @@
     Iki paketin yerel DLL'leri ayni adi tasidigi icin ayni surecte yuklenemez: her
     model kurulumda kendi klasorunde (agent\ ve agent22\) ayri bir ajandir.
 
+    -KapaliBolumler: bu kurulumda KAPALI Planlama bolumleri (varsayilan: paketleme, hammadde).
+    Kapali bolum hic kimseye (yonetici dahil) gorunmez ve sunucu ilgili uclari reddeder
+    (config\features.json). Hazir olunca yeniden acmak = yeni bir kurulum paketi:
+        .\build-installer.ps1 -KapaliBolumler @()                    # hepsi acik
+        .\build-installer.ps1 -KapaliBolumler 'hammadde'            # yalniz hammadde kapali
+    Depodaki config\features.json her seyi ACIK birakir (gelistirme/demo); paketteki dosyayi bu parametre yazar.
+
     Gereken: Inno Setup 6 (winget install JRSoftware.InnoSetup), Node 22.5+ (x64),
              .NET Framework 4.0 derleyicisi (Windows'ta hazir gelir).
 #>
@@ -37,6 +44,10 @@ param(
 
     # Pakete gomulecek node.exe. Verilmezse PATH'teki Node kullanilir.
     [string]$NodeExe,
+
+    # Bu kurulumda KAPALI Planlama bolumleri (shared/features.js: paketleme, hammadde). Bos liste = hepsi acik.
+    # Varsayilan KAPALI: bu bolumler rafine edilene kadar kurulumlara girmez; acmak icin acikca @() verilir.
+    [string[]]$KapaliBolumler = @('paketleme', 'hammadde'),
 
     # Duman testini atla (onerilmez).
     [switch]$TestAtla
@@ -191,6 +202,18 @@ New-Item -ItemType Directory -Force -Path $Payload | Out-Null
 foreach ($d in 'backend', 'shared', 'dashboard', 'config') {
     Copy-Item (Join-Path $Kok $d) (Join-Path $Payload $d) -Recurse
 }
+# Kurulumda kapali bolumler: depodaki config\features.json her seyi acik birakir; paketteki dosyayi bu derleme yazar.
+$izinliBolumler = 'paketleme', 'hammadde'
+foreach ($b in $KapaliBolumler) {
+    if ($izinliBolumler -notcontains $b) { Vazgec "Bilinmeyen kapali bolum '$b' (gecerli: $($izinliBolumler -join ', '))" }
+}
+$kapaliListe = @($izinliBolumler | Where-Object { $KapaliBolumler -contains $_ })
+$ozellikJson = '{"_aciklama": "Bu kurulumda KAPALI Planlama bolumleri. Yeniden acmak icin yeni kurulum paketi uretilir (build-installer.ps1 -KapaliBolumler). Degisiklikten sonra sunucu yeniden baslatilir.", "closedSections": [' +
+    (($kapaliListe | ForEach-Object { '"' + $_ + '"' }) -join ', ') + ']}'
+# BOM'suz UTF-8: JSON.parse BOM'lu dosyada hata verirdi.
+[System.IO.File]::WriteAllText((Join-Path $Payload 'config\features.json'), $ozellikJson + "`n", (New-Object System.Text.UTF8Encoding($false)))
+if ($kapaliListe.Count -gt 0) { Bilgi "KAPALI bolumler (kimse gormez): $($kapaliListe -join ', ')" } else { Bilgi 'kapali bolum yok (hepsi acik)' }
+
 # data\ ve logs\ kurulumda olusur, kaynak agacindan GELMEMELI.
 foreach ($sil in 'data', 'logs') {
     $y = Join-Path $Payload "backend\$sil"
@@ -306,6 +329,8 @@ if (-not $TestAtla) {
     $env:PORT = "$port"; $env:HOST = '127.0.0.1'; $env:DB_FILE = $db; $env:LIBRARY_DB_FILE = $kutuphaneDb; $env:AUTH_DB_FILE = $authDb; $env:PLANNING_DB_FILE = $planlamaDb
     # Giris sistemi ACIK denenir (AUTH_DISABLED verilmez): paketin gercek davranisi bu.
     Remove-Item Env:AUTH_DISABLED -ErrorAction SilentlyContinue
+    # Kapali bolumler paketin KENDI configeatures.json'indan okunmali (build PC'sindeki ortam degiskeni sonucu bozmasin).
+    Remove-Item Env:FEATURES_FILE -ErrorAction SilentlyContinue
     $sunucu = $null
     try {
         $sunucu = Start-Process (Join-Path $rt 'node.exe') -ArgumentList 'backend\server.js' `
@@ -335,6 +360,26 @@ if (-not $TestAtla) {
             if ($kod -ne 401) { Vazgec "$yol giris olmadan acik (HTTP $kod, 401 beklenirdi)" }
         }
         Tamam 'giris sistemi: veri uclari giris olmadan 401, ilk kurulum bekliyor (program kutuphanesi ve planlama modulleri de yuklu)'
+
+        # Kapali bolumler paketlenmis sunucuda GERCEKTEN kapali mi: gecici veritabaninda tek kullanimlik yonetici hesabi acilir (rastgele sifre, sunucu
+        # kapaninca silinir), oturum bolum listesini vermeli ve kapali bolumun uclari yonetici icin bile 403 olmali.
+        $denemeSifre = 'Duman-' + [guid]::NewGuid().ToString('N')
+        $kurBody = @{ username = 'duman'; password = $denemeSifre } | ConvertTo-Json
+        Invoke-RestMethod "http://127.0.0.1:$port/api/auth/setup" -Method Post -ContentType 'application/json' -Body $kurBody -SessionVariable oturumCerezi -TimeoutSec 10 | Out-Null
+        $girisli = Invoke-RestMethod "http://127.0.0.1:$port/api/session" -WebSession $oturumCerezi -TimeoutSec 5
+        $beklenen = ($kapaliListe -join ',')
+        if ((@($girisli.closedSections) -join ',') -ne $beklenen) { Vazgec "kapali bolumler oturumda beklenenden farkli: '$(@($girisli.closedSections) -join ',')' (beklenen '$beklenen')" }
+        $bolumUclari = @{ paketleme = @('POST', '/api/planning/crates/1/pack'); hammadde = @('GET', '/api/planning/material/need') }
+        foreach ($b in $izinliBolumler) {
+            $yontem = $bolumUclari[$b][0]; $yol = $bolumUclari[$b][1]
+            $kod = 0
+            try {
+                Invoke-WebRequest "http://127.0.0.1:$port$yol" -Method $yontem -ContentType 'application/json' -Body '{}' -WebSession $oturumCerezi -UseBasicParsing -TimeoutSec 5 | Out-Null; $kod = 200
+            } catch { $kod = [int]$_.Exception.Response.StatusCode }
+            if ($kapaliListe -contains $b) { if ($kod -ne 403) { Vazgec "$b kapali olmaliydi ama $yol HTTP $kod verdi (403 beklenirdi)" } }
+            elseif ($kod -eq 403) { Vazgec "$b acik olmaliydi ama $yol 403 verdi" }
+        }
+        Tamam "kapali bolumler paketlenmis sunucuda dogru: $(if ($kapaliListe.Count -gt 0) { $kapaliListe -join ', ' } else { 'yok (hepsi acik)' })"
         $kutJs = Invoke-WebRequest "http://127.0.0.1:$port/library-view.js" -UseBasicParsing -TimeoutSec 5
         if ($kutJs.StatusCode -ne 200) { Vazgec 'kutuphane arayuz dosyasi servis edilmedi' }
 
@@ -344,7 +389,7 @@ if (-not $TestAtla) {
         Tamam 'masaustu uygulamasi acik backend''i taniyor'
     } finally {
         if ($sunucu -and -not $sunucu.HasExited) { Stop-Process -Id $sunucu.Id -Force }
-        Remove-Item "$db*", "$kutuphaneDb*", "$authDb*" -Force -ErrorAction SilentlyContinue
+        Remove-Item "$db*", "$kutuphaneDb*", "$authDb*", "$planlamaDb*" -Force -ErrorAction SilentlyContinue
         Remove-Item Env:PORT, Env:HOST, Env:DB_FILE, Env:LIBRARY_DB_FILE, Env:AUTH_DB_FILE, Env:PLANNING_DB_FILE -ErrorAction SilentlyContinue
     }
 

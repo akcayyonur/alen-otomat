@@ -78,8 +78,10 @@ Source: "{#Payload}\CNC Telemetri.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Onkosul: Visual C++ 2005 SP1 (x86) calisma zamani (Microsoft imzali, degistirilmemis).
 ; Syntec'in native DLL'leri buna bagimli. Gecici klasore acilir, eksikse kurulur, silinir.
 Source: "{#Payload}\prereq\vcredist_x86.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
-; Surucu kaydi kod tarafindan yonetilir - her surumde guncellenir.
-Source: "{#Payload}\config\drivers.json"; DestDir: "{app}\config"; Flags: ignoreversion
+; Yapilandirma dosyalarinin HEPSI (surucu kaydi, durus kodlari, kapali bolumler: features.json ...) kod tarafindan yonetilir -
+; her surumde guncellenir. Joker ile alinir: tek tek listelenen dosyalardan biri (downtime-codes.json) unutulmustu ve sunucu
+; o dosya olmadan baslamaz. Yalniz tezgah listesi (machines.json) asagida ayri ve KULLANICININDIR.
+Source: "{#Payload}\config\*"; DestDir: "{app}\config"; Excludes: "machines.json"; Flags: ignoreversion
 ; Tezgah listesi ise KULLANICININ: ayarlar ekrani buraya yazar. Guncelleme ve
 ; kaldirma bunu ezmesin / silmesin.
 Source: "{#Payload}\config\machines.json"; DestDir: "{app}\config"; Flags: onlyifdoesntexist uninsneveruninstall

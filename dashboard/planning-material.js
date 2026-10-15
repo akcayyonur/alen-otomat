@@ -7,7 +7,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { cellText, fmtNum, fmtDec, dateText, dateTimeText, openModal, chip, RANGE_PRESETS as PRESETS } from './planning-common.js';
+import { cellText, fmtNum, fmtDec, dateText, dateTimeText, openModal, chip, sectionClosed, RANGE_PRESETS as PRESETS } from './planning-common.js';
 
 const kg = (v) => (v == null ? '<span class="is-null">—</span>' : `${fmtDec(v, 3)}`);
 
@@ -19,6 +19,11 @@ export function materialPanelHtml(w) {
   const c = w.consumption;
   if (!c || c.qty == null) return '<section class="pl-prog" data-role="material" hidden></section>';
   const fis = c.fis ?? {};
+  // Hammadde bolumu bu kurulumda kapaliysa Mikro fisi isaretlenemez: "bekliyor" hep orada kalirdi, bu yuzden o kutu gosterilmez (kg ve cubuk bilgi olarak kalir).
+  const fisTile = sectionClosed('hammadde') ? '' : (
+    `<div class="pl-kpi"><span class="pl-kpi-l">Mikro sarfiyat fişi</span><span class="pl-kpi-v">${fis.status === 'girildi'
+      ? `${chip('ok', '✓', 'girildi')} ${fis.docNo ? escapeHtml(fis.docNo) : ''} <small class="hint">${kg(fis.kg)} kg · ${escapeHtml(dateTimeText(fis.at))}</small>`
+      : fis.status === 'bekliyor' ? chip('none', '◔', 'bekliyor') : '<span class="is-null">iş emri bitince</span>'}</span></div>`);
   return (
     '<section class="pl-prog" data-role="material">' +
     '<h4 class="sub">Hammadde · sarfiyat</h4>' +
@@ -29,9 +34,7 @@ export function materialPanelHtml(w) {
     `<div class="pl-kpi"><span class="pl-kpi-l">Sarfiyat</span><span class="pl-kpi-v">${c.kg == null ? '<span class="is-null">—</span> <small class="hint">brüt ağırlık yok</small>' : `${kg(c.kg)} kg`}</span></div>` +
     `<div class="pl-kpi"><span class="pl-kpi-l">Çubuk (BOY)</span><span class="pl-kpi-v">${c.bars == null ? '<span class="is-null">—</span>' : fmtDec(c.bars, 2)}</span></div>` +
     `<div class="pl-kpi"><span class="pl-kpi-l">Beklenen talaş</span><span class="pl-kpi-v">${c.scrapKg == null ? '<span class="is-null">—</span>' : `${kg(c.scrapKg)} kg`}</span></div>` +
-    `<div class="pl-kpi"><span class="pl-kpi-l">Mikro sarfiyat fişi</span><span class="pl-kpi-v">${fis.status === 'girildi'
-      ? `${chip('ok', '✓', 'girildi')} ${fis.docNo ? escapeHtml(fis.docNo) : ''} <small class="hint">${kg(fis.kg)} kg · ${escapeHtml(dateTimeText(fis.at))}</small>`
-      : fis.status === 'bekliyor' ? chip('none', '◔', 'bekliyor') : '<span class="is-null">iş emri bitince</span>'}</span></div>` +
+    fisTile +
     '</div></section>'
   );
 }

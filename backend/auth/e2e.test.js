@@ -142,7 +142,7 @@ test('ilk kurulum: yonetici olusur, oturum cerezi guvenli bayraklarla verilir, i
 test('admin: her sey acik; viewer hesabi olusturur', async () => {
   const admin = await girisYap('admin', SIFRE_ADMIN);
   const me = await istek('GET', '/api/session', { cerez: admin });
-  assert.deepEqual(me.json, { authenticated: true, user: { username: 'admin', role: 'admin' } });
+  assert.deepEqual(me.json, { authenticated: true, user: { username: 'admin', role: 'admin' }, closedSections: [] });
 
   const ms = await istek('GET', '/api/machines', { cerez: admin });
   assert.equal(ms.status, 200);

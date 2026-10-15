@@ -11,7 +11,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { cellText, fmtNum, dateTimeText, openModal, chip, rememberedPerson } from './planning-common.js';
+import { cellText, fmtNum, dateTimeText, openModal, chip, rememberedPerson, sectionClosed } from './planning-common.js';
 import { openMeasureSheet } from './planning-measure.js';
 
 /** Kartın işlem satırları (backend/planning/card-steps.js ile AYNI liste; `card-steps.test.js` eşitliği sınar). */
@@ -238,22 +238,25 @@ export function cratesHtml(w) {
   const canIssue = w.status === 'uretimde' || w.status === 'bitti';
   if (!c || (c.items.length === 0 && !canIssue)) return '<section class="pl-prog" data-role="crates" hidden></section>';
   const t = c.totals;
+  const packing = !sectionClosed('paketleme'); // paketleme bu kurulumda kapaliysa kesin adet / fark / "paketleme bekliyor" gosterilmez
+  const stateChip = (k) => (!packing && k.state === 'kapali' ? chip('ok', '✓', 'kart basıldı') : crateStateChip(k.state));
   const rows = c.items.map((k) =>
     `<tr><td class="mono"><b>${escapeHtml(k.cardNo)}</b></td><td>${k.closedAt ? escapeHtml(dateTimeText(k.closedAt)) : '<span class="is-null">açık kasa</span>'}</td>` +
     `<td class="num">${k.startTotal == null ? cellText(null) : escapeHtml(plain(k.startTotal))} → ${k.endTotal == null ? (k.state === 'acik' ? '…' : cellText(null)) : escapeHtml(plain(k.endTotal))}</td>` +
-    `<td class="num">${k.countedQty == null ? cellText(null) : `~${fmtNum(k.countedQty)}`}</td><td class="num">${k.packedQty == null ? cellText(null) : fmtNum(k.packedQty)}</td>` +
-    `<td class="num">${k.packDiff == null ? cellText(null) : escapeHtml(sign(k.packDiff))}</td><td>${stepsCell(k.steps, k.reject)}</td><td>${crateStateChip(k.state)}</td>` +
+    `<td class="num">${k.countedQty == null ? cellText(null) : `~${fmtNum(k.countedQty)}`}</td>` +
+    `${packing ? `<td class="num">${k.packedQty == null ? cellText(null) : fmtNum(k.packedQty)}</td><td class="num">${k.packDiff == null ? cellText(null) : escapeHtml(sign(k.packDiff))}</td>` : ''}` +
+    `<td>${stepsCell(k.steps, k.reject)}</td><td>${stateChip(k)}</td>` +
     `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="crate-card" data-id="${k.id}">Kart</button> <button type="button" class="icon-btn icon-btn-sm" data-act="crate-sheet" data-id="${k.id}">Ölçü föyü</button>` +
     `${k.state === 'paketlendi' ? '' : ` <button type="button" class="icon-btn icon-btn-sm" data-act="crate-void" data-id="${k.id}" data-card="${escapeHtml(k.cardNo)}">İptal…</button>`}</td></tr>`).join('');
   return (
     '<section class="pl-prog" data-role="crates">' +
     '<div class="dt-block-head"><h4 class="sub">Ürün tanıtım kartları</h4>' +
     `${canIssue ? '<div class="dt-actions"><button type="button" class="icon-btn" data-act="measure">Ölçü kontrolü…</button><button type="button" class="icon-btn btn-primary" data-act="issue-card">Ürün tanıtım kartı bas…</button></div>' : ''}</div>` +
-    '<p class="hint">Her kart bir kasadır. <b>Sayılan</b> adet, önceki karttan bu yana tezgahın sayacından hesaplanır (tahmin); <b>kesin</b> adet paketlemede girilir; fark gizlenmez.</p>' +
+    `<p class="hint">Her kart bir kasadır. <b>Sayılan</b> adet, önceki karttan bu yana tezgahın sayacından hesaplanır (tahmin)${packing ? '; <b>kesin</b> adet paketlemede girilir; fark gizlenmez' : ''}.</p>` +
     (c.items.length === 0 ? '<p class="empty">Henüz kart basılmadı.</p>'
-      : '<table class="tbl tbl-pl"><thead><tr><th>Kart no</th><th>Basıldı</th><th class="num">Tezgah sayacı</th><th class="num">Sayılan</th><th class="num">Paketlenen</th><th class="num">Fark</th><th>İşlem</th><th>Durum</th><th></th></tr></thead>' +
+      : `<table class="tbl tbl-pl"><thead><tr><th>Kart no</th><th>Basıldı</th><th class="num">Tezgah sayacı</th><th class="num">Sayılan</th>${packing ? '<th class="num">Paketlenen</th><th class="num">Fark</th>' : ''}<th>İşlem</th><th>Durum</th><th></th></tr></thead>` +
         `<tbody>${rows}</tbody></table>` +
-        `<p class="hint">${fmtNum(t.count)} kart · sayılan ~${fmtNum(t.counted)} · paketlenen ${fmtNum(t.packed)}${t.unpacked > 0 ? ` · <b>${t.unpacked} kasa paketleme bekliyor</b>` : ''}${t.rejected > 0 ? ` · <b>${t.rejected} kasa RET</b> (paketlemeye gitmedi)` : ''}` +
+        `<p class="hint">${fmtNum(t.count)} kart · sayılan ~${fmtNum(t.counted)}${packing ? ` · paketlenen ${fmtNum(t.packed)}${t.unpacked > 0 ? ` · <b>${t.unpacked} kasa paketleme bekliyor</b>` : ''}` : ''}${t.rejected > 0 ? ` · <b>${t.rejected} kasa RET</b> (paketlemeye gitmedi)` : ''}` +
         `${t.unassigned != null && t.unassigned > 0 ? ` · kasaya atanmayan ~${fmtNum(t.unassigned)} adet (henüz kart basılmamış)` : ''}</p>`) +
     '</section>'
   );

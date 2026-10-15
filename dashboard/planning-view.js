@@ -9,7 +9,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { getSession } from './auth-view.js';
+import { getSession, closedSections } from './auth-view.js';
 import { openModal, dateTimeText } from './planning-common.js';
 import { renderProducts } from './planning-products.js';
 import { renderOrders } from './planning-orders.js';
@@ -39,14 +39,16 @@ const TABS = Object.freeze([
 ]);
 
 const roleOf = () => getSession()?.user?.role ?? 'viewer';
+/** Rolun gorebildigi VE bu kurulumda kapali olmayan bolumler (menu ve ekran bunu kullanir). */
+const visibleTabs = () => TABS.filter((t) => t.roles.includes(roleOf()) && !closedSections().includes(t.key));
 /** Rolun gorebildigi bolumler (sunucu da yetkiyi ayrica zorlar). */
-export const planningTabsFor = (role = roleOf()) => tabsForRole(role);
+export const planningTabsFor = (role = roleOf()) => tabsForRole(role, closedSections());
 /** Giriste acilan bolum: operator ve izleyici tezgah basini, yonetici is emirlerini gorur. */
 export const defaultPlanningTab = (role = roleOf()) => defaultTabFor(role);
 
 /** Yan menu (app.js cagirir): bolum dugmeleri; secili bolum isaretlenir. Adresler #/planlama/<bolum>. */
 export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
-  const mine = TABS.filter((t) => t.roles.includes(roleOf()));
+  const mine = visibleTabs();
   const current = mine.find((t) => t.key === tab) ?? mine[0];
   nav.hidden = mine.length < 2 && roleOf() !== 'admin'; // tek bolumlu operator: menu gereksiz
   nav.innerHTML =
@@ -63,7 +65,7 @@ const n = (v) => nf.format(v ?? 0);
 
 /** @param {HTMLElement} host @param {string} [tab] */
 export function renderPlanning(host, tab = defaultPlanningTab()) {
-  const mine = TABS.filter((t) => t.roles.includes(roleOf()));
+  const mine = visibleTabs();
   const current = mine.find((t) => t.key === tab) ?? mine[0];
   const admin = roleOf() === 'admin';
   // Ice aktarma ve sayilar yalniz yonetici + planlama bolumlerinde; tezgah basi (operator ekrani) sade kalir.

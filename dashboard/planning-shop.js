@@ -9,7 +9,7 @@
  */
 import { escapeHtml, stateOf } from './format.js';
 import { api, post } from './lib-common.js';
-import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, isViewer } from './planning-common.js';
+import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, isViewer, sectionClosed } from './planning-common.js';
 import { openStartDialog, openFinishDialog, openEditFieldsDialog } from './planning-production.js';
 import { openCrateCard, openIssueCard } from './planning-card.js';
 import { openMeasureDialog, openMeasureReport } from './planning-measure.js';
@@ -121,7 +121,7 @@ export async function renderShop(host) {
 
   function draw() {
     const key = JSON.stringify(data.machines);
-    $('info').textContent = `Her ${REFRESH_MS / 1000} sn'de bir tazelenir · ${data.minStopMinutes} dk'dan uzun duruşların nedeni sorulur · paketleme bekleyen kasa: ${data.packing?.waiting ?? 0} · son güncelleme ${new Date(data.now).toLocaleTimeString('tr-TR', { hour12: false })}`;
+    $('info').textContent = `Her ${REFRESH_MS / 1000} sn'de bir tazelenir · ${data.minStopMinutes} dk'dan uzun duruşların nedeni sorulur${sectionClosed('paketleme') ? '' : ` · paketleme bekleyen kasa: ${data.packing?.waiting ?? 0}`} · son güncelleme ${new Date(data.now).toLocaleTimeString('tr-TR', { hour12: false })}`;
     if (key === last) return; // değişmediyse yeniden çizme (düğmeler/odak yerinde kalsın)
     last = key;
     $('grid').innerHTML = data.machines.map(cardHtml).join('');

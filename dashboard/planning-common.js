@@ -3,7 +3,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { getSession } from './auth-view.js';
+import { getSession, closedSections } from './auth-view.js';
 
 export const put = (path, obj) =>
   api(path, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
@@ -123,6 +123,8 @@ export const woStatusChip = (s) => chip(...(WO_STATUS[s] ?? ['none', '?', String
 export const planningRole = () => getSession()?.user?.role ?? 'viewer';
 export const isViewer = () => planningRole() === 'viewer';
 export const isAdminRole = () => planningRole() === 'admin';
+/** Bu bolum bu kurulumda KAPALI mi (sunucu uclarini da reddeder)? Ekranlar kapali bolumun bilgisini gostermez. */
+export const sectionClosed = (key) => closedSections().includes(key);
 
 /** Acik .pl-form-dlg penceresini tarayicinin yazdir penceresiyle basar (styles.css: body.pl-printing). */
 export function printModal() {

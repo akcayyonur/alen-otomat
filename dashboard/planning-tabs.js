@@ -26,7 +26,8 @@ export const TAB_ROLES = Object.freeze({
 /** Menüdeki sıra. */
 export const TAB_ORDER = Object.freeze(Object.keys(TAB_ROLES));
 
-export const tabsForRole = (role) => TAB_ORDER.filter((k) => TAB_ROLES[k].includes(role));
+/** @param {string} role @param {string[]} [closed] bu kurulumda kapali bolumler (config/features.json): kimse (yonetici dahil) gormez */
+export const tabsForRole = (role, closed = []) => TAB_ORDER.filter((k) => TAB_ROLES[k].includes(role) && !closed.includes(k));
 
 /** Girişte açılan sekme: yönetici iş emirlerini, diğerleri tezgah başını görür. */
 export const defaultTabFor = (role) => (role === 'admin' ? 'isemirleri' : 'tezgahbasi');

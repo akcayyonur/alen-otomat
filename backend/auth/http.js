@@ -150,10 +150,11 @@ export function createGate({ auth, disabled = false }) {
 /* ------------------------------------------------------------------------- uclar */
 
 /**
- * @param {{auth: import('./auth.js').Auth, disabled?: boolean}} deps
+ * @param {{auth: import('./auth.js').Auth, disabled?: boolean, sessionExtra?: object}} deps
+ *   sessionExtra: oturum acmis kullaniciya /api/session ile giden ek alanlar (ör. kurulumda kapali bolumler: `{closedSections}`)
  * @returns {(req, res, url: URL) => Promise<boolean>} true: istek bu modulde cevaplandi
  */
-export function createAuthRoutes({ auth, disabled = false }) {
+export function createAuthRoutes({ auth, disabled = false, sessionExtra = {} }) {
   const meta = (req) => ({ ip: req.clientIp ?? clientIp(req), userAgent: req.headers['user-agent'] ?? null });
 
   async function loginAndReply(req, res, username, password, status = 200) {
@@ -178,9 +179,9 @@ export function createAuthRoutes({ auth, disabled = false }) {
     try {
       if (method === 'GET' && pathname === '/api/session') {
         if (disabled) {
-          return send(res, 200, { authenticated: true, authDisabled: true, user: publicUser(req.user) }), true;
+          return send(res, 200, { authenticated: true, authDisabled: true, user: publicUser(req.user), ...sessionExtra }), true;
         }
-        if (req.user) return send(res, 200, { authenticated: true, user: publicUser(req.user) }), true;
+        if (req.user) return send(res, 200, { authenticated: true, user: publicUser(req.user), ...sessionExtra }), true;
         const setupRequired = auth.setupRequired;
         return send(res, 200, { authenticated: false, setupRequired, setupAllowed: setupRequired && isLocalRequest(req) }), true;
       }

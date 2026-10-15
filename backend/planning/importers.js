@@ -13,7 +13,8 @@
  *   - Agirliklar KG (Excel basligi "GR" olsa da degerler kg: 0,0179 = 17,9 g).
  */
 import { decodeCsv, parseCsv } from './csv-read.js';
-import { cleanCode, foldTr, headerKey, isScientific, looseKey, parseDate, parseNumber } from './normalize.js';
+import { XlsxError, isOle2, isZip, readXlsx } from './xlsx-read.js';
+import { cleanCode, foldTr, headerKey, isScientific, looseKey, parseDate, parseNumber, sheetRow } from './normalize.js';
 import { findGkkHeader } from './gkk.js';
 import { findApprovalHeader } from './first-approval.js';
 
@@ -102,7 +103,7 @@ function importIsEmri(db, parsed, ctx) {
     if (stock === '') { skipped += 1; return; } // numarasi onceden verilmis bos is emri satiri
     if (!SANE_CODE.test(stock)) {
       skipped += 1;
-      warnings.add(`Satır ${i + 2}: ürün kodu geçersiz görünüyor ("${stock}"), atlandı.`);
+      warnings.add(`Satır ${sheetRow(parsed, i + 1)}: ürün kodu geçersiz görünüyor ("${stock}"), atlandı.`);
       return;
     }
     totalRows += 1;
@@ -168,7 +169,7 @@ function importSiparis(db, parsed, ctx) {
       if (code === '' && docNo === '') { skipped += 1; return; }
       if (code === '' || docNo === '') {
         skipped += 1;
-        warnings.add(`Satır ${i + 2}: ${code === '' ? 'mamul kodu' : 'evrak no'} boş, atlandı.`);
+        warnings.add(`Satır ${sheetRow(parsed, i + 1)}: ${code === '' ? 'mamul kodu' : 'evrak no'} boş, atlandı.`);
         return;
       }
       totalRows += 1;
@@ -230,6 +231,35 @@ function importSiparis(db, parsed, ctx) {
 
 /* ------------------------------------------------------------------------------- girdi */
 
+const UNRECOGNIZED =
+  'Beklenen: iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıkları), sipariş dosyası (Mamul_Kodu, Evrak_No … başlıkları), GKK rapor numaraları (EYS.FR.011: RAPOR NO, ÜRETİCİ RAPOR TARİHİ) ya da ilk baskı onay listesi (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU).';
+
+/** Tablonun hangi dosya turu oldugu: form sayfalari (gkk/ilkonay; `quality` varsa) once, sonra baslik satirindan isemri/siparis. @returns {'gkk'|'ilkonay'|'isemri'|'siparis'|null} */
+function classify(parsed, quality) {
+  return (quality ? detectForm(parsed) : null) ?? detectFormat(parsed.headers);
+}
+
+/** Tek bir tablo (CSV'nin tamami ya da bir .xlsx sayfasi) icin iceri alma; sonuc `source` alanlariyla (encoding, delimiter ...) birlestirilir. */
+function importParsed(db, parsed, kind, { filename, by, keepOld, now, quality }, source) {
+  const warnings = new Warnings();
+  if (kind === 'gkk' || kind === 'ilkonay') {
+    const batchId = db.beginBatch(kind, { filename, by, now });
+    const ctx = { warn: (m) => warnings.add(m), now, by };
+    const result = kind === 'gkk' ? quality.importGkk(parsed, ctx) : quality.importApprovals(parsed, ctx);
+    db.finishBatch(batchId, { totalRows: result.totalRows, added: result.added, updated: result.updated, unchanged: result.unchanged, skipped: result.skipped, warnings: warnings.list() });
+    return { format: kind, ...source, batchId, ...result, warnings: warnings.list() };
+  }
+
+  const batchId = db.beginBatch(kind, { filename, by, now });
+  const ctx = { by, now, warnings, batchId, keepOld };
+  const result = kind === 'isemri' ? importIsEmri(db, parsed, ctx) : importSiparis(db, parsed, ctx);
+  db.finishBatch(batchId, {
+    totalRows: result.totalRows, added: result.added, updated: result.updated, unchanged: result.unchanged,
+    skipped: result.skipped, warnings: warnings.list(),
+  });
+  return { format: kind, ...source, batchId, ...result, warnings: warnings.list() };
+}
+
 /**
  * @param {import('./planning-db.js').PlanningDb} db
  * @param {Buffer} buffer
@@ -241,31 +271,59 @@ export function importCsv(db, buffer, { filename = null, by = null, keepOld = fa
   const parsed = parseCsv(text);
   if (parsed.headers.length === 0) throw new ImportError('Dosyada başlık satırı bulunamadı.');
 
-  const form = quality ? detectForm(parsed) : null;
-  if (form) {
-    const warnings = new Warnings();
-    const batchId = db.beginBatch(form, { filename, by, now });
-    const ctx = { warn: (m) => warnings.add(m), now, by };
-    const result = form === 'gkk' ? quality.importGkk(parsed, ctx) : quality.importApprovals(parsed, ctx);
-    db.finishBatch(batchId, { totalRows: result.totalRows, added: result.added, updated: result.updated, unchanged: result.unchanged, skipped: result.skipped, warnings: warnings.list() });
-    return { format: form, encoding, delimiter: parsed.delimiter, batchId, ...result, warnings: warnings.list() };
+  const kind = classify(parsed, quality);
+  if (!kind) throw new ImportError(`Dosya tanınmadı. ${UNRECOGNIZED} Bulunan ilk başlıklar: ${parsed.headers.slice(0, 6).join(', ')}`);
+  return importParsed(db, parsed, kind, { filename, by, keepOld, now, quality }, { encoding, delimiter: parsed.delimiter });
+}
+
+/** Bos olmayan ilk satir baslik, gerisi veri (CSV okuyucusuyla ayni sekil); `rowNumbers` uyarilarda Excel satir numarasini verir. */
+function toParsed({ rows, rowNumbers }) {
+  const [headers = [], ...rest] = rows;
+  return { delimiter: null, headers: headers.map((h) => String(h ?? '').trim()), rows: rest, rowNumbers };
+}
+
+/**
+ * Excel calisma kitabi (.xlsx): TUM sayfalara bakilir, taninanlar (is emirleri, siparis, GKK, ilk onay) ayri ayri iceri alinir, taninmayanlar
+ * "atlandi" olarak listelenir (ör. kagit form sablonu, sevkiyat sayfasi). Her taninan sayfa ayri bir toplu iceri alma kaydidir.
+ * Sonuc: `{format: 'xlsx', sheets: [{sheet, ...sayfa sonucu}], skippedSheets: [{name, reason}], warnings}`.
+ */
+export function importXlsx(db, buffer, { filename = null, by = null, keepOld = false, now = Date.now(), quality = null } = {}) {
+  let book;
+  try {
+    book = readXlsx(buffer);
+  } catch (err) {
+    if (err instanceof XlsxError) throw new ImportError(err.message);
+    throw err;
   }
 
-  const format = detectFormat(parsed.headers);
-  if (!format) {
+  const sheets = [];
+  const skippedSheets = [];
+  const seenKinds = new Set();
+  for (const sheet of book.sheets) {
+    const parsed = toParsed(sheet);
+    if (parsed.headers.length === 0) { skippedSheets.push({ name: sheet.name, reason: 'boş sayfa' }); continue; }
+    const kind = classify(parsed, quality);
+    if (!kind) {
+      skippedSheets.push({ name: sheet.name, reason: `tanınmadı (ilk başlıklar: ${parsed.headers.filter((h) => h !== '').slice(0, 5).join(', ') || '—'})` });
+      continue;
+    }
+    // Ayni kitapta ayni turden ikinci siparis sayfasi, birincinin satirlarini "dosyada yok" diye gizlemesin.
+    const keep = keepOld || (kind === 'siparis' && seenKinds.has('siparis'));
+    seenKinds.add(kind);
+    const batchName = filename ? `${filename} › ${sheet.name}`.slice(0, 200) : sheet.name;
+    sheets.push({ sheet: sheet.name, ...importParsed(db, parsed, kind, { filename: batchName, by, keepOld: keep, now, quality }, { encoding: 'xlsx', delimiter: null }) });
+  }
+  if (sheets.length === 0) {
     throw new ImportError(
-      'Dosya tanınmadı. Beklenen: iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıkları), sipariş dosyası (Mamul_Kodu, Evrak_No … başlıkları), GKK rapor numaraları (EYS.FR.011: RAPOR NO, ÜRETİCİ RAPOR TARİHİ) ya da ilk baskı onay listesi (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU). ' +
-      `Bulunan ilk başlıklar: ${parsed.headers.slice(0, 6).join(', ')}`,
+      `Çalışma kitabındaki hiçbir sayfa tanınmadı (${book.sheets.map((s) => s.name).join(', ')}). ${UNRECOGNIZED}`,
     );
   }
+  const warnings = sheets.flatMap((s) => s.warnings.map((w) => `${s.sheet}: ${w}`));
+  return { format: 'xlsx', sheets, skippedSheets, warnings };
+}
 
-  const warnings = new Warnings();
-  const batchId = db.beginBatch(format, { filename, by, now });
-  const ctx = { by, now, warnings, batchId, keepOld };
-  const result = format === 'isemri' ? importIsEmri(db, parsed, ctx) : importSiparis(db, parsed, ctx);
-  db.finishBatch(batchId, {
-    totalRows: result.totalRows, added: result.added, updated: result.updated, unchanged: result.unchanged,
-    skipped: result.skipped, warnings: warnings.list(),
-  });
-  return { format, encoding, delimiter: parsed.delimiter, batchId, ...result, warnings: warnings.list() };
+/** Dosya turunu ICERIGINDEN anlar (.xlsx = ZIP; baska her sey CSV); uzanti/Content-Type'a guvenilmez. */
+export function importFile(db, buffer, opts = {}) {
+  if (buffer && (isZip(buffer) || isOle2(buffer))) return importXlsx(db, buffer, opts);
+  return importCsv(db, buffer, opts);
 }

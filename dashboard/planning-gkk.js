@@ -33,7 +33,7 @@ export function renderGkk(host) {
 
   function draw() {
     $('count').innerHTML = st.total === 0
-      ? (st.q ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${admin ? ' Sağ üstteki "CSV içeri al…" ile EYS.FR.011 formunu yükleyebilir ya da "Yeni GK numarası…" ile ekleyebilirsiniz.' : ''}`)
+      ? (st.q ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${admin ? ' Sağ üstteki "Excel içeri al…" ile EYS.FR.011 formunu yükleyebilir ya da "Yeni GK numarası…" ile ekleyebilirsiniz.' : ''}`)
       : `${fmtNum(st.total)}${st.total !== st.count ? ` / ${fmtNum(st.count)}` : ''} kayıt · sıradaki numara <b class="mono">${escapeHtml(st.next?.no ?? '—')}</b>`;
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th class="num">Sıra</th><th>Hammadde cinsi</th><th>Rapor no</th><th>Üretici rapor tarihi</th><th>Açıklama</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +

@@ -681,9 +681,10 @@ dialog.pl-form-dlg .modal-body{background:var(--surface-2);}
 .pl-meter span.is-over{background:var(--st-idle);}
 .pl-meter-t{margin:0 0 8px;font-size:13px;}
 .pl-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:4px 0 6px;}
-.pl-kpi{display:flex;flex-direction:column;gap:2px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);}
+.pl-kpi{display:flex;flex-direction:column;gap:2px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);min-width:0;}
 .pl-kpi-l{font-family:var(--font-cond);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);}
-.pl-kpi-v{font-weight:650;font-size:14px;}
+/* Bosluksuz uzun degerler (ör. hammadde kodu HM617.SK24.00XYU14.00) kutudan tasmasin: gerekirse her yerden satir kirilir. */
+.pl-kpi-v{font-weight:650;font-size:14px;min-width:0;overflow-wrap:anywhere;}
 .tbl-pl tbody tr.pl-running{background:var(--accent-soft);}
 .tbl-pl tbody tr.pl-running:hover{background:var(--accent-soft);}
 .pl-sample{margin:6px 0;font-size:13px;}

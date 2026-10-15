@@ -11,7 +11,7 @@ import { Quality } from './quality.js';
 import { buildWorkOrderFormPdf } from './wo-form-pdf.js';
 import { parseSteps, parseReject, stepsToColumns, stepsText } from './card-steps.js';
 import { mergePdfs, PdfError } from '../pdf-merge.js';
-import { importCsv } from './importers.js';
+import { importFile } from './importers.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -104,8 +104,14 @@ export class Planning {
 
   /* -------------------------------------------------------------- iceri alma */
 
+  /** Excel'den CSV ya da .xlsx (dosya turu içerikten anlaşılır; .xlsx'te tüm sayfalar taranır). */
+  importFile(buffer, opts) {
+    return importFile(this.db, buffer, { ...opts, quality: this.quality });
+  }
+
+  /** Eski ad (testler): `importFile` ile aynı. */
   importCsv(buffer, opts) {
-    return importCsv(this.db, buffer, { ...opts, quality: this.quality });
+    return this.importFile(buffer, opts);
   }
 
   /* ----------------------------------------------------------------- urunler */

@@ -28,7 +28,7 @@ export function renderProducts(host) {
 
   function draw() {
     $('count').textContent = st.total === 0
-      ? (st.q ? 'Eşleşen ürün yok.' : 'Henüz ürün kartı yok. Sağ üstteki "CSV içeri al" ile iş emirleri listesini ya da sipariş dosyasını yükleyin, ya da "Yeni ürün" ile elle ekleyin.')
+      ? (st.q ? 'Eşleşen ürün yok.' : 'Henüz ürün kartı yok. Sağ üstteki "Excel içeri al…" ile iş emirleri listesini ya da sipariş dosyasını (.xlsx ya da CSV) yükleyin, ya da "Yeni ürün" ile elle ekleyin.')
       : `${fmtNum(st.total)} ürün${st.items.length < st.total ? ` (ilk ${fmtNum(st.items.length)} gösteriliyor)` : ''}`;
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>Stok kodu</th><th>Ürün adı</th><th>Müşteri kodu</th><th>Hammadde</th>' +
@@ -98,7 +98,7 @@ export async function openProductDialog(code, onSaved = () => {}) {
 
   m.body.innerHTML =
     '<form autocomplete="off" data-role="form">' +
-    (p?.edited ? '<p class="notice">Bu kart elle düzenlendi: CSV içeri alma bu kartın <b>dolu</b> alanlarını ezmez, yalnızca boş alanları doldurur.</p>' : '') +
+    (p?.edited ? '<p class="notice">Bu kart elle düzenlendi: Excel/CSV içeri alma bu kartın <b>dolu</b> alanlarını ezmez, yalnızca boş alanları doldurur.</p>' : '') +
     '<div class="fld-grid">' +
     field('stockCode', 'Stok kodu (Mikro)', p?.stockCode ?? '', isNew ? ' required maxlength="40" placeholder="ör. SR001.013"' : ' readonly') +
     `<label class="fld pl-wide"><span>Ürün adı</span><input name="name" value="${escapeHtml(p?.name ?? '')}" maxlength="200" autocomplete="off"></label>` +

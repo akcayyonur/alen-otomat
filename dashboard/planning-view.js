@@ -3,7 +3,7 @@
  * Roller: yonetici hepsini; operator (fabrika PC'si) tezgah basi, paketleme, GKK, ilk onay, olcu raporlari; izleyici (viewer) tezgah basi, is emirleri,
  * GKK, ilk onay ve olcu raporlarini YALNIZ OKUR (yetkiyi sunucu verir, burasi yalniz gorunum).
  * Planlama, Telemetri'den AYRI bir uygulamadir (apps.js): kendi yan menusu vardir (renderPlanningNav), tezgah listesi yoktur.
- * Bolumler ayri modullerdedir; burada yan menu, bolum basligi, ozet satiri ve Excel CSV'si iceri alma penceresi bulunur.
+ * Bolumler ayri modullerdedir; burada yan menu, bolum basligi, ozet satiri ve Excel (.xlsx / CSV) iceri alma penceresi bulunur.
  *
  * Hammadde ve verimlilik sonraki asamalarda yeni bolum olarak eklenir (PLANLAMA-TASARIM.md).
  */
@@ -73,7 +73,7 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   host.innerHTML =
     '<section class="dt-block">' +
     `<div class="dt-block-head"><div><h3>${escapeHtml(current.label)}</h3><p class="hint">${escapeHtml(current.hint)}</p></div>` +
-    (showImport ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="import">CSV içeri al…</button></div>' : '') + '</div>' +
+    (showImport ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="import">Excel içeri al…</button></div>' : '') + '</div>' +
     (showAdminBar ? '<p class="hint" data-role="summary"></p>' : '') +
     '<div data-role="tab"></div></section>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
@@ -99,7 +99,8 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   mountTab();
 }
 
-function resultHtml(r) {
+/** Bir tablonun (CSV'nin tamamı ya da bir Excel sayfası) iceri alma sonucu. */
+function tableResultHtml(r) {
   const kind = KIND_LABEL[r.format] ?? r.format;
   const tally = r.format === 'gkk' || r.format === 'ilkonay'
     ? `${n(r.totalRows)} kayıt okundu → <b>${n(r.added)}</b> yeni, <b>${n(r.updated)}</b> güncellendi, ${n(r.unchanged)} değişmedi` +
@@ -109,7 +110,8 @@ function resultHtml(r) {
     : `${n(r.totalRows)} sipariş satırı okundu → <b>${n(r.added)}</b> yeni, <b>${n(r.updated)}</b> güncellendi, ${n(r.unchanged)} değişmedi; ` +
       `ürün kartları: ${n(r.products.added)} yeni, ${n(r.products.updated)} güncellendi` +
       (r.staleMarked > 0 ? `; dosyada olmayan <b>${n(r.staleMarked)}</b> eski satır gizlendi (yanlışlıkla ise tam dosyayı yeniden yükleyin, satırlar geri gelir)` : '');
-  return `<div class="notice"><b>${escapeHtml(kind)}</b> tanındı (${escapeHtml(r.encoding)}, ayırıcı "${escapeHtml(r.delimiter)}"). ${tally}` +
+  const source = r.encoding === 'xlsx' ? '' : ` (${escapeHtml(r.encoding)}, ayırıcı "${escapeHtml(r.delimiter)}")`;
+  return `<div class="notice"><b>${escapeHtml(kind)}</b> tanındı${source}. ${tally}` +
     `${r.skipped > 0 ? ` ${n(r.skipped)} satır atlandı (boş ya da geçersiz).` : ''}</div>` +
     (r.warnings.length > 0
       ? `<h4 class="sub">Uyarılar (${r.warnings.length})</h4><ul class="checks">${r.warnings.map((w) =>
@@ -117,16 +119,34 @@ function resultHtml(r) {
       : '<p class="hint">Uyarı yok.</p>');
 }
 
+/** CSV: tek tablo. .xlsx: her taninan sayfa ayri blok, taninmayan sayfalar "atlanan" listesinde (sebebiyle). */
+function resultHtml(r) {
+  if (r.format !== 'xlsx') return tableResultHtml(r);
+  const skipped = r.skippedSheets ?? [];
+  return (
+    `<div class="notice"><b>Excel çalışma kitabı</b>: ${n(r.sheets.length)} sayfa içeri alındı` +
+    `${skipped.length > 0 ? `, ${n(skipped.length)} sayfa atlandı (türü tanınmadı ya da boş)` : ''}.</div>` +
+    r.sheets.map((s) => `<section class="pl-prog"><h4 class="sub">Sayfa: ${escapeHtml(s.sheet)}</h4>${tableResultHtml(s)}</section>`).join('') +
+    (skipped.length > 0
+      ? `<h4 class="sub">Atlanan sayfalar (${skipped.length})</h4><ul class="pl-list">${skipped.map((k) => `<li><b>${escapeHtml(k.name)}</b>: ${escapeHtml(k.reason)}</li>`).join('')}</ul>`
+      : '')
+  );
+}
+
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 function openImportDialog(onDone) {
-  const m = openModal({ title: 'Excel CSV içeri al' });
+  const m = openModal({ title: 'Excel / CSV içeri al' });
   m.body.innerHTML =
-    '<p class="hint">Excel\'de ilgili sayfayı <b>Farklı Kaydet → CSV UTF-8</b> ile kaydedip seçin. Dosya türü başlıklardan kendiliğinden tanınır:</p>' +
+    '<p class="hint">Excel dosyasını (<b>.xlsx</b>) olduğu gibi seçin: dosyadaki <b>tüm sayfalara</b> bakılır, tanınanlar içeri alınır, tanınmayanlar (ör. kâğıt form şablonu, sevkiyat sayfası) atlanır ve sonuçta listelenir. ' +
+    'CSV de kabul edilir (tek sayfa; Excel\'de <b>Farklı Kaydet → CSV UTF-8</b>). Sayfa türü başlıklardan kendiliğinden tanınır:</p>' +
     '<ul class="pl-list"><li><b>İş emirleri listesi</b> (PLANLANAN sayfası: ALEN KOD, MAMÜL ADI, MÜŞTERİ KODU …) → <b>ürün kartları</b> (her ürün için en son iş emrindeki değerler)</li>' +
     '<li><b>Sipariş dosyası</b> (_SIPARIS sayfası: Mamul_Kodu, Evrak_No, Must_Sip_No …) → <b>sipariş satırları</b> ve ürün kartlarında eksik alanlar (tam boy, hammadde, ağırlıklar)</li>' +
     '<li><b>GKK rapor numarası takip formu</b> (EYS.FR.011: SIRA, ÜRÜN, RAPOR NO, ÜRETİCİ RAPOR TARİHİ, AÇIKLAMA) → <b>GKK rapor no</b> sekmesi; sayfa sonundaki önceden basılmış boş numaralar kayıt sayılmaz</li>' +
     '<li><b>İlk baskı onay / numune takip listesi</b> (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU, GK- KODU …) → <b>İlk onay raporu</b> sekmesi; ilk boş basılı kod sıradaki numara olur</li></ul>' +
-    '<p class="hint">Aynı dosyayı tekrar yüklemek güvenlidir. Elle düzenlediğiniz ürün kartlarının dolu alanları ezilmez. Büyük dosya (Excel\'in boş satırları dahil) sorun değil.</p>' +
-    '<input type="file" accept=".csv,text/csv,.txt" data-role="file" aria-label="CSV dosyası">' +
+    '<p class="hint">Aynı dosyayı tekrar yüklemek güvenlidir. Elle düzenlediğiniz ürün kartlarının dolu alanları ezilmez. Büyük dosya (Excel\'in boş satırları dahil) sorun değil. ' +
+    'Uyarılardaki satır numaraları Excel\'deki satır numarasıdır. Eski <b>.xls</b> biçimi ve şifreli dosya okunamaz (şifresiz .xlsx olarak kaydedin).</p>' +
+    '<input type="file" accept=".xlsx,.csv,text/csv,.txt" data-role="file" aria-label="Excel (.xlsx) ya da CSV dosyası">' +
     '<label class="chk"><input type="checkbox" data-role="hide-old"> Bu dosya <b>tam döküm</b>: dosyada olmayan eski sipariş satırlarını gizle ' +
     '<span class="hint" style="margin:0">(kısmi dosya yüklüyorsanız işaretlemeyin)</span></label>' +
     '<p class="notice notice-sim" data-role="err" hidden></p><div data-role="result"></div>' +
@@ -139,13 +159,14 @@ function openImportDialog(onDone) {
     const err = $('err');
     err.hidden = true;
     $('result').innerHTML = '';
-    if (!file) { err.textContent = 'Önce bir CSV dosyası seçin.'; err.hidden = false; return; }
+    if (!file) { err.textContent = 'Önce bir Excel (.xlsx) ya da CSV dosyası seçin.'; err.hidden = false; return; }
     if (file.size > MAX_UPLOAD) { err.textContent = `Dosya çok büyük (${Math.round(file.size / 1048576)} MB; en fazla 64 MB). Excel'de yalnızca dolu satırları kaydedin.`; err.hidden = false; return; }
     go.disabled = true;
     go.textContent = 'Yükleniyor…';
     try {
       const params = new URLSearchParams({ filename: file.name, ...($('hide-old').checked ? {} : { keepOld: '1' }) });
-      const r = await api(`/api/planning/import?${params}`, { method: 'POST', headers: { 'content-type': 'text/csv' }, body: file });
+      // Sunucu turu icerikten anlar (.xlsx = ZIP); Content-Type yalniz bilgidir.
+      const r = await api(`/api/planning/import?${params}`, { method: 'POST', headers: { 'content-type': /\.xlsx$/i.test(file.name) ? XLSX_TYPE : 'text/csv' }, body: file });
       $('result').innerHTML = resultHtml(r);
       onDone();
     } catch (e) {

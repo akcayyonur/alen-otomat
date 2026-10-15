@@ -22,7 +22,7 @@ export function renderOrders(host) {
 
   function drawList() {
     $('count').textContent = st.orders.length === 0
-      ? (st.q || st.openOnly ? 'Eşleşen sipariş yok.' : 'Henüz sipariş yok. Sağ üstteki "CSV içeri al" ile Mikro sipariş dosyasını yükleyin.')
+      ? (st.q || st.openOnly ? 'Eşleşen sipariş yok.' : 'Henüz sipariş yok. Sağ üstteki "Excel içeri al…" ile Mikro sipariş dosyasını (.xlsx ya da CSV) yükleyin.')
       : `${fmtNum(st.orders.length)} sipariş${st.orders.length >= 100 ? ' (ilk 100; aramayı daraltın)' : ''}${st.q === '' ? ' · en yeniler önde' : ''}`;
     $('list').innerHTML = st.orders.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>Müşteri</th><th>Müşteri sip. no</th><th>Evrak no</th><th>Tarih</th>' +

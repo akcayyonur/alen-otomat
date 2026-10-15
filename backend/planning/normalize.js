@@ -21,6 +21,12 @@ export function foldTr(value) {
     .trim();
 }
 
+/**
+ * Uyarilarda gosterilecek SATIR NUMARASI. `index`, `[headers, ...rows]` dizisindeki sira (0 = baslik). CSV'de bos satirlar atildigi icin
+ * numara dizi sirasidir (index + 1); .xlsx'te Excel'deki gercek satir numarasi (`parsed.rowNumbers`) kullanilir.
+ */
+export const sheetRow = (parsed, index) => parsed.rowNumbers?.[index] ?? index + 1;
+
 /** Baslik anahtari: yalniz A-Z ve 0-9 ("Müşt.Sip.No" -> "MUSTSIPNO", "gün top" -> "GUNTOP"). */
 export const headerKey = (value) => foldTr(value).replace(/[^A-Z0-9]/g, '');
 

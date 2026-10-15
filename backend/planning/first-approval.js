@@ -2,7 +2,7 @@
  * İLK BASKI ONAY / NUMUNE TAKİP LİSTESİ (EYS.FR.013) için SAF yardımcılar (testli). Bu liste ilk onay raporunun KENDİSİDİR: her ilk onay bir kod alır
  * (İ26-1281) ve ürün kodu, GK kodu, iş emri no, tarih, operatör ve CNC no ile kaydedilir.
  */
-import { foldTr, headerKey, parseDate } from './normalize.js';
+import { foldTr, headerKey, parseDate, sheetRow } from './normalize.js';
 import { parseGkNo } from './gkk.js';
 
 export const formatApprovalCode = (year, seq) => `İ${String(year % 100).padStart(2, '0')}-${String(seq).padStart(3, '0')}`;
@@ -59,7 +59,7 @@ export function readApprovalSheet(parsed, warn = () => {}) {
     const rawCode = get(row, 'ILKBASKIONAYKODU');
     if (rawCode === '') { skipped += 1; continue; }
     const code = parseApprovalCode(rawCode);
-    if (!code) { skipped += 1; warn(`Satır ${r + 1}: ilk baskı onay kodu okunamadı ("${rawCode}"), atlandı.`); continue; }
+    if (!code) { skipped += 1; warn(`Satır ${sheetRow(parsed, r)}: ilk baskı onay kodu okunamadı ("${rawCode}"), atlandı.`); continue; }
     const stockCode = get(row, 'URUNKODU') || null;
     const gkCode = gkValue(get(row, 'GKKODU'));
     const woNo = get(row, 'ISEMRINO').replace(/\D/g, '') || null;

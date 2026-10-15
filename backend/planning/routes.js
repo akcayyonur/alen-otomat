@@ -6,7 +6,7 @@
  *   POST /api/planning/products                         yeni urun karti (JSON)
  *   GET  /api/planning/products/:kod                    urun + bagli programlar
  *   PUT  /api/planning/products/:kod                    urun karti duzenleme (JSON; duzenlenen kart iceri almada ezilmez)
- *   POST /api/planning/import?filename=&keepOld=1       Excel'den CSV: is emirleri listesi ya da siparis dosyasi (govde = ham CSV)
+ *   POST /api/planning/import?filename=&keepOld=1       Excel'den CSV ya da .xlsx (govde = ham dosya; tur icerikten anlasilir, .xlsx'te tum sayfalar taranir)
  *   GET  /api/planning/orders?q=&open=1&limit=          siparisler (musteri siparis no + evrak no ile gruplu)
  *   GET  /api/planning/orders/lines?customerKey=&custOrderKey=&docKey=   bir siparisin satirlari
  *   GET  /api/planning/work-orders?q=&status=&machine=  is emirleri (status: aktif | planlandi | uretimde | bitti | iptal | tumu)
@@ -143,7 +143,7 @@ export function createPlanningRoutes({ planning }) {
       /* ---- iceri alma ---- */
       if (method === 'POST' && path === '/api/planning/import') {
         const body = await readBuffer(req, MAX_CSV_BYTES);
-        const result = planning.importCsv(body, {
+        const result = planning.importFile(body, {
           filename: (url.searchParams.get('filename') ?? '').slice(0, 200) || null,
           by: who(req),
           keepOld: url.searchParams.get('keepOld') === '1',

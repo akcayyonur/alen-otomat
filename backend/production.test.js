@@ -102,6 +102,20 @@ test('izleyici: program ana programdan alinir; alt programa gecici gecis parcayi
   assert.equal(u.observe(mesaj(T0 + SN, { total: 1001, count: 11, program: 'P9', main: null })).program, 'P9');
 });
 
+test('izleyici: ortak alt program (O9001) MainProg\'ta da gorunse okunamayan sayilir, ESKI programin devami olur', () => {
+  const t = new PartTracker();
+  t.observe(mesaj(T0, { program: 'SR001', main: 'SR001' }));
+  // kontrolcu cubuk alma sirasinda MainProg'u da O9001 gosteriyor (CurProg ile ayni)
+  t.observe(mesaj(T0 + SN, { total: 1000, count: 10, program: 'O9001', main: 'O9001' }));
+  const ev = t.observe(mesaj(T0 + 2 * SN, { total: 1001, count: 11, program: 'SR001', main: 'SR001' }));
+  assert.equal(ev.program, 'SR001', 'O9001 blip parcayi bolmedi, eski program surdu');
+  // kucuk/buyuk harf de yakalanir
+  const v = new PartTracker();
+  v.observe(mesaj(T0, { program: 'SR001', main: 'SR001' }));
+  v.observe(mesaj(T0 + SN, { total: 1000, count: 10, program: 'o9001', main: 'o9001' }));
+  assert.equal(v.observe(mesaj(T0 + 2 * SN, { total: 1001, count: 11, program: 'SR001', main: 'SR001' })).program, 'SR001');
+});
+
 test('izleyici: ayni mesajda program degistiyse parca ESKI programindir', () => {
   const t = new PartTracker();
   t.observe(mesaj(T0, { program: 'A', main: 'A' }));

@@ -250,6 +250,30 @@ test('depo: ingest program degisimini kaydeder; kapanista acik aralik kapanir; y
   }
 });
 
+test('depo: ortak alt program (O9001, ör. cubuk alma) icin ayri satir ACILMAZ, gercek programin araligi surer', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cnc-runs-o9001-'));
+  const file = join(dir, 'telemetry.db');
+  const acik = [];
+  try {
+    const bas = Date.now() - 5 * DK;
+    const store = new TelemetryStore(file);
+    acik.push(store);
+    store.ingest(mesaj('CNC-01', bas, 'SR001.013'));
+    // kontrolcu her parcada kisaca cubuk alma rutinine (O9001) geciyor; MainProg da O9001 gosteriyor
+    store.ingest(mesaj('CNC-01', bas + 5 * SN, 'O9001'));
+    store.ingest(mesaj('CNC-01', bas + 10 * SN, 'SR001.013'));
+    store.ingest(mesaj('CNC-01', bas + 15 * SN, 'O9001'));
+    store.ingest(mesaj('CNC-01', bas + 20 * SN, 'SR001.013'));
+    store.db.flush();
+    const rows = store.db.programRuns('CNC-01', 0, Date.now() + DK);
+    assert.deepEqual(rows.map((r) => r.program), ['SR001.013'], 'O9001 blip-leri ayri satir acmadi, tek aralik surdu');
+    assert.equal(store.runs.current('CNC-01').program, 'SR001.013');
+  } finally {
+    for (const s of acik) { clearInterval(s.db.flushTimer); try { s.db.db.close(); } catch { /* zaten kapali */ } }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('veritabani: ilk acilista mevcut orneklerden program araliklari cikarilir (bir kez)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cnc-runs-bf-'));
   const file = join(dir, 'telemetry.db');

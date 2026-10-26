@@ -10,7 +10,8 @@
  *    omur boyu sayac bunu sayamiyorsa (okunamadi / durdu), gorulen yeni deger "sifirlamadan beri yapilan parca" sayilir
  *    (sifirlamayla ayni saniyede biten parca, veri kopuklugunda yapilanlar). Taban her durumda yenilenir.
  *  - Program: parca, o sirada AKTIF olan (ana) programa yazilir. Ayni mesajda program degistiyse parca ESKI
- *    programindir (sayac parca bitince artar, program sonra secilir).
+ *    programindir (sayac parca bitince artar, program sonra secilir). Ortak alt program (O9001, ör. cubuk alma)
+ *    okunamayan sayilir: ne parcaya ne de "Program gecisleri"ne ayri bir program olarak yazilir (`programOf`).
  *  - Makul olmayan sicrama (gecen surede uretilemeyecek kadar buyuk fark: operator sayaci elle ayarladi)
  *    `suspect` isaretlenir ve toplamlara KATILMAZ; sessizce yutulmaz, raporda ayrica sayilir.
  *  - Veri kopuklugundan sonra gelen adet gercektir (sayac tezgahta artti) ama ZAMANI kesin degildir:
@@ -26,11 +27,18 @@ const MIN_PLAUSIBLE = 3;
 
 const isCounter = (v) => Number.isInteger(v) && v >= 0;
 
-/** Parcanin atfedilecegi program: ana program, yoksa calisan program. */
+/**
+ * Kok dizindeki ortak alt program (ör. cubuk alma rutini): her parcada kisaca devreye girer, gercek bir parca
+ * programi degildir. Kontrolcu bu sirada MainProg'u da O9001 (ya da bos) gosterebilir; ikisinde de okunamayan
+ * sayilir ("ortak alt program gecici gecisi aralik/parca atfini bolmez" - ana programin devamidir).
+ */
+const COMMON_SUBPROGRAM = 'O9001';
+
+/** Parcanin atfedilecegi program: ana program, yoksa calisan program. Ortak alt program (O9001) okunamayan sayilir. */
 export function programOf(msg) {
   const raw = msg.mainProgram ?? msg.program ?? null;
   const text = raw == null ? '' : String(raw).trim();
-  return text === '' ? null : text;
+  return text === '' || text.toUpperCase() === COMMON_SUBPROGRAM ? null : text;
 }
 
 /**

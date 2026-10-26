@@ -6,6 +6,8 @@
  *
  * Kurallar (hepsi test edilir, backend/program-runs.test.js):
  *  - Program = ana program (`programOf`, uretim adediyle ayni kaynak); alt program gecici gecisi aralik bolmez.
+ *    Ortak alt program (O9001, ör. cubuk alma) `programOf`'ta okunamayan sayilir: ayri bir satir ACILMAZ, acik
+ *    aralik onun uzerinden devam eder.
  *  - OKUNAMAYAN program (null) bir degisiklik sayilmaz: aralik surer ("okunamayan alan null, asla baska bir sey").
  *  - Program degisince onceki aralik, yenisinin basladigi anda biter (kontrolcu arada baska bir sey calistirmaz).
  *  - Uzun sessizlik (RUN_GAP_MS) araligi tezgahin SON GORULDUGU anda bitirir; veri gelince (ayni program bile olsa)

@@ -10,6 +10,12 @@ installer/output/
 *.exe
 *.dll
 
+# Gomulu Python + OR-Tools onbellegi: buyuk, ikili, her derlemede yeniden kurulmasin diye
+# build-installer.ps1 burada tutar (indirilen embeddable zip + pip ile kurulan ortools).
+installer/prereq/python-embed/
+installer/prereq/python-*.zip
+installer/prereq/get-pip.py
+
 # Claude Code arac/skill durumu: kisisel gelistirme araci, uygulamanin bir parcasi degil (binari icerir).
 .claude/
 .impeccable/

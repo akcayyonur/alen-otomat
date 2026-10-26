@@ -488,6 +488,10 @@ cd installer
 (`CNC Telemetri - Edge Agent` ve `CNC Telemetri - Edge Agent (22TB)`; ikisi de `--model` ile başlar, günlükler
 `ajan.log` / `ajan22.log`). 22TB tezgah tanımlı değilse 22TB ajanı boş listeyle bekler, kaynak tüketimi ihmal edilebilir.
 
+Paket ayrıca `runtime\python\` altına **gömülü Python + OR-Tools** içerir (Çizelgeleme önerisi için;
+ilk derlemede internet gerekir, sonraki derlemeler `installer\prereq\python-embed\` önbelleğini kullanır).
+Ayrıntı: §6 "Çizelgeleme / optimizasyon".
+
 - Setup.exe dosyaları `C:\CNC-Telemetri` altına koyar ve **`kurulum.ps1`'i
   çağırır**; görev/güvenlik duvarı mantığı tek yerde (yineleme yok). `kurulum.ps1`,
   proje kökünde `runtime\node.exe` ve `agent\syntec-agent.exe` varsa bunları
@@ -975,7 +979,13 @@ problemi (klasik paralel makine çizelgeleme), **yapay öğrenme modeli DEĞİL*
 - **Uçlar (yalnız yönetici):** `POST /api/planning/schedule/suggest` (gövde yok) · `POST /api/planning/schedule/apply {assignments: [{no, machineId}]}` → `{applied, skipped}`.
 - **Doğrulama:** `backend/planning/schedule.test.js` 9 test (süre önceliği: ölçülen > planlanan > bilinmeyen-dışarıda+uyarı; meşgul tezgah hesabı; sahte çözücü ile `suggest`/`apply` zenginleştirme ve hata yolu; başlamış iş emrinin sessizce atlanması; HTTP) — **gerçek Python hiç çağrılmaz** (`run` enjekte edilir, `npm test` bağımlılıksız kalır). `optimizer/test_schedule_solver.py` (6 test, GERÇEK CP-SAT ile; `python -m unittest optimizer/test_schedule_solver.py`, elle çalıştırılır, ortools gerekir): boş kuyruk, tezgah yok, ufuk çok küçük → infeasible, **aynı malzeme aynı tezgahta gruplanıp değişim 0 çıkıyor mu**, meşgul tezgah erken başlatmıyor mu, sıkı terminli iş gecikme 0 tutuyor mu.
   **Bu makinede uçtan uca gerçek Python'la denendi** (`pip install ortools`; 22 iş × 8 tezgah sentetik problemde ~23 sn, tardiness 0, makul yük dengesi, 4 malzemede 1 değişim): tarayıcıda gerçek dev sunucusu + 6 gerçek `planlandi` iş emriyle (3 ürün, 2 hammadde, farklı terminler) "Öneri oluştur…" → tablo → "Hepsini seç" → "Uygula" → iş emirlerinin `machineId`'si gerçekten değişti (API ile doğrulandı), yeniden "Öneri oluştur"da aynı atamalar (artık "değişiyor" işaretsiz) geldi.
-- **DENENMEDİ / sonraki iş:** Setup.exe'ye gömülü Python + ortools paketleme (şimdilik yerel geliştirme makinesindeki Python kullanılır, `SCHEDULE_PYTHON` ortam değişkeniyle değiştirilebilir); gerçek fabrika verisiyle (yüzlerce iş emri, gerçek terminler) ölçek/süre; "Değişim ve ayar" ortalamasının duruş kodlarından otomatik hesaplanması; tezgah-ürün uygunluk kısıtı; Gantt benzeri (tezgah × zaman) görsel — şimdilik düz tablo.
+- **Setup.exe'ye gömülü Python + OR-Tools (2026-10-26, YAPILDI):** Node'un `runtime\node.exe`'si gibi, `runtime\python\` altına **taşınabilir (embeddable) Python + pip ile kurulan ortools** gömülür — fabrika PC'sinde Python kurulu olması GEREKMEZ. `backend/planning/schedule.js` `pythonBin()`: `SCHEDULE_PYTHON` ortam değişkeni (elle geçersiz kılma) → yoksa `runtime/python/python.exe` (gömülüyse) → yoksa PATH'teki `python`/`python3` (geliştirme).
+  - **`installer/build-installer.ps1`:** `installer\prereq\python-embed\` önbelleğinde Python v3.10.11 (python.org embeddable zip) + `ortools==9.15.6755` (PyPI; sürüm sabit — bu sürümle uçtan uca denendi) yoksa kurar (ilk derlemede internet gerekir: zip + `get-pip.py` + `pip install`; ~85 MB indirme), varsa onbellekten alır. `._pth` dosyasında `import site` açılıp `Lib\site-packages` eklenir (embeddable dağıtım pip/site-packages'ı varsayılan KAPALI verir). Paket kodu (`optimizer/`, elle çalıştırılan `test_schedule_solver.py` hariç) ve gömülü Python, Node gibi `payload\`'a kopyalanır; `cnc-telemetri.iss`'e `optimizer\*` için `[Files]` satırı eklendi (`runtime\*` joker zaten `runtime\python\`'ı da kapsıyor).
+  - **Duman testi genişletildi:** paketteki `runtime\python\python.exe` ile gerçekten `from ortools.sat.python import cp_model` çalışıyor mu denetlenir (yalnız "dosyalar kopyalandı" değil, **gerçekten çözüyor mu**).
+  - **Bu makinede UÇTAN UCA gerçek derleme ile doğrulandı (2026-10-26):** `.\build-installer.ps1` ilk kez internetten Python+ortools+bağımlılıklarını (numpy, pandas, protobuf, absl-py…) indirip kurdu, paketledi, duman testi (yeni Python adımı dahil hepsi) geçti, **84,1 MB** `CNC-Telemetri-Kurulum-0.19.0.exe` üretildi (11TB + 22TB). Paketlenmiş `runtime\python\python.exe` ile gerçek bir çizelgeleme problemi stdin'den verilip doğru çözüldüğü ayrıca elle sınandı (öneri komut satırında da, Node üzerinden de değil, doğrudan paketteki yorumlayıcıyla).
+  - **Lisans:** `runtime\python\PYTHON-NOTICE.txt` (PSF License) ve `runtime\node\NODE-NOTICE.txt` gibi OR-Tools için not (Apache License 2.0).
+  - **DENENMEDİ:** kurulu PC'de Setup.exe'nin asıl kurulumu (yalnız bu makinede derleme + duman testi); yükseltmede eski `runtime\python\`'ın temiz silinip yenisiyle değişmesi (kurulum.ps1 şu an yalnız node/ajan süreçlerini durduruyor, Python sürekli çalışan bir süreç olmadığı için ayrıca durdurmaya gerek yok ama hiç denenmedi).
+- **Diğer DENENMEDİ / sonraki iş:** gerçek fabrika verisiyle (yüzlerce iş emri, gerçek terminler) ölçek/süre; "Değişim ve ayar" ortalamasının duruş kodlarından otomatik hesaplanması; tezgah-ürün uygunluk kısıtı; Gantt benzeri (tezgah × zaman) görsel — şimdilik düz tablo.
 
 **GKK rapor no, ilk onay raporu, teknik resim PDF'leri, ürüne göre değişen ölçü ve izleyici (viewer) erişimi (0.17.0, 2026-10-14, kullanıcı istekleri; kaynak formlar EYS.FR.011 ve EYS.FR.013):**
 - **Planlama'da izleyici (viewer) rolü — YALNIZ OKUMA.** Giriş sonrası seçim ekranında Telemetri + Planlama görünür. Planlama sekmeleri rol tablosu `dashboard/planning-tabs.js` `TAB_ROLES` (menü ve açılış sekmesi yalnız kolaylık; yetkiyi sunucu verir, testi `backend/apps.test.js`):
@@ -1208,7 +1218,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 
 ## 10. Sıradaki işler
 
-- [ ] **Çizelgeleme / optimizasyon (OR-Tools CP-SAT) — MVP yapıldı (2026-10-26), yalnız sentetik veriyle (bu makinede gerçek Python) denendi.** Ayrıntı: §6 "Çizelgeleme / optimizasyon". Sıradaki: gerçek fabrika verisiyle (çok sayıda iş emri) dene; Setup.exe'ye Python+ortools gömme.
+- [ ] **Çizelgeleme / optimizasyon (OR-Tools CP-SAT) — MVP + Setup.exe'ye Python gömme YAPILDI (2026-10-26), yalnız sentetik veriyle ve bu makinede derlenen pakette denendi.** Ayrıntı: §6 "Çizelgeleme / optimizasyon". Sıradaki: fabrika PC'sinde gerçek kurulum + gerçek iş emri verisiyle dene.
 - [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — yükseltilmiş
       oturumda hiç denenmedi. Artık en kolay yol: `installer/` ile üretilen
       Setup.exe'yi hedef PC'de çalıştırmak (görev, güvenlik duvarı, açılışta

@@ -6,7 +6,9 @@
 ; Kurulum yerlesimi:
 ;   C:\CNC-Telemetri\
 ;     runtime\node.exe        gomulu Node (makinede Node kurulu olmasi gerekmez)
-;     backend\ shared\ dashboard\ config\   proje kodu
+;     runtime\python\         gomulu Python + OR-Tools (Cizelgeleme onerisi; backend bunu ihtiyac
+;                              olunca child_process ile cagirir, surekli calisan hizmet degildir)
+;     backend\ shared\ dashboard\ config\ optimizer\   proje kodu
 ;     agent\                  syntec-agent.exe + Syntec DLL'leri, 11TB ailesi (BIRLIKTE - bolunmez)
 ;     agent22\                ayni ajan + 22TB ailesinin Syntec paketi (varsa)
 ;     kurulum\kurulum.ps1     gorev + guvenlik duvari kaydi (yukleme sonrasi cagrilir)
@@ -64,6 +66,8 @@ Source: "{#Payload}\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion r
 Source: "{#Payload}\backend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Payload}\shared\*"; DestDir: "{app}\shared"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Payload}\dashboard\*"; DestDir: "{app}\dashboard"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Cizelgeleme cozucusu (gomulu Python'un cagirdigi tek dosya, optimizer\schedule_solver.py).
+Source: "{#Payload}\optimizer\*"; DestDir: "{app}\optimizer"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Payload}\kurulum\*"; DestDir: "{app}\kurulum"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Ajan + Syntec DLL'leri: klasor bolunmez, hepsi birlikte (ajan DLL'lerin yanindan calisir).
 Source: "{#Payload}\agent\*"; DestDir: "{app}\agent"; Flags: ignoreversion recursesubdirs createallsubdirs

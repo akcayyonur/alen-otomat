@@ -25,21 +25,32 @@
  */
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { PlanningError } from './errors.js';
 import { materialKey } from './material.js';
 import { dateKey } from '../../shared/shifts.js';
 
 const SOLVER_PATH = fileURLToPath(new URL('../../optimizer/schedule_solver.py', import.meta.url));
+// Setup.exe projenin koklune runtime\python\python.exe olarak gomer (Node'un runtime\node.exe'si gibi;
+// bkz. installer/build-installer.ps1). Gelistirmede bu klasor yok, PATH'teki python'a dusulur.
+const BUNDLED_PYTHON = fileURLToPath(new URL('../../runtime/python/python.exe', import.meta.url));
 const DAY_MS = 86_400_000;
 /** "Degisim ve ayar" duruslarinin GERCEK ortalamasindan otomatik hesaplanmasi sonraki is (bkz. CLAUDE.md); simdilik kaba sabit varsayim. */
 const DEFAULT_CHANGEOVER_PENALTY_SEC = 1200;
 const MAX_JOBS = 500;
 const MAX_APPLY = 500;
 
+/** Calistirilacak python: SCHEDULE_PYTHON (elle gecersiz kilma) > gomulu (Setup.exe) > PATH'teki python/python3. */
+function pythonBin() {
+  if (process.env.SCHEDULE_PYTHON) return process.env.SCHEDULE_PYTHON;
+  if (existsSync(BUNDLED_PYTHON)) return BUNDLED_PYTHON;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
 /** Python alt surecini calistirir, stdin'den problemi yazar, stdout'tan JSON sonucu okur. */
 function defaultRun(problem) {
   return new Promise((resolve, reject) => {
-    const bin = process.env.SCHEDULE_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    const bin = pythonBin();
     let child;
     try {
       child = spawn(bin, [SOLVER_PATH], { stdio: ['pipe', 'pipe', 'pipe'] });

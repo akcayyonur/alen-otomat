@@ -155,6 +155,59 @@ if ([int]$sp[0] -lt 22 -or ([int]$sp[0] -eq 22 -and [int]$sp[1] -lt 5)) {
 if ($nodeMimari -ne 'x64') { Vazgec "Node mimarisi $nodeMimari - paket x64 bekliyor." }
 Tamam "Node v$nodeSurum ($nodeMimari): $NodeExe"
 
+# --- Python + OR-Tools (cizelgeleme optimizasyonu) ---
+# Node gibi PATH'ten DEGIL: tasinabilir (embeddable) Python indirilip icine `pip install ortools`
+# yapilir, boylece hedef PC'de Python kurulu olmasi gerekmez (bkz. CLAUDE.md "Cizelgeleme").
+# Ilk derlemede internet gerekir (indirme + pip); sonraki derlemeler installer\prereq\python-embed\
+# onbellegini kullanir (ortools zaten kuruluysa yeniden indirilmez/kurulmaz). Bu klasor buyuk ve
+# ikili oldugu icin depoya girmez (.gitignore).
+$PythonSurum = '3.10.11'
+$OrtoolsSurum = '9.15.6755'
+$pythonOnbellek = Join-Path $PSScriptRoot 'prereq\python-embed'
+$pythonExe = Join-Path $pythonOnbellek 'python.exe'
+$ortoolsVar = $false
+if (Test-Path $pythonExe) {
+    & $pythonExe -c "import ortools; assert ortools.__version__ == '$OrtoolsSurum'" 2>$null
+    $ortoolsVar = $LASTEXITCODE -eq 0
+}
+if (-not $ortoolsVar) {
+    Adim "Python v$PythonSurum + OR-Tools v$OrtoolsSurum hazirlaniyor (ilk seferde internet gerekir)"
+    if (Test-Path $pythonOnbellek) { Remove-Item $pythonOnbellek -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $pythonOnbellek | Out-Null
+
+    $zipAdi = "python-$PythonSurum-embed-amd64.zip"
+    $zipYol = Join-Path $PSScriptRoot "prereq\$zipAdi"
+    if (-not (Test-Path $zipYol)) {
+        Bilgi "indiriliyor: $zipAdi (python.org)"
+        Invoke-WebRequest "https://www.python.org/ftp/python/$PythonSurum/$zipAdi" -OutFile $zipYol -UseBasicParsing
+    } else {
+        Bilgi "onbellekten: $zipAdi"
+    }
+    Expand-Archive $zipYol -DestinationPath $pythonOnbellek -Force
+
+    # Embeddable dagitimda site-packages/pip KAPALI gelir (kucuk/sabit kalsin diye): ._pth dosyasinda
+    # "import site" satiri yorumlu durur, acilir; site-packages dizini de eklenir.
+    $pth = Get-ChildItem $pythonOnbellek -Filter '*._pth' | Select-Object -First 1
+    if (-not $pth) { Vazgec 'python ._pth dosyasi bulunamadi (beklenmeyen embeddable paket yapisi).' }
+    (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' | Set-Content $pth.FullName
+    Add-Content $pth.FullName 'Lib\site-packages'
+
+    Bilgi 'pip kuruluyor (bootstrap.pypa.io)'
+    $getPip = Join-Path $pythonOnbellek 'get-pip.py'
+    Invoke-WebRequest 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip -UseBasicParsing
+    & $pythonExe $getPip --no-warn-script-location 2>&1 | ForEach-Object { Bilgi $_ }
+    if ($LASTEXITCODE -ne 0) { Vazgec 'pip kurulamadi' }
+    Remove-Item $getPip -Force
+
+    Bilgi "ortools==$OrtoolsSurum kuruluyor (PyPI)"
+    & $pythonExe -m pip install --no-warn-script-location "ortools==$OrtoolsSurum" 2>&1 | ForEach-Object { Bilgi $_ }
+    if ($LASTEXITCODE -ne 0) { Vazgec 'ortools kurulamadi' }
+
+    & $pythonExe -c "from ortools.sat.python import cp_model; print(cp_model.CpModel)" 2>&1 | ForEach-Object { Bilgi $_ }
+    if ($LASTEXITCODE -ne 0) { Vazgec 'ortools kuruldu ama CP-SAT ice aktarilamadi' }
+}
+Tamam "Python v$PythonSurum + OR-Tools v$OrtoolsSurum (onbellek: $pythonOnbellek)"
+
 # --- derleyiciler ---
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { Vazgec '.NET Framework 4.0 derleyicisi (csc.exe) yok.' }
@@ -199,9 +252,12 @@ if (Test-Path $Payload) { Remove-Item $Payload -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Payload | Out-Null
 
 # Proje kodu. Simulator, saha araclari ve belgeler uretimde gerekmez.
-foreach ($d in 'backend', 'shared', 'dashboard', 'config') {
+# optimizer\: cizelgeleme cozucusu (schedule.js bunu gomulu Python'la child_process ile cagirir).
+foreach ($d in 'backend', 'shared', 'dashboard', 'config', 'optimizer') {
     Copy-Item (Join-Path $Kok $d) (Join-Path $Payload $d) -Recurse
 }
+# Cozucunun elle calistirilan Python testi (test_schedule_solver.py) gelistirme icindir, pakete girmez.
+Remove-Item (Join-Path $Payload 'optimizer\test_schedule_solver.py') -Force -ErrorAction SilentlyContinue
 # Kurulumda kapali bolumler: depodaki config\features.json her seyi acik birakir; paketteki dosyayi bu derleme yazar.
 $izinliBolumler = 'paketleme', 'hammadde'
 foreach ($b in $KapaliBolumler) {
@@ -247,6 +303,21 @@ Surum: v$nodeSurum
 Lisans: MIT - https://github.com/nodejs/node/blob/main/LICENSE
 "@ | Set-Content (Join-Path $rt 'NODE-NOTICE.txt') -Encoding UTF8
 Tamam "gomulu Node v$nodeSurum"
+
+# Gomulu Python + OR-Tools (cizelgeleme optimizasyonu icin; backend/planning/schedule.js bunu
+# ihtiyac olunca child_process ile cagirir, surekli calisan bir hizmet degildir).
+$rtPy = Join-Path $rt 'python'
+Copy-Item $pythonOnbellek $rtPy -Recurse
+@"
+Bu klasordeki python, Windows icin resmi "embeddable" Python dagitimidir (https://python.org).
+Surum: v$PythonSurum
+Lisans: PSF License - https://docs.python.org/3/license.html
+
+Ice pip ile Google OR-Tools kuruludur (https://github.com/google/or-tools, surum $OrtoolsSurum,
+Apache License 2.0). Yalniz Planlama > Cizelgeleme onerisi icin kullanilir
+(optimizer\schedule_solver.py); sunucunun geri kalani Node'dur, bu Python surekli calismaz.
+"@ | Set-Content (Join-Path $rtPy 'PYTHON-NOTICE.txt') -Encoding UTF8
+Tamam "gomulu Python v$PythonSurum + OR-Tools v$OrtoolsSurum"
 
 # Syntec Bin: alt klasorleriyle (Windows CE\ ...) birlikte, BUTUN paket - ajan
 # yalnizca DLL'lerin yanindan calisir, secip tasimak ilk denemede calisip sonra
@@ -343,6 +414,12 @@ if (-not $TestAtla) {
         }
         if (-not ($saglik -and $saglik.ok)) { Vazgec 'paketlenmis backend acilmadi' }
         Tamam 'backend paketten aciliyor (node:sqlite dahil)'
+
+        # Gomulu Python + OR-Tools: backend'in child_process ile cagiracagi TAM OLARAK bu dosya
+        # (runtime\python\python.exe), ayri bir Python kurulumu DEGIL.
+        $pyDuman = & (Join-Path $rtPy 'python.exe') -c "from ortools.sat.python import cp_model; print('ortools-tamam')" 2>&1
+        if ($LASTEXITCODE -ne 0 -or $pyDuman -notmatch 'ortools-tamam') { Vazgec "paketlenmis Python OR-Tools'u calistiramadi:`n$pyDuman" }
+        Tamam 'paketlenmis Python + OR-Tools (CP-SAT) calisiyor'
 
         $sayfa = Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5
         if ($sayfa.StatusCode -ne 200) { Vazgec 'dashboard sayfasi servis edilmedi' }

@@ -115,6 +115,12 @@ const clients = new Set();
 /** Path traversal'a kapali olmasi icin acik liste. */
 const STATIC_FILES = {
   '/': ['../dashboard/index.html', 'text/html; charset=utf-8'],
+  // PWA: tablette "Ana ekrana ekle" ile adres cubugu olmadan acilsin diye (bkz. CLAUDE.md "Tablet dagitimi").
+  '/manifest.json': ['../dashboard/manifest.json', 'application/manifest+json; charset=utf-8'],
+  '/icon-192.png': ['../dashboard/icon-192.png', 'image/png'],
+  '/icon-512.png': ['../dashboard/icon-512.png', 'image/png'],
+  '/icon-maskable-512.png': ['../dashboard/icon-maskable-512.png', 'image/png'],
+  '/apple-touch-icon.png': ['../dashboard/apple-touch-icon.png', 'image/png'],
   '/app.js': ['../dashboard/app.js', 'text/javascript; charset=utf-8'],
   '/charts.js': ['../dashboard/charts.js', 'text/javascript; charset=utf-8'],
   '/config-view.js': ['../dashboard/config-view.js', 'text/javascript; charset=utf-8'],

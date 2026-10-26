@@ -53,6 +53,8 @@
  *   POST /api/planning/work-orders/:no/drawings?name=   govde = ham PDF (yonetici);  DELETE .../drawings/:id
  *   GET  /api/planning/measure-reports?q=               olcu raporlari listesi;  GET .../work-orders/:no/measure-report  is emrinin tum olcumleri
  *   PUT  /api/planning/products/:kod/measure-plan {rows}   urun kartinin kalici olcu plani (yonetici)
+ *   POST /api/planning/schedule/suggest                 CIZELGELEME ONERISI (OR-Tools CP-SAT; yalniz yonetici): bekleyen is emirlerini tezgahlara onerir, ASLA yazmaz
+ *   POST /api/planning/schedule/apply {assignments: [{no, machineId}]}   onaylanan atamalari isler (mevcut updateWorkOrder yolu; baslamis is emri sessizce atlanir)
  */
 import { PlanningError } from './planning.js';
 import { MAX_DRAWING_BYTES } from './quality.js';
@@ -456,6 +458,13 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       }
       if (method === 'POST' && path === '/api/planning/programs/confirm-exact') {
         return sendJson(res, 200, { confirmed: planning.confirmExactSuggestions({ by: who(req) }) }), true;
+      }
+
+      /* ---- cizelgeleme / optimizasyon (OR-Tools CP-SAT; yalniz yonetici): oneri ASLA otomatik uygulanmaz ---- */
+      if (method === 'POST' && path === '/api/planning/schedule/suggest') return sendJson(res, 200, await planning.schedule.suggest()), true;
+      if (method === 'POST' && path === '/api/planning/schedule/apply') {
+        const body = await readJson(req);
+        return sendJson(res, 200, planning.schedule.apply(body.assignments, { by: who(req) })), true;
       }
 
       return sendJson(res, 404, { error: 'bulunamadı' }), true;

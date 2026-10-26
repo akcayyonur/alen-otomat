@@ -41,7 +41,7 @@ const HISTORY_REFRESH_MS = 10_000;
 const state = {
   /** @type {object|null} */ snapshot: null,
   /** @type {'fleet'|'machine'|'config'|'library'|'production'|'planning'|'apps'} */ view: 'fleet',
-  /** @type {'tezgahbasi'|'paketleme'|'isemirleri'|'gkk'|'ilkonay'|'olcuraporlari'|'verimlilik'|'hammadde'|'urunler'|'siparisler'|'programlar'} planlama ekraninda secili sekme */ planningTab: 'isemirleri',
+  /** @type {'tezgahbasi'|'paketleme'|'isemirleri'|'gkk'|'ilkonay'|'olcuraporlari'|'verimlilik'|'cizelgeleme'|'hammadde'|'urunler'|'siparisler'|'programlar'} planlama ekraninda secili sekme */ planningTab: 'isemirleri',
   /** @type {string|null} */ selected: null,
   /** @type {number|null} kutuphane ekraninda secili program */ programId: null,
   window: '30m',
@@ -68,7 +68,7 @@ function readRoute(depth = 0) {
   const role = getSession()?.user?.role;
   const m = /^\/tezgah\/(.+)$/.exec(hash);
   const lm = /^\/programlar(?:\/(\d+))?$/.exec(hash);
-  const pm = /^\/planlama(?:\/(tezgahbasi|paketleme|isemirleri|gkk|ilkonay|olcuraporlari|verimlilik|hammadde|urunler|siparisler|programlar))?$/.exec(hash);
+  const pm = /^\/planlama(?:\/(tezgahbasi|paketleme|isemirleri|gkk|ilkonay|olcuraporlari|verimlilik|cizelgeleme|hammadde|urunler|siparisler|programlar))?$/.exec(hash);
   if (m) {
     state.view = 'machine';
     state.selected = decodeURIComponent(m[1]);

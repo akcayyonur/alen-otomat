@@ -28,9 +28,9 @@ test('her uygulamanin adresi var ve benzersiz; planlama operator ve izleyiciye d
 test('planlama sekmeleri: izleyici yalniz okunan bolumleri gorur, operator fabrika PC\'sinin bolumlerini, yonetici hepsini', () => {
   assert.deepEqual(tabsForRole('viewer'), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari']);
   assert.deepEqual(tabsForRole('operator'), ['tezgahbasi', 'paketleme', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar']);
-  assert.equal(tabsForRole('admin').length, 11, 'yonetici her sekmeyi gorur');
+  assert.equal(tabsForRole('admin').length, 12, 'yonetici her sekmeyi gorur');
   assert.deepEqual(tabsForRole('admin').slice(0, 3), ['tezgahbasi', 'paketleme', 'isemirleri']);
-  for (const gizli of ['paketleme', 'verimlilik', 'hammadde', 'urunler', 'siparisler', 'programlar']) {
+  for (const gizli of ['paketleme', 'verimlilik', 'cizelgeleme', 'hammadde', 'urunler', 'siparisler', 'programlar']) {
     assert.ok(!tabsForRole('viewer').includes(gizli), `izleyici ${gizli} sekmesini gormez`);
   }
   for (const r of ['', undefined, null, 'root', 'ADMIN']) assert.deepEqual(tabsForRole(r), [], String(r));

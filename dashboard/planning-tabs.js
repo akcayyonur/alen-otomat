@@ -17,6 +17,7 @@ export const TAB_ROLES = Object.freeze({
   ilkonay: ALL,
   olcuraporlari: ALL,
   verimlilik: Object.freeze(['admin']),
+  cizelgeleme: Object.freeze(['admin']),
   hammadde: Object.freeze(['admin']),
   urunler: Object.freeze(['admin']),
   siparisler: Object.freeze(['admin']),

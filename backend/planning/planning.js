@@ -15,6 +15,7 @@ import { importFile } from './importers.js';
 import { Sources } from './sources.js';
 import { DocFolder } from './doc-folder.js';
 import { Packing } from './packing.js';
+import { Schedule } from './schedule.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -99,6 +100,8 @@ export class Planning {
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });
     /** Paketleme formu (EYS.FR.007): urun kodu uzerinden satirlar, koli ici adet ogrenme/oneri (packing.js). */
     this.packing = new Packing({ planning: this });
+    /** Cizelgeleme / optimizasyon (OR-Tools CP-SAT, ayri Python sureci): bekleyen is emirlerini tezgahlara ONERIR (schedule.js). ASLA otomatik uygulamaz. */
+    this.schedule = new Schedule({ planning: this });
     this.listSeenPrograms = listSeenPrograms;
     this.listMachines = listMachines;
     this.productionEvents = productionEvents;

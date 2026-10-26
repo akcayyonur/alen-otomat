@@ -19,6 +19,7 @@ import { renderShop } from './planning-shop.js';
 import { renderPacking } from './planning-packing.js';
 import { renderMaterial } from './planning-material.js';
 import { renderEfficiency } from './planning-efficiency.js';
+import { renderSchedule } from './planning-schedule.js';
 import { renderGkk } from './planning-gkk.js';
 import { renderApprovals } from './planning-approvals.js';
 import { renderMeasureReports } from './planning-reports.js';
@@ -34,6 +35,7 @@ const TABS = Object.freeze([
   { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013).', roles: TAB_ROLES.ilkonay, plain: true, importer: true, render: renderApprovals },
   { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', roles: TAB_ROLES.olcuraporlari, plain: true, render: renderMeasureReports },
   { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Kazanılan süre ÷ ayrılan süre.', roles: TAB_ROLES.verimlilik, plain: true, render: renderEfficiency },
+  { key: 'cizelgeleme', label: 'Çizelgeleme', sub: 'tezgah önerisi (OR-Tools)', hint: 'Öneri asla otomatik uygulanmaz.', roles: TAB_ROLES.cizelgeleme, plain: true, render: renderSchedule },
   { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', roles: TAB_ROLES.hammadde, plain: true, render: renderMaterial },
   { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', roles: TAB_ROLES.urunler, render: renderProducts },
   { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', roles: TAB_ROLES.siparisler, render: renderOrders },

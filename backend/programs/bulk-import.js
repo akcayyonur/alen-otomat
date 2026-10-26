@@ -20,6 +20,9 @@ export const MAX_PLAN_MS = 15 * 60_000;
 
 export const planKey = (customer, name) => `${customer}\\${name}`;
 
+/** Toplu gonderme (apply) CALISIYOR: bu plan bellek sinirina ya da yeni plana ragmen bellekten ATILMAZ (sonucu/ilerlemesi gerekli). */
+const isApplying = (p) => p.apply?.status === 'calisiyor';
+
 /**
  * Cakisan dosya icin "hangisi daha yeni" ipucu. Tezgah tarihi (FTP LIST, yerel saat, "YYYY-MM-DD HH:MM")
  * ile kutuphanedeki EN SON surumun eklenme tarihi karsilastirilir. YALNIZ ipucu: tezgah saati yanlis olabilir,
@@ -51,8 +54,12 @@ export class ImportPlans {
   create(machineId) {
     this.purge();
     // Ayni tezgahin onceki planlarini at (yenisi gecerli): bellek ve karisiklik azalir.
-    for (const [id, p] of this.plans) if (p.machineId === machineId && p.status !== 'calisiyor') this.plans.delete(id);
-    while (this.plans.size >= MAX_PLANS) this.plans.delete(this.plans.keys().next().value);
+    for (const [id, p] of this.plans) if (p.machineId === machineId && p.status !== 'calisiyor' && !isApplying(p)) this.plans.delete(id);
+    while (this.plans.size >= MAX_PLANS) {
+      const old = [...this.plans].find(([, p]) => !isApplying(p));
+      if (!old) break;
+      this.plans.delete(old[0]);
+    }
     const plan = {
       id: randomBytes(9).toString('base64url'),
       machineId,
@@ -78,8 +85,18 @@ export class ImportPlans {
 
   purge() {
     const cut = this.now() - this.ttlMs;
-    for (const [id, p] of this.plans) if (p.status !== 'calisiyor' && p.createdAt < cut) this.plans.delete(id);
+    for (const [id, p] of this.plans) if (p.status !== 'calisiyor' && !isApplying(p) && (p.apply?.finishedAt ?? p.createdAt) < cut) this.plans.delete(id);
   }
+}
+
+/**
+ * Toplu GONDERME plani + uygulama durumu. Uygulama surerken yalniz son sonuclar (hafif yanit), bitince hepsi gelir.
+ */
+export function publicPushPlan(plan) {
+  const base = publicPlan(plan);
+  if (!plan.apply) return { ...base, apply: null };
+  const a = plan.apply;
+  return { ...base, apply: { ...a, results: a.status === 'calisiyor' ? a.results.slice(-15) : a.results, stopRequested: !!a.stopRequested } };
 }
 
 /** Planin istemciye giden hali: icerik baytlari yok. */

@@ -7,7 +7,9 @@
  *
  *   1. Dosya gonderilir, ASLA calistirilir/secilmez. (Burada program secme ya da
  *      baslatma diye bir cagri yoktur; FTP'nin zaten boyle bir komutu da yok.)
- *   2. Hedefte ayni ad varsa UZERINE YAZILMAZ (buyuk/kucuk harf duyarsiz: CE oyle).
+ *   2. Hedefte ayni ad varsa UZERINE YAZILMAZ (buyuk/kucuk harf duyarsiz: CE oyle). TEK ISTISNA: TOPLU GONDERME
+ *      (startPushApply): kullanicinin planda onayladigi programlarin uzerine, tornadaki eski hal ONCE KUTUPHANEYE
+ *      YEDEKLENEREK ve yan adla (ZZRB) saklanarak yazilir; "ezme" semantigine (RNTO hedefte ayni ad) GUVENILMEZ.
  *   3. Tezgahta calisan/secili programin adiyla gonderilmez. Canli veri yoksa
  *      (hangi program calisiyor bilinmiyor) kullanici acikca onaylamadan gonderilmez.
  *   4. Once GECICI adla yuklenir (ZZUP + rakam), yerinde SHA-256 ile dogrulanir,
@@ -29,10 +31,10 @@ import { getDriver, resolveModel } from '../../shared/drivers.js';
 import { withFtp, FtpError } from './ftp-client.js';
 import { parseList } from './list-parse.js';
 import {
-  MAX_PROGRAM_BYTES, TEMP_PREFIX, ValidationError, sha256, isSystemEntry,
-  validateCustomer, validateProgramName, validateNewFolderName, decodeText,
+  MAX_PROGRAM_BYTES, TEMP_PREFIX, ROLLBACK_PREFIX, ValidationError, sha256, isSystemEntry,
+  validateCustomer, validateProgramName, validateNewFolderName, decodeText, compareEntry,
 } from './library.js';
-import { ImportPlans, publicPlan, planKey, modifiedHint, MAX_PLAN_BYTES, MAX_PLAN_MS } from './bulk-import.js';
+import { ImportPlans, publicPlan, publicPushPlan, planKey, modifiedHint, MAX_PLAN_BYTES, MAX_PLAN_MS } from './bulk-import.js';
 
 export class BusyError extends Error {
   constructor(message) { super(message); this.name = 'BusyError'; this.status = 409; }
@@ -114,6 +116,9 @@ const baseName = (p) => String(p ?? '').split(/[\\/]/).pop().trim().toLowerCase(
 
 const MAX_SCAN_MS = 120_000;
 const MAX_HASH_DOWNLOADS = 300;
+/** Toplu gonderme sonuc listesi ve "tornada ozel" listesi sinirlari (yanit boyutu). */
+const MAX_PUSH_RESULTS = 5000;
+const MAX_PUSH_LIST = 1500;
 
 /** Denetim kaydi icin adim kaydedici: her adimin suresi ve sonucu `steps`'e yazilir. */
 function stepRecorder(steps) {
@@ -148,6 +153,8 @@ export class MachineFiles {
     this.pauseMs = pauseMs;
     /** Toplu alim planlari (bellek ici, sinirli sure): bkz. bulk-import.js */
     this.plans = new ImportPlans();
+    /** Toplu gonderme planlari (bellek ici; uygulama surerken atilmaz): bkz. startPushPlan */
+    this.pushPlans = new ImportPlans();
     /** @type {Map<string, string>} tezgah -> calisan islemin adi */
     this.locks = new Map();
   }
@@ -834,6 +841,511 @@ export class MachineFiles {
     }
     plan.applied = true;
     return out;
+  }
+
+  /* ------------------------------------------------------------ TOPLU GONDERME (ezme dahil) */
+
+  /**
+   * Kutuphanedeki programlarin SON surumlerini bir tornaya topluca yazmak icin PLAN cikarir (tornaya YALNIZ OKUMA; arka planda).
+   * Her kutuphane programi icin: tornada yok -> `yeni`; tornada ayni icerik -> `ayni`; tornada farkli icerik -> `ezilecek`
+   * (`needsBackup`: tornadaki hal kutuphanedeki hicbir surumle tutmuyorsa true: uygulamada yedeklenir); musteri klasoru tornada
+   * yoksa / program su an calisiyorsa -> `atlanan`. Tornada olup kutuphanede olmayanlara DOKUNULMAZ (`tornadaOzel`: yalniz listelenir).
+   * Kok dizindeki (ortak alan) programlar toplu gonderime GIRMEZ. Plan, model kapisi kapali olsa da cikarilabilir (okuma);
+   * uygulama kapali modelde reddedilir.
+   * @param {{machineId: string, folders?: string[]|null}} p `folders`: yalniz bu musteri klasorleri
+   */
+  startPushPlan({ machineId, folders = null }) {
+    const machine = this.#machine(machineId);
+    const ftp = this.ftpOptionsFor(machine);
+    if (folders !== null && (!Array.isArray(folders) || folders.some((f) => typeof f !== 'string'))) {
+      throw new ValidationError('folders bir metin listesi olmalı.');
+    }
+    if (this.locks.has(machineId)) {
+      throw new BusyError(`${machineId} için başka bir işlem sürüyor (${this.locks.get(machineId)}). Bitmesini bekleyin.`);
+    }
+    const plan = this.pushPlans.create(machineId);
+    this.#lock(machineId, 'toplu gönderme planı', () => this.#runPushPlan(plan, machine, ftp, folders))
+      .catch((err) => { plan.status = 'hata'; plan.error = err.message; });
+    return plan.id;
+  }
+
+  async #runPushPlan(plan, machine, ftp, folderFilter) {
+    const startedAt = Date.now();
+    const deadline = startedAt + MAX_PLAN_MS;
+    const filter = folderFilter ? new Set(folderFilter.map((f) => f.toLowerCase())) : null;
+    const live = this.liveInfo(machine.id);
+    const unknownState = !live || !live.connected;
+    const running = unknownState ? [] : [live.program, live.mainProgram].filter(Boolean).map(baseName);
+
+    const all = this.library.db.listPrograms();
+    const programs = all.filter((p) => p.customer !== '' && (!filter || filter.has(p.customer.toLowerCase())));
+    const kokProgramSayisi = all.filter((p) => p.customer === '').length;
+
+    const warnings = [];
+    const folderNames = [];
+    /** @type {Map<string, {name: string, files: Map<string, object>, dirs: Set<string>}>} */
+    const lathe = new Map();
+    let rootFiles = 0;
+
+    await withFtp(ftp, async (c) => {
+      plan.progress = { phase: 'listeleme', folder: null, done: 0, total: 0 };
+      const root = parseList(await c.listRaw());
+      if (root.unparsed.length) warnings.push(`kök: ${root.unparsed.length} satır çözümlenemedi`);
+      rootFiles = root.entries.filter((e) => !e.isDir).length;
+      folderNames.push(...root.entries.filter((e) => e.isDir).map((e) => e.name));
+      for (const dir of root.entries.filter((e) => e.isDir)) {
+        if (filter && !filter.has(dir.name.toLowerCase())) continue;
+        if (Date.now() > deadline) throw new Error('Süre sınırı aşıldı (listeleme). Klasör seçerek yeniden deneyin.');
+        await sleep(this.pauseMs);
+        try {
+          await c.cwd(dir.name);
+          const listing = parseList(await c.listRaw());
+          if (listing.unparsed.length) warnings.push(`${dir.name}: ${listing.unparsed.length} satır çözümlenemedi`);
+          const files = new Map();
+          const dirs = new Set();
+          for (const e of listing.entries) {
+            if (e.isDir) dirs.add(e.name.toLowerCase());
+            else files.set(e.name.toLowerCase(), { customer: dir.name, name: e.name, size: e.size, modified: e.modified, sha256: null });
+          }
+          lathe.set(dir.name.toLowerCase(), { name: dir.name, files, dirs });
+        } catch (err) {
+          if (c.closedError) throw err;
+          warnings.push(`${dir.name}: listelenemedi (${err.message})`);
+        } finally {
+          if (!c.closedError) await c.toRoot().catch(() => {});
+        }
+      }
+
+      // Icerik karsilastirmasi: kutuphanede ayni (musteri, ad) olan ve boyutu bir surumle tutan dosyalar indirilip SHA'lanir.
+      // Boyutu hicbir surumle tutmayan dosya zaten KESIN farklidir (indirmeye gerek yok).
+      const entries = [...lathe.values()].flatMap((f) => [...f.files.values()]);
+      const candidates = this.library.hashCandidates(entries);
+      plan.progress = { phase: 'okuma', folder: null, done: 0, total: candidates.length };
+      const byFolder = new Map();
+      for (const e of candidates) {
+        if (!byFolder.has(e.customer)) byFolder.set(e.customer, []);
+        byFolder.get(e.customer).push(e);
+      }
+      for (const [folder, list] of byFolder) {
+        plan.progress.folder = folder;
+        try {
+          await c.cwd(folder);
+          for (const e of list) {
+            if (Date.now() > deadline) throw new Error('Süre sınırı aşıldı (okuma). Klasör seçerek yeniden deneyin.');
+            plan.progress.done += 1;
+            try {
+              e.sha256 = sha256(await c.retr(e.name, { maxBytes: MAX_PROGRAM_BYTES }));
+            } catch (err) {
+              if (c.closedError) throw err;
+              warnings.push(`${folder}\\${e.name}: okunamadı (${err.message})`);
+            }
+            await sleep(this.pauseMs); // uretim yapan tornanin FTP'sini yormamak icin
+          }
+        } finally {
+          if (!c.closedError) await c.toRoot().catch(() => {});
+        }
+      }
+    });
+
+    plan.progress = { ...plan.progress, phase: 'siniflandirma' };
+    const yeni = [];
+    const ezilecek = [];
+    const ayni = [];
+    const atlanan = [];
+    const inLibrary = new Set();
+    for (const p of programs) {
+      const base = { key: planKey(p.customer, p.name), programId: p.id, customer: p.customer, name: p.name };
+      const head = { versionNo: p.latest.versionNo, size: p.latest.size, sha256: p.latest.sha256 };
+      const lf = lathe.get(p.customer.toLowerCase());
+      if (!lf) { atlanan.push({ ...base, reason: `tornada "${p.customer}" klasörü yok (toplu gönderme klasör açmaz)` }); continue; }
+      inLibrary.add(`${p.customer.toLowerCase()}\u0000${p.name.toLowerCase()}`);
+      if (lf.dirs.has(p.name.toLowerCase())) { atlanan.push({ ...base, reason: 'tornada aynı adlı bir klasör var' }); continue; }
+      const hit = lf.files.get(p.name.toLowerCase());
+      if (!hit) { yeni.push({ ...base, ...head }); continue; }
+      if (running.includes(p.name.toLowerCase())) { atlanan.push({ ...base, reason: 'torna şu an bu programı çalıştırıyor/seçili (üzerine yazılmaz)' }); continue; }
+      const versions = this.library.db.listVersions(p.id).map((v) => ({ versionNo: v.versionNo, sha256: v.sha256, size: v.size }));
+      const cmp = compareEntry(hit, versions);
+      if (cmp.status === 'guncel') { ayni.push({ ...base, versionNo: head.versionNo }); continue; }
+      ezilecek.push({
+        ...base, ...head, latheSize: hit.size, latheSha256: hit.sha256, modified: hit.modified,
+        latheStatus: cmp.status, // eski (kutuphanede bir surumle ayni) | farkli (hicbir surumle tutmuyor) | belirsiz
+        latheVersionNo: cmp.status === 'eski' ? cmp.versionNo : null,
+        needsBackup: cmp.status === 'eski' ? false : true, // belirsiz: indirilemedi, uygulamada okunur ve yedeklenir
+      });
+    }
+
+    // Tornada olup kutuphanede olmayanlar: DOKUNULMAZ, yalniz listelenir. ZZUP/ZZRB artiklari ayrica uyari.
+    const tornadaOzel = [];
+    let tornadaOzelSayisi = 0;
+    const artik = [];
+    for (const lf of lathe.values()) {
+      for (const e of lf.files.values()) {
+        if (/^zz(up|rb)\d{6}$/i.test(e.name)) { artik.push(`${lf.name}\\${e.name}`); continue; }
+        if (inLibrary.has(`${lf.name.toLowerCase()}\u0000${e.name.toLowerCase()}`)) continue;
+        tornadaOzelSayisi += 1;
+        if (tornadaOzel.length < MAX_PUSH_LIST) tornadaOzel.push({ customer: lf.name, name: e.name, size: e.size });
+      }
+    }
+    if (artik.length) warnings.push(`${artik.length} aktarım artığı dosya tornada duruyor (${artik.slice(0, 3).join(', ')}${artik.length > 3 ? ' …' : ''}); otomatik silinmez`);
+
+    const policy = sendPolicy(machine);
+    plan.result = {
+      summary: {
+        kutuphane: programs.length, yeni: yeni.length, ezilecek: ezilecek.length, yedeklenecek: ezilecek.filter((x) => x.needsBackup).length,
+        ayni: ayni.length, atlanan: atlanan.length, tornadaOzel: tornadaOzelSayisi, kokKutuphane: kokProgramSayisi, tornaKokDosya: rootFiles,
+      },
+      yeni, ezilecek, ayni, atlanan, tornadaOzel, warnings, folders: folderNames, filtered: !!filter,
+      unknownState, running,
+      gate: { transferEnabled: this.transferEnabled, allowed: policy.allowed, reason: policy.reason, model: policy.model },
+      durationMs: Date.now() - startedAt,
+    };
+    plan.progress = { ...plan.progress, phase: 'bitti' };
+    plan.status = 'bitti';
+  }
+
+  /** Toplu gonderme plani + (varsa) uygulama durumu/ilerlemesi. */
+  getPushPlan(machineId, planId) {
+    this.#machine(machineId);
+    const plan = this.pushPlans.get(planId, machineId);
+    if (!plan) throw new NotFoundError('Plan bulunamadı ya da süresi doldu (30 dk). Planı yeniden oluşturun.');
+    return publicPushPlan(plan);
+  }
+
+  /**
+   * Plani UYGULAR: `yeni` programlar yazilir, `ezilecek` olanlarin uzerine YEDEKLEYEREK yazilir. Arka planda calisir (yuzlerce program).
+   * Kapilar (hepsi kodda): ozellik acik, model kapisi acik, onay metni = tezgah kimligi, plan hazir ve daha once uygulanmamis,
+   * canli veri yoksa 'unknown-state' onayi. Program basina kurallar icin bkz. #pushOne.
+   * @returns {{started: true, total: number}}
+   */
+  startPushApply({ machineId, planId, confirm, by = null, clientIp = null, acks = [], skipKeys = [] }) {
+    if (!this.transferEnabled) throw new DisabledError('Tornaya yazma kapalı (TRANSFER_DISABLED=1).');
+    const machine = this.#machine(machineId);
+    const policy = sendPolicy(machine);
+    if (!policy.allowed) throw new UnsupportedError(`${policy.model}: ${policy.reason}`);
+    if (confirm !== machine.id) throw new ValidationError(`Onay metni tezgah kimliğiyle aynı olmalı: ${machine.id}`);
+    const plan = this.pushPlans.get(planId, machineId);
+    if (!plan || plan.status !== 'bitti') throw new NotFoundError('Plan bulunamadı ya da süresi doldu. Planı yeniden oluşturun.');
+    if (plan.apply) throw new ValidationError('Bu plan zaten uygulanmaya başladı. Yeni bir plan çıkarın (aynı olanlar atlanır, kaldığı yerden sürer).', 409);
+    if (plan.result.unknownState && !acks.includes('unknown-state')) {
+      const err = new ValidationError('Tezgahtan canlı veri gelmiyor: çalışan program bilinemez. Devam etmek için bunu onaylamanız gerekir.');
+      err.code = 'unknown-state';
+      throw err;
+    }
+    if (!Array.isArray(skipKeys)) throw new ValidationError('skipKeys bir liste olmalı.');
+    const skip = new Set(skipKeys);
+    const items = [...plan.result.yeni, ...plan.result.ezilecek].filter((it) => !skip.has(it.key));
+    if (items.length === 0) throw new ValidationError('Gönderilecek program yok (hepsi zaten aynı, atlandı ya da seçilmedi).');
+    if (this.locks.has(machineId)) {
+      throw new BusyError(`${machineId} için başka bir işlem sürüyor (${this.locks.get(machineId)}). Bitmesini bekleyin.`);
+    }
+    plan.apply = {
+      status: 'calisiyor', startedAt: Date.now(), finishedAt: null, total: items.length, done: 0, current: null, stopRequested: false, error: null, by,
+      counts: { yeni: 0, ezilen: 0, ayni: 0, atlanan: 0, hata: 0, yedeklendi: 0, yedekKutuphanedeVardi: 0, yanAdliKaldi: 0 },
+      results: [],
+    };
+    plan.applied = true;
+    this.#lock(machineId, 'toplu gönderme', () => this.#runPushApply(plan, machine, items, { by, clientIp, acks }))
+      .catch((err) => { plan.apply.status = 'hata'; plan.apply.error = err.message; plan.apply.finishedAt = Date.now(); });
+    return { started: true, total: items.length };
+  }
+
+  /** Calisan toplu gondermeyi DURDURUR (o anki program bitirilir; kalanlara dokunulmaz). Sonra yeni plan kaldigi yerden surdurur. */
+  stopPushApply({ machineId, planId }) {
+    this.#machine(machineId);
+    const plan = this.pushPlans.get(planId, machineId);
+    if (!plan?.apply || plan.apply.status !== 'calisiyor') throw new NotFoundError('Çalışan bir toplu gönderme yok.');
+    plan.apply.stopRequested = true;
+    return { stopping: true };
+  }
+
+  async #runPushApply(plan, machine, items, { by, clientIp, acks }) {
+    const a = plan.apply;
+    const ftp = this.ftpOptionsFor(machine);
+    const groups = new Map();
+    for (const it of items) {
+      const k = it.customer.toLowerCase();
+      if (!groups.has(k)) groups.set(k, { customer: it.customer, items: [] });
+      groups.get(k).items.push(it);
+    }
+    const record = (it, r) => {
+      a.done += 1;
+      const c = a.counts;
+      if (r.outcome === 'yeni') c.yeni += 1;
+      else if (r.outcome === 'ezildi') {
+        c.ezilen += 1;
+        if (r.backup?.kind === 'yedek' && r.backup.created) c.yedeklendi += 1;
+        else if (r.backup?.kind === 'surum') c.yedekKutuphanedeVardi += 1;
+      } else if (r.outcome === 'ayni') c.ayni += 1;
+      else if (r.outcome === 'atlandi') c.atlanan += 1;
+      else c.hata += 1;
+      if (r.warning) c.yanAdliKaldi += 1;
+      if (a.results.length < MAX_PUSH_RESULTS) {
+        a.results.push({ customer: it.customer, name: it.name, outcome: r.outcome, status: r.status, detail: r.detail ?? null, backup: r.backup ?? null, warning: r.warning ?? null, transferId: r.transferId ?? null });
+      }
+    };
+
+    for (const g of [...groups.values()].sort((x, y) => x.customer.localeCompare(y.customer, 'tr'))) {
+      const queue = [...g.items];
+      let reconnects = 0;
+      while (queue.length > 0 && !a.stopRequested) {
+        let lost = false;
+        try {
+          await withFtp(ftp, async (c) => {
+            const root = parseList(await c.listRaw());
+            const dir = root.entries.find((e) => e.isDir && e.name.toLowerCase() === g.customer.toLowerCase());
+            if (!dir) {
+              for (const it of queue.splice(0)) {
+                record(it, this.#pushSkipRecord(machine, it, 'tornada müşteri klasörü yok (klasör açılmaz)', { by, clientIp, acks }));
+              }
+              return;
+            }
+            await c.cwd(dir.name);
+            while (queue.length > 0 && !a.stopRequested) {
+              const it = queue[0];
+              a.current = `${it.customer}\\${it.name}`;
+              const r = await this.#pushOne(c, ftp, { machine, folder: dir.name, item: it, by, clientIp, acks });
+              queue.shift();
+              record(it, r);
+              if (r.connectionLost) { lost = true; return; }
+              await sleep(this.pauseMs);
+            }
+          });
+        } catch (err) {
+          // Oturum acilamadi / liste alinamadi: kalanlar icin tekrar denenir, olmazsa hata yazilir.
+          reconnects += 1;
+          if (reconnects > 3) {
+            for (const it of queue.splice(0)) record(it, this.#pushSkipRecord(machine, it, `tornaya bağlanılamadı: ${err.message}`, { by, clientIp, acks }, 'hata'));
+          } else if (this.pauseMs > 0) await sleep(1000);
+        }
+        if (lost) { reconnects += 1; if (reconnects > 3) { for (const it of queue.splice(0)) record(it, this.#pushSkipRecord(machine, it, 'bağlantı tekrar tekrar koptu', { by, clientIp, acks }, 'hata')); } }
+      }
+      if (a.stopRequested) break;
+    }
+    a.current = null;
+    a.finishedAt = Date.now();
+    a.status = a.stopRequested ? 'durduruldu' : 'bitti';
+  }
+
+  /** Yazmadan atlanan/hataya dusen program icin denetim kaydi + sonuc (tornaya dokunulmadi). */
+  #pushSkipRecord(machine, item, reason, { by, clientIp, acks }, outcome = 'atlandi') {
+    const db = this.library.db;
+    const transferId = db.startTransfer({
+      kind: 'toplu', machineId: machine.id, programId: item.programId, customer: item.customer, name: item.name,
+      size: item.size, shaSent: item.sha256, requestedBy: by, clientIp, acks,
+    });
+    db.finishTransfer(transferId, { status: outcome === 'hata' ? 'basarisiz' : 'reddedildi', error: reason, steps: [] });
+    return { outcome, status: outcome === 'hata' ? 'basarisiz' : 'reddedildi', detail: reason, transferId };
+  }
+
+  /**
+   * TEK programi tornaya yazar (bir musteri klasorunde; istemci o klasorde). Degismez kurallar (testle zorlanir):
+   *   - calisan/secili programin uzerine yazilmaz; kutuphanede plandan sonra yeni surum olustuysa yazilmaz (planin gosterdigi surum gider)
+   *   - once GECICI adla (ZZUP) yuklenir, boyut + geri okunan SHA-256 dogrulanir: bozuk iletim tornadaki dosyaya hic dokunmaz
+   *   - hedefte dosya varsa: ESKISI yan ada (ZZRB) alinir (RNFR/RNTO, hedef bos oldugu icin "ezme" semantigine GUVENILMEZ), yan adli dosya okunup
+   *     kutuphaneye YEDEKLENIR (kutuphanedeki bir surumle ayniysa ayrica yedek gerekmez); yedek alinamazsa eski hal geri konur ve yazilmaz
+   *   - yeni dosya nihai ada cevrilir, geri okunup dogrulanir; tutmazsa yeni dosya silinir ve eski hal geri konur
+   *   - dogrulama tamam olunca yan adli dosya silinir (silinemezse kalir ve raporlanir)
+   *   - silme yalniz kendi uretigimiz ZZUP/ZZRB adli dosyalar ve (dogrulanamayan) kendi yeni dosyamiz icindir
+   */
+  async #pushOne(c, ftp, { machine, folder, item, by, clientIp, acks }) {
+    const db = this.library.db;
+    const program = db.getProgram(item.programId);
+    const head = program ? db.latestVersion(program.id) : null;
+    if (!program || !head) return this.#pushSkipRecord(machine, item, 'program kütüphanede bulunamadı', { by, clientIp, acks });
+    if (head.versionNo !== item.versionNo) {
+      return this.#pushSkipRecord(machine, item, `plan çıkarıldıktan sonra kütüphanede yeni sürüm oluştu (v${item.versionNo} → v${head.versionNo}); planı yenileyin`, { by, clientIp, acks });
+    }
+    const version = db.getVersion(program.id, head.versionNo);
+    const content = version.content;
+    const sha = head.sha256;
+    const lname = program.name.toLowerCase();
+
+    const transferId = db.startTransfer({
+      kind: 'toplu', machineId: machine.id, programId: program.id, versionId: head.id, customer: item.customer, name: program.name,
+      size: content.length, shaSent: sha, requestedBy: by, clientIp, acks,
+    });
+    const steps = [];
+    const timed = stepRecorder(steps);
+    const st = {
+      temp: `${TEMP_PREFIX}${Math.floor(100000 + Math.random() * 900000)}`, rb: `${ROLLBACK_PREFIX}${Math.floor(100000 + Math.random() * 900000)}`,
+      tempCreated: false, rbCreated: false, finalPlaced: false, orig: null, final: null, backup: null, warning: null,
+    };
+    let status = 'basarisiz';
+    let outcome = 'hata';
+    let error = null;
+    let shaVerified = null;
+    let connectionLost = false;
+
+    let hit = null;
+    try {
+      await timed('on-kontrol', async () => {
+        const live = this.liveInfo(machine.id);
+        if (live?.connected) {
+          const runningNow = [live.program, live.mainProgram].filter(Boolean).map(baseName);
+          if (runningNow.includes(lname)) {
+            const e = new Error('torna şu an bu programı çalıştırıyor/seçili (üzerine yazılmaz)');
+            e.rejected = true;
+            throw e;
+          }
+        }
+        const entries = parseList(await c.listRaw()).entries;
+        const found = entries.find((e) => e.name.toLowerCase() === lname);
+        if (found?.isDir) { const e = new Error(`hedefte "${found.name}" adlı bir klasör var`); e.rejected = true; throw e; }
+        if (entries.some((e) => e.name.toLowerCase() === st.temp.toLowerCase() || e.name.toLowerCase() === st.rb.toLowerCase())) {
+          throw new Error('geçici ad hedefte zaten var');
+        }
+        hit = found ?? null;
+        return found ? `hedefte aynı adlı dosya var (${found.size} bayt)` : 'hedefte aynı adlı dosya yok';
+      });
+
+      if (hit && hit.size === content.length) {
+        let same = false;
+        await timed('ayni-mi', async () => {
+          same = sha256(await c.retr(hit.name, { maxBytes: MAX_PROGRAM_BYTES })) === sha;
+          return same ? 'içerik aynı' : 'içerik farklı';
+        });
+        if (same) {
+          outcome = 'ayni';
+          status = 'basarili';
+          shaVerified = sha;
+          db.upsertInventory(machine.id, { customer: folder, name: hit.name, size: content.length, sha256: sha });
+          steps.push({ step: 'sonuc', ok: true, ms: 0, detail: 'tornada zaten aynı içerik; yazılmadı' });
+        }
+      }
+
+      if (outcome !== 'ayni') {
+        await timed('yukle', async () => { st.tempCreated = true; await c.stor(st.temp, content); return `${st.temp} (${content.length} bayt, ikili)`; });
+        await timed('boyut-dogrula', async () => {
+          const l = parseList(await c.listRaw()).entries.find((e) => e.name.toLowerCase() === st.temp.toLowerCase());
+          if (!l) throw new Error('yüklenen geçici dosya listede görünmüyor');
+          if (l.size !== content.length) throw new Error(`boyut tutmuyor: tezgahta ${l.size}, gönderilen ${content.length}`);
+          return `${l.size} bayt`;
+        });
+        await timed('geri-oku-sha', async () => {
+          if (sha256(await c.retr(st.temp, { maxBytes: MAX_PROGRAM_BYTES })) !== sha) throw new Error('SHA-256 tutmuyor (iletimde içerik bozuldu)');
+          return sha;
+        });
+
+        let finalName = program.name;
+        if (hit) {
+          // ESKI HALI YAN ADA AL: bundan sonra asil ad bos; eski dosya bizim elimizde (yarisa karsi atomik "al").
+          finalName = hit.name;
+          st.orig = hit.name;
+          await timed('yedek', async () => {
+            st.rbCreated = true; // rename'den ONCE: yanit kaybolsa bile geri alma yan adi arar
+            await c.rename(hit.name, st.rb);
+            const old = await c.retr(st.rb, { maxBytes: MAX_PROGRAM_BYTES });
+            const oldSha = sha256(old);
+            const versions = db.listVersions(program.id);
+            const inLib = versions.find((v) => v.sha256 === oldSha);
+            if (inLib) {
+              st.backup = { kind: 'surum', versionNo: inLib.versionNo };
+              return `tornadaki hal kütüphanede v${inLib.versionNo} olarak var; ayrıca yedek gerekmedi`;
+            }
+            const b = db.addBackup({ customer: item.customer, name: program.name, machineId: machine.id, content: old, sha256: oldSha, createdBy: by, transferId });
+            st.backup = { kind: 'yedek', id: b.id, created: b.created, size: old.length };
+            return `yedek #${b.id} (${old.length} bayt)${b.created ? '' : ' (aynı içerik daha önce yedeklenmişti)'}`;
+          });
+        }
+        await timed('nihai-ada-cevir', async () => {
+          const now = parseList(await c.listRaw()).entries;
+          if (now.some((e) => e.name.toLowerCase() === finalName.toLowerCase())) throw new Error('bu arada hedefte aynı adlı bir dosya oluştu; ezilmedi');
+          st.final = finalName;
+          await c.rename(st.temp, finalName);
+          st.finalPlaced = true;
+          st.tempCreated = false;
+          return `${st.temp} → ${finalName}`;
+        });
+        shaVerified = await timed('son-dogrulama', async () => {
+          const l = parseList(await c.listRaw()).entries;
+          const fin = l.find((e) => e.name.toLowerCase() === finalName.toLowerCase());
+          if (!fin) throw new Error('nihai dosya listede görünmüyor');
+          if (l.some((e) => e.name.toLowerCase() === st.temp.toLowerCase())) throw new Error('geçici dosya hâlâ duruyor');
+          if (sha256(await c.retr(fin.name, { maxBytes: MAX_PROGRAM_BYTES })) !== sha) throw new Error('nihai dosyanın SHA-256 değeri tutmuyor');
+          return sha;
+        });
+        if (hit) {
+          // Dogrulama tamam: yan adli eski dosya artik gereksiz (yedegi kutuphanede). Silinemezse KALIR ve raporlanir.
+          const t0 = Date.now();
+          try {
+            if (!/^ZZRB\d{6}$/.test(st.rb)) throw new Error('beklenmeyen yan ad');
+            await c.dele(st.rb);
+            if (parseList(await c.listRaw()).entries.some((e) => e.name.toLowerCase() === st.rb.toLowerCase())) throw new Error('silindi denildi ama dosya duruyor');
+            st.rbCreated = false;
+            steps.push({ step: 'yedek-temizle', ok: true, ms: Date.now() - t0, detail: `${st.rb} silindi` });
+          } catch (err) {
+            st.warning = `yan adlı eski dosya silinemedi: ${st.rb} (${err.message}); içeriği kütüphanede yedekli, elle silinebilir`;
+            steps.push({ step: 'yedek-temizle', ok: false, ms: Date.now() - t0, detail: st.warning });
+          }
+        }
+        outcome = hit ? 'ezildi' : 'yeni';
+        status = 'basarili';
+        db.upsertInventory(machine.id, { customer: folder, name: finalName, size: content.length, sha256: sha });
+      }
+    } catch (err) {
+      error = err.message;
+      connectionLost = !!c.closedError;
+      if (err.rejected) { status = 'reddedildi'; outcome = 'atlandi'; }
+      else { status = 'basarisiz'; outcome = 'hata'; }
+      // Geri al: yeni oturumla (baglanti kopmus olabilir): gecici dosyayi sil, yan adli eski hali asil adina koy.
+      if (st.tempCreated || st.rbCreated || st.finalPlaced) {
+        const t0 = Date.now();
+        try {
+          const detail = await this.#rollbackPush(ftp, folder, st);
+          steps.push({ step: 'geri-al', ok: true, ms: Date.now() - t0, detail });
+        } catch (rbErr) {
+          steps.push({ step: 'geri-al', ok: false, ms: Date.now() - t0, detail: rbErr.message });
+          status = 'dogrulanamadi';
+          error = `${error} — GERİ ALMA BAŞARISIZ: ${rbErr.message}${st.rbCreated ? ` · eski hâl tornada ${folder}\\${st.rb} adıyla durmalı (içeriği kütüphanede yedekli)` : ''}`;
+        }
+      }
+    }
+
+    db.finishTransfer(transferId, { status, shaVerified, error, steps });
+    return {
+      outcome, status, transferId, connectionLost,
+      detail: error ?? (outcome === 'ayni' ? 'tornada zaten aynı içerik' : null),
+      backup: st.backup, warning: st.warning,
+    };
+  }
+
+  /** Basarisiz yazmayi geri alir (yeni FTP oturumuyla): gecici dosyayi siler, yan adli eski hali asil adina koyar. */
+  async #rollbackPush(ftp, folder, st) {
+    return withFtp(ftp, async (c) => {
+      if (folder) await c.cwd(folder);
+      const list = async () => parseList(await c.listRaw()).entries;
+      const find = (entries, n) => entries.find((e) => e.name.toLowerCase() === String(n).toLowerCase());
+      const notes = [];
+      let entries = await list();
+      if (st.finalPlaced && !st.rbCreated && st.final && find(entries, st.final)) {
+        // Yeni program (tornada eskisi yoktu): bizim yazdigimiz ama dogrulanamayan dosya
+        await c.dele(st.final);
+        notes.push('yeni (doğrulanamayan) dosya silindi');
+        entries = await list();
+      }
+      if (st.tempCreated && find(entries, st.temp)) {
+        if (!/^ZZUP\d{6}$/.test(st.temp)) throw new Error('beklenmeyen geçici ad');
+        await c.dele(st.temp);
+        notes.push('geçici dosya silindi');
+      }
+      if (st.rbCreated && find(entries, st.rb)) {
+        entries = await list();
+        if (find(entries, st.orig)) {
+          // Asil adda bizim yerlestirdigimiz (dogrulanamayan) yeni dosya var: sil, sonra eskiyi geri koy.
+          if (!st.finalPlaced) throw new Error(`"${st.orig}" adı beklenmedik şekilde dolu; eski hal ${st.rb} adıyla duruyor (elle kontrol edin)`);
+          await c.dele(st.orig);
+          notes.push('yeni (doğrulanamayan) dosya silindi');
+        }
+        await c.rename(st.rb, st.orig);
+        entries = await list();
+        if (!find(entries, st.orig)) throw new Error(`eski hal geri konulamadı; ${st.rb} adıyla duruyor (elle kontrol edin)`);
+        notes.push(`eski hal geri konuldu (${st.rb} → ${st.orig})`);
+      } else if (st.rbCreated) {
+        notes.push(`yan adlı dosya (${st.rb}) listede yok; ${find(entries, st.orig) ? 'asıl ad yerinde' : 'ASIL AD DE YOK: elle kontrol edin'}`);
+        if (!find(entries, st.orig)) throw new Error(`"${st.orig}" ve ${st.rb} tornada görünmüyor; elle kontrol edin`);
+      }
+      return notes.join('; ') || 'geri alınacak bir şey yoktu';
+    });
   }
 
   /* -------------------------------------------------------------- tornadan silme */

@@ -88,6 +88,7 @@ const R = {
   programText: route(/^\/api\/library\/programs\/text$/),
   programsDelete: route(/^\/api\/library\/programs\/delete$/),
   program: route(new RegExp(`^/api/library/programs/(\\d+)$`)),
+  programRename: route(new RegExp(`^/api/library/programs/(\\d+)/rename$`)),
   version: route(new RegExp(`^/api/library/programs/(\\d+)/versions/(\\d+)$`)),
   machinePrograms: route(new RegExp(`^/api/machines/${ID}/programs$`)),
   machineScan: route(new RegExp(`^/api/machines/${ID}/programs/scan$`)),
@@ -97,6 +98,12 @@ const R = {
   importPlanGet: route(new RegExp(`^/api/machines/${ID}/programs/import-plan/([A-Za-z0-9_-]+)$`)),
   importPlanDiff: route(new RegExp(`^/api/machines/${ID}/programs/import-plan/([A-Za-z0-9_-]+)/diff$`)),
   importApply: route(new RegExp(`^/api/machines/${ID}/programs/import-apply$`)),
+  pushPlan: route(new RegExp(`^/api/machines/${ID}/programs/push-plan$`)),
+  pushPlanGet: route(new RegExp(`^/api/machines/${ID}/programs/push-plan/([A-Za-z0-9_-]+)$`)),
+  pushApply: route(new RegExp(`^/api/machines/${ID}/programs/push-apply$`)),
+  pushStop: route(new RegExp(`^/api/machines/${ID}/programs/push-stop$`)),
+  backup: route(/^\/api\/library\/backups\/(\d+)$/),
+  backupRestore: route(/^\/api\/library\/backups\/(\d+)\/restore$/),
   deletePrecheck: route(new RegExp(`^/api/machines/${ID}/programs/delete-precheck$`)),
   deleteProgram: route(new RegExp(`^/api/machines/${ID}/programs/delete$`)),
 };
@@ -131,7 +138,8 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
           authRequired,
           maxProgramBytes: MAX_PROGRAM_BYTES,
           tempPrefix: TEMP_PREFIX,
-          overwriteEnabled: false,
+          overwriteEnabled: false, // TEK program gonderme ezmez; ezme yalniz TOPLU gonderimde (yedekli)
+          bulkPush: true,
           stats: library.db.stats(),
           machines: listMachines().map((x) => ({ id: x.id, name: x.name, ip: x.ip ?? null, ...eligibility(x) })),
         }), true;
@@ -186,10 +194,20 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         return sendJson(res, 200, { log: library.db.listLog({ limit }) }), true;
       }
 
+      // Kutuphanede yeniden adlandirma (geri alinabilir): tezgahtaki dosyaya dokunulmaz, yalniz kutuphane kaydi.
+      if (method === 'POST' && (m = R.programRename(path))) {
+        const b = await readJson(req, 10_000);
+        return sendJson(res, 200, library.renameProgram({
+          id: Number(m[1]), newName: b.name, by: who(req, b.by), clientIp: req.clientIp ?? req.socket.remoteAddress ?? null,
+        })), true;
+      }
+
       if (method === 'GET' && (m = R.program(path))) {
         const program = library.db.getProgram(Number(m[1]));
         if (!program) return sendJson(res, 404, { error: 'Program bulunamadı.' }), true;
-        return sendJson(res, 200, { program, versions: library.db.listVersions(program.id) }), true;
+        return sendJson(res, 200, {
+          program, versions: library.db.listVersions(program.id), backups: library.db.listBackups(program.customer, program.name),
+        }), true;
       }
 
       if (method === 'GET' && (m = R.version(path))) {
@@ -212,6 +230,28 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         const p = library.preview(programId, versionNo, url.searchParams.get('full') === '1' ? Infinity : undefined);
         if (!p) return sendJson(res, 404, { error: 'Sürüm bulunamadı.' }), true;
         return sendJson(res, 200, p), true;
+      }
+
+      // Toplu gonderimde ezilen tornadaki eski haller: indir / kutuphaneye yeni surum olarak geri al.
+      if (method === 'GET' && (m = R.backup(path))) {
+        const b = library.db.getBackup(Number(m[1]));
+        if (!b) return sendJson(res, 404, { error: 'Yedek bulunamadı.' }), true;
+        if (url.searchParams.get('download') === '1') {
+          res.writeHead(200, {
+            'content-type': 'application/octet-stream',
+            'content-disposition': `attachment; filename="${b.meta.name}"`,
+            'content-length': b.content.length,
+            'cache-control': 'no-store',
+          });
+          res.end(b.content);
+          return true;
+        }
+        return sendJson(res, 200, { backup: b.meta }), true;
+      }
+      if (method === 'POST' && (m = R.backupRestore(path))) {
+        const b = await readJson(req);
+        const result = library.restoreBackup({ id: Number(m[1]), by: who(req, b.by) });
+        return sendJson(res, result.created ? 201 : 200, result), true;
       }
 
       /* ---- tezgah envanteri ---- */
@@ -258,6 +298,28 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
           machineId: decodeURIComponent(m[1]), planId: b.planId, decisions: b.decisions ?? {}, skipKeys: b.skipKeys ?? [], by: who(req, b.by),
         });
         return sendJson(res, 200, out), true;
+      }
+
+      /* ---- TOPLU GONDERME: plan (tornaya yalniz OKUMA) + uygula (yedekleyerek ezer) + durdur ---- */
+      if (method === 'POST' && (m = R.pushPlan(path))) {
+        const b = await readJson(req);
+        const planId = files.startPushPlan({ machineId: decodeURIComponent(m[1]), folders: b.folders ?? null });
+        return sendJson(res, 202, { planId }), true;
+      }
+      if (method === 'GET' && (m = R.pushPlanGet(path))) {
+        return sendJson(res, 200, files.getPushPlan(decodeURIComponent(m[1]), m[2])), true;
+      }
+      if (method === 'POST' && (m = R.pushApply(path))) {
+        const b = await readJson(req, 1_000_000);
+        const out = files.startPushApply({
+          machineId: decodeURIComponent(m[1]), planId: b.planId, confirm: b.confirm, by: who(req, b.by), acks: b.acks ?? [],
+          skipKeys: b.skipKeys ?? [], clientIp: req.clientIp ?? req.socket.remoteAddress ?? null,
+        });
+        return sendJson(res, 202, out), true;
+      }
+      if (method === 'POST' && (m = R.pushStop(path))) {
+        const b = await readJson(req);
+        return sendJson(res, 200, files.stopPushApply({ machineId: decodeURIComponent(m[1]), planId: b.planId })), true;
       }
 
       /* ---- tornadan silme (FTP DELE; silme kapisi + onay) ---- */

@@ -22,6 +22,8 @@ export const MAX_PROGRAM_BYTES = 1_000_000;
 export const MAX_DELETE_BATCH = 500;
 /** Aktarim sirasinda kullanilan gecici ad oneki; kullanici bu adla program yukleyemez. */
 export const TEMP_PREFIX = 'ZZUP';
+/** Toplu gonderimde ezilen dosyanin tornada KISA SURE bekledigi yan ad onegi (dogrulama bitince silinir; kullanici bu adla program yukleyemez). */
+export const ROLLBACK_PREFIX = 'ZZRB';
 /** Kok dizinde program olmayan sistem dosyalari: envanterden ve karsilastirmadan haric. */
 const SYSTEM_ROOT_FILES = new Set(['mdiblock']);
 
@@ -202,6 +204,20 @@ export class Library {
     return this.#add({ customer, name, content, note, createdBy, originalName, source: 'yukleme' });
   }
 
+  /**
+   * Toplu gonderimde ezilen tornadaki eski hali kutuphaneye YENI SURUM olarak geri alir (yedek -> surum). Surum numaralari ileri gider;
+   * icerik zaten en son surumse yeni surum acilmaz.
+   */
+  restoreBackup({ id, by = null }) {
+    const b = this.db.getBackup(Number(id));
+    if (!b) throw new ValidationError('Yedek bulunamadı.', 404);
+    const day = new Date(b.meta.createdAt).toLocaleDateString('tr-TR');
+    return this.#add({
+      customer: b.meta.customer, name: b.meta.name, content: b.content, note: `${b.meta.machineId} tornasından alınan yedek (${day})`,
+      createdBy: by, originalName: null, source: 'yedek', sourceMachine: b.meta.machineId,
+    });
+  }
+
   /** Tezgahtan iceri alma (taramada gorulen ve kutuphanede olmayan program; toplu alimda `note` yazilir). */
   addFromMachine({ machineId, customer, name, content, createdBy = null, note = null }) {
     return this.#add({ customer, name, content, note, createdBy, originalName: null, source: 'tezgah-tarama', sourceMachine: machineId });
@@ -233,6 +249,30 @@ export class Library {
       latest: { versionNo: latest.versionNo, size: latest.size, createdAt: latest.createdAt, sha256: latest.sha256 },
       eolOnlyVersion,
     };
+  }
+
+  /**
+   * Kutuphanedeki bir programi yeniden adlandirir (ayni musteri klasorunde; klasor degistirilemez - CLAUDE.md
+   * "klasor tasima ozelligi YOK" karariyla tutarli). Surumler/icerik/gonderme gecmisi dokunulmaz; yalniz ad.
+   * Tezgahtaki dosyaya DOKUNULMAZ: rename'den sonra tezgahta eski adla duran dosya matris/karsilastirmada
+   * "kutuphanede yok" (eski ad) ve "tezgahta yok" (yeni ad) olarak gorunur, gercek dosya yeniden gonderilene kadar.
+   * @param {{id: number, newName: string, by?: string|null, clientIp?: string|null}} p
+   */
+  renameProgram({ id, newName, by = null, clientIp = null }) {
+    const programId = Number(id);
+    if (!Number.isInteger(programId) || programId <= 0) throw new ValidationError('Program kimliği geçersiz.');
+    const program = this.db.getProgram(programId);
+    if (!program) throw new ValidationError('Program kütüphanede bulunamadı (başka biri silmiş olabilir). Listeyi yenileyin.', 404);
+    const cleanName = validateProgramName(newName);
+    if (cleanName.toLowerCase() === program.name.toLowerCase()) return { program, renamed: false };
+    const conflict = this.db.findProgram(program.customer, cleanName);
+    if (conflict) {
+      throw new ValidationError(
+        `"${program.customer === '' ? '' : `${program.customer}\\`}${cleanName}" kütüphanede zaten var. Başka bir ad seçin.`, 409,
+      );
+    }
+    const renamed = this.db.renameProgram(programId, cleanName, { by, clientIp });
+    return { program: renamed, renamed: true, oldName: program.name };
   }
 
   /**

@@ -53,6 +53,10 @@ for (let i = 1; i <= 130; i += 1) t8.put(`KAPPA/KAP-${String(i).padStart(3, '0')
 // CNC-07: daha az program; ALF-001 burada ESKI surum
 t7.put('ALFA/ALF-001', nc('ALF-001', 'FLANS 12 MM'), eski(80));
 t7.put('GAMA/GAM-005', nc('GAM-005', 'KAPAK'), eski(10));
+// CNC-07: ustanin tornada elle degistirdigi iki program (kutuphanedeki HICBIR surumle tutmaz): toplu gonderimde yedeklenip ezilir
+t7.put('ALFA/ALF-002', nc('ALF-002', 'SOMUN 3/4', '\r\nG4 X0.2'), eski(5));
+t7.put('BETA/BET-010', nc('BET-010', 'PIM', '\r\nG4 X0.5'), eski(2));
+t7.put('BETA/BET-077', nc('BET-077', 'SADECE BU TORNADA'), eski(9));   // kutuphanede yok: toplu gonderimde dokunulmaz
 
 await t8.start(2121);
 await t7.start(2122);
@@ -128,4 +132,5 @@ console.log(`[demo] Program kütüphanesi demosu hazır -> http://localhost:${PO
 console.log('[demo] Sahte tornalar: CNC-08 (FTP :2121), CNC-07 (FTP :2122). Gerçek tornaya DOKUNULMAZ.');
 console.log('[demo] Denenebilecekler: "Yeni program yaz…" / program ayrıntısında "Düzenle…" (editör + değişiklik farkı),');
 console.log('[demo]   gönderme penceresinde ve tezgah panelinde "Yeni klasör…" (sahte tornada klasör açar).');
+console.log('[demo] TOPLU GÖNDERME: tezgah detayında (CNC-07 ya da CNC-08) "Programlar" panelinde "Toplu gönder…"; ezilen dosyaların yedeği program sayfasında.');
 console.log('[demo] Durdurmak için Ctrl+C.');

@@ -19,8 +19,10 @@ import {
 import { openEditor } from './editor-view.js';
 import { openFolderDialog } from './folder-view.js';
 import { openBulkImport } from './bulk-import-view.js';
+import { openBulkPush } from './bulk-push-view.js';
 import { openDeleteDialog } from './delete-view.js';
 import { openLibraryDelete } from './library-delete-view.js';
+import { openRenameDialog } from './library-rename-view.js';
 
 /* ------------------------------------------------------------------ ortak */
 
@@ -402,6 +404,7 @@ async function previewVersion(no) {
 function renderDetail() {
   const host = lib.host.querySelector('[data-role="detail"]');
   const { program, versions } = lib.detail;
+  const backups = lib.detail.backups ?? [];
   const mx = (lib.matrix?.rows ?? []).find((r) => r.programId === program.id);
   const machines = lib.matrix?.machines ?? [];
   const pv = lib.preview;
@@ -412,6 +415,7 @@ function renderDetail() {
     '<div class="dt-actions">' +
     `<button type="button" class="icon-btn btn-primary" data-act="send" data-program="${program.id}">Tezgaha gönder…</button>` +
     `<button type="button" class="icon-btn" data-act="edit" data-no="${lib.previewNo ?? versions[0].versionNo}">Düzenle… (v${lib.previewNo ?? versions[0].versionNo})</button>` +
+    `<button type="button" class="icon-btn" data-act="rename-program" title="Kütüphanedeki programın adını değiştirir (tezgahtaki dosyaya dokunulmaz)">Adını değiştir…</button>` +
     `<button type="button" class="icon-btn btn-danger" data-act="delete-program" data-program="${program.id}" title="Programı tüm sürümleriyle kütüphaneden siler (tezgahlardaki dosyalar silinmez)">Kütüphaneden sil…</button>` +
     '<button type="button" class="icon-btn" data-act="close-detail">Kapat</button></div></div>' +
 
@@ -419,12 +423,23 @@ function renderDetail() {
     versions.map((v) =>
       `<tr${v.versionNo === lib.previewNo ? ' class="is-selected"' : ''}><td><b>v${v.versionNo}</b></td><td class="num">${escapeHtml(kb(v.size))}</td>` +
       `<td class="mono" title="${escapeHtml(v.sha256)}">${escapeHtml(v.sha256.slice(0, 12))}…</td><td>${escapeHtml(dateTime(v.createdAt))}</td>` +
-      `<td>${v.source === 'tezgah-tarama' ? `tezgahtan alındı (${escapeHtml(v.sourceMachine ?? '')})` : v.source === 'editor' ? 'editörde yazıldı' : 'yüklendi'}${v.originalName ? ` · <span class="mono">${escapeHtml(v.originalName)}</span>` : ''}</td>` +
+      `<td>${v.source === 'tezgah-tarama' ? `tezgahtan alındı (${escapeHtml(v.sourceMachine ?? '')})` : v.source === 'editor' ? 'editörde yazıldı' : v.source === 'yedek' ? `yedekten geri alındı (${escapeHtml(v.sourceMachine ?? '')})` : 'yüklendi'}${v.originalName ? ` · <span class="mono">${escapeHtml(v.originalName)}</span>` : ''}</td>` +
       `<td>${escapeHtml(v.createdBy ?? '—')}</td><td>${escapeHtml(v.note ?? '')}</td>` +
       `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="preview" data-no="${v.versionNo}">Önizle</button> ` +
       `<button type="button" class="icon-btn icon-btn-sm" data-act="edit" data-no="${v.versionNo}">Düzenle</button> ` +
       `<a class="icon-btn icon-btn-sm" href="/api/library/programs/${program.id}/versions/${v.versionNo}?download=1" download>İndir</a></td></tr>`).join('') +
     '</tbody></table></div>' +
+
+    (backups.length === 0 ? '' :
+      '<h4 class="sub">Tornalardan alınan yedekler</h4>' +
+      '<p class="hint">Toplu gönderimde üzerine yazılan tornadaki eski hâller (sürüm değildir). "Yeni sürüm olarak al" bir yedeği kütüphaneye yeni sürüm yapar.</p>' +
+      '<div class="table-wrap"><table class="tbl"><thead><tr><th>Yedeklendi</th><th>Torna</th><th class="num">Boyut</th><th>SHA-256</th><th>Kim</th><th></th></tr></thead><tbody>' +
+      backups.map((b) =>
+        `<tr><td>${escapeHtml(dateTime(b.createdAt))}</td><td class="mono">${escapeHtml(b.machineId)}</td><td class="num">${escapeHtml(kb(b.size))}</td>` +
+        `<td class="mono" title="${escapeHtml(b.sha256)}">${escapeHtml(b.sha256.slice(0, 12))}…</td><td>${escapeHtml(b.createdBy ?? '—')}</td>` +
+        `<td class="nowrap"><a class="icon-btn icon-btn-sm" href="/api/library/backups/${b.id}?download=1" download>İndir</a> ` +
+        `<button type="button" class="icon-btn icon-btn-sm" data-act="restore-backup" data-id="${b.id}">Yeni sürüm olarak al</button></td></tr>`).join('') +
+      '</tbody></table></div>') +
 
     (machines.length === 0 ? '' :
       '<h4 class="sub">Tezgahlardaki durumu</h4><div class="mx-list">' +
@@ -449,7 +464,9 @@ function renderHistory() {
       return `<tr><td>${escapeHtml(dateTime(t.startedAt))}</td><td class="mono">${escapeHtml(t.machineId)}</td>` +
         (t.kind === 'klasor'
           ? `<td><span class="chip chip-info">＋ yeni klasör</span> <span class="mono">${escapeHtml(t.customer ?? '')}</span></td>`
-          : t.kind === 'silme'
+          : t.kind === 'toplu'
+            ? `<td><span class="chip chip-info">⇄ toplu gönderme</span> <span class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</span></td>`
+            : t.kind === 'silme'
             ? `<td><span class="chip chip-bad">− silindi</span> <span class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</span></td>`
             : `<td class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</td>`) +
         `<td><span class="chip chip-${s.cls}"><span aria-hidden="true">${s.icon}</span> ${escapeHtml(s.label)}</span></td>` +
@@ -533,8 +550,28 @@ function wireLibrary() {
           holders: new Map([[p.id, holdersOf(p.id)]]),
           onDone: () => { lib.selected.delete(p.id); location.hash = '#/programlar'; },
         });
+      } else if (act === 'rename-program') {
+        const p = lib.detail?.program;
+        if (!p) return;
+        openRenameDialog({
+          program: p,
+          onDone: async (r) => {
+            await reloadLists();
+            await selectProgram(p.id, true);
+            if (r.renamed) toast(host, `Program "${r.oldName}" → "${r.program.name}" olarak yeniden adlandırıldı.`);
+            announce();
+          },
+        });
       }
       else if (act === 'preview') { await previewVersion(Number(btn.dataset.no)); }
+      else if (act === 'restore-backup') {
+        btn.disabled = true;
+        const r = await post(`/api/library/backups/${btn.dataset.id}/restore`, { by: userName.get() });
+        toast(host, r.created ? `Yedek kütüphaneye v${r.version.versionNo} olarak alındı.` : 'Bu içerik zaten kütüphanedeki son sürüm; yeni sürüm açılmadı.');
+        await reloadLists();
+        await selectProgram(lib.selectedId, true);
+        announce();
+      }
       else if (act === 'send') { openSendDialog({ programId: Number(btn.dataset.program), machineId: btn.dataset.machine ?? null }); }
       else if (act === 'new-program') {
         openEditor({
@@ -629,6 +666,7 @@ export function renderMachinePrograms(host, machine) {
       '<button type="button" class="icon-btn" data-act="scan">Tezgahtaki programları tara</button>' +
       '<button type="button" class="icon-btn" data-act="bulk-import" title="Tornadaki tüm programları okuyup kütüphaneye alır (yalnızca okuma)">Tüm programları kütüphaneye al…</button>' +
       '<button type="button" class="icon-btn" data-act="new-program">Yeni program yaz…</button>' +
+      '<button type="button" class="icon-btn" data-act="bulk-push" title="Kütüphanedeki programların son sürümlerini bu tornaya topluca yazar; aynı adlı farklı dosyaların üzerine, ÖNCE tornadaki hâli yedekleyerek">Toplu gönder…</button>' +
       `<button type="button" class="icon-btn" data-act="new-folder"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Yeni klasör…</button>` +
       `<button type="button" class="icon-btn btn-primary" data-act="send"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Program gönder…</button>` +
       // Özellik genelde açık ama bu kontrolcü modelinde doğrulanmamışsa nedeni göster (üzerine gelmeden de görünsün).
@@ -758,6 +796,10 @@ export function renderMachinePrograms(host, machine) {
       return;
     }
     if (act === 'new-folder') { openFolderDialog({ machineId: st.id, onDone: () => load() }); return; }
+    if (act === 'bulk-push') {
+      openBulkPush({ machineId: st.id, machineName: machine.name ?? st.id, knownFolders: st.data?.folders ?? [], blockedReason: sendBlocked() });
+      return;
+    }
     if (act === 'bulk-import') {
       openBulkImport({ machineId: st.id, machineName: machine.name ?? st.id, knownFolders: st.data?.folders ?? [] });
       return;

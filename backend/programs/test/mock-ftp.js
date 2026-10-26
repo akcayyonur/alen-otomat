@@ -16,6 +16,7 @@
  *
  * Hata enjeksiyonu secenekleri: readOnly, corruptStor, failRnto, dropOnStor,
  * delayMs, listCap, holdEmptyData (bos LIST/RETR'de veri kanalini kapatmaz: gercek torna),
+ * failRntoWhen ((hedefAd, kaynakAd) => bool: yalniz secili yeniden adlandirmalar 550), failDeleWhen (ad => bool: secili adlarda DELE 550),
  * failMkd (MKD 550), mkdNoop (MKD 257 der ama klasor olusmaz), deleNoop (DELE 250 der ama dosya durur),
  * afterRetr (RETR bitince cagrilan kanca: yaris durumlarini sinamak icin).
  * MKD: ayni adli klasor/dosya varsa 550 (varsayim: CE de reddeder; GERCEKTE DENENMEDI).
@@ -239,7 +240,7 @@ export class MockFtpServer {
       },
       RNTO: (arg) => {
         const dir = cwdDir();
-        if (this.opts.readOnly || this.opts.failRnto || !st.renameFrom) { st.renameFrom = null; return reply('550 Requested action not taken.'); }
+        if (this.opts.readOnly || this.opts.failRnto || !st.renameFrom || this.opts.failRntoWhen?.(arg, st.renameFrom)) { st.renameFrom = null; return reply('550 Requested action not taken.'); }
         const exists = dir.files.has(arg.toLowerCase()) && arg.toLowerCase() !== st.renameFrom.toLowerCase();
         if (exists && !this.opts.renameOverwrites) { st.renameFrom = null; return reply('550 Requested action not taken. File exists.'); }
         const f = dir.files.get(st.renameFrom.toLowerCase());
@@ -251,6 +252,7 @@ export class MockFtpServer {
       DELE: (arg) => {
         const dir = cwdDir();
         if (this.opts.readOnly) return reply('550 Access is denied.');
+        if (this.opts.failDeleWhen?.(arg)) return reply('550 Access is denied.');
         // deleNoop: "silindi" der ama dosyayi silmez (dogrulama adimini sinamak icin).
         if (this.opts.deleNoop) return dir.files.has(arg.toLowerCase()) ? reply('250 Requested file action okay, completed.') : reply('550 Requested action not taken. File not found.');
         if (!dir.files.delete(arg.toLowerCase())) return reply('550 Requested action not taken. File not found.');

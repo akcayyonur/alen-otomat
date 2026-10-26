@@ -10,8 +10,10 @@
  *   machine_programs  son taramada tezgahta GORULENLER (envanter)
  *   machine_scans     tezgah basina son tarama bilgisi
  *   transfers         tezgaha YAZMA denetim kaydi (kim, ne zaman, hangi tezgaha, sonuc);
- *                     kind = 'gonderme' (program) | 'klasor' (yeni musteri klasoru) | 'silme' (tornadan silme)
- *   library_log       KUTUPHANEDEN silme kaydi (kim, ne zaman, hangi program, kac surum, surum SHA'lari)
+ *                     kind = 'gonderme' (program) | 'klasor' (yeni musteri klasoru) | 'silme' (tornadan silme) | 'toplu' (toplu gonderme: program basina bir kayit)
+ *   library_log       KUTUPHANEDEN silme VE yeniden adlandirma kaydi (kim, ne zaman, hangi program, eski/yeni ad)
+ *   program_backups   TOPLU GONDERMEDE ezilen tornadaki eski haller (surum DEGIL: surum numaralarini ve "guncel surum" mantigini
+ *                     bozmasin diye ayri tablo). Ayni (musteri, ad, SHA) bir kez saklanir.
  *
  * Ad karsilastirmalari buyuk/kucuk harfe DUYARSIZ (COLLATE NOCASE): tornanin
  * Windows CE dosya sistemi de oyle; "ornek" ile "ORNEK" ayni dosyadir.
@@ -97,6 +99,22 @@ CREATE INDEX IF NOT EXISTS idx_transfers_machine ON transfers (machine_id, start
 
 -- Kutuphaneden program silme kaydi: silinen icerik geri gelmez, ama kimin neyi ne zaman sildigi (ve silinen
 -- surumlerin SHA-256'lari) kalir. Tezgahtaki dosyalara dokunulmaz.
+-- Toplu gonderimde ezilen tornadaki eski haller: geri donus icin. Surum degil (program_versions'a girmez).
+CREATE TABLE IF NOT EXISTS program_backups (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer    TEXT    NOT NULL COLLATE NOCASE,
+  name        TEXT    NOT NULL COLLATE NOCASE,
+  machine_id  TEXT    NOT NULL,
+  sha256      TEXT    NOT NULL,
+  size        INTEGER NOT NULL,
+  content     BLOB    NOT NULL,
+  created_at  INTEGER NOT NULL,
+  created_by  TEXT,
+  transfer_id INTEGER,
+  UNIQUE (customer, name, sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_backups_name ON program_backups (customer, name);
+
 CREATE TABLE IF NOT EXISTS library_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   at         INTEGER NOT NULL,
@@ -130,6 +148,11 @@ const versionMeta = (r) => ({
 });
 
 const programRow = (r) => ({ id: r.id, customer: r.customer, name: r.name, note: r.note, createdAt: r.created_at });
+
+const backupMeta = (r) => ({
+  id: r.id, customer: r.customer, name: r.name, machineId: r.machine_id, sha256: r.sha256, size: r.size,
+  createdAt: r.created_at, createdBy: r.created_by, transferId: r.transfer_id,
+});
 
 export class LibraryDb {
   /** @param {string} file ':memory:' testler icin */
@@ -262,6 +285,30 @@ export class LibraryDb {
   }
 
   /**
+   * Programi YENIDEN ADLANDIRIR (ayni musteri klasorunde; klasor tasima yok). Surumler/icerik dokunulmaz.
+   * Bu programin (henuz kutuphaneye geri alinmamis) toplu-gonderim yedekleri de yeni adla izlenebilsin diye
+   * `program_backups` ayni kapsamda yeniden adlandirilir. `transfers` (gonderme gecmisi) ve `machine_programs`
+   * (son taramadaki envanter) BILEREK dokunulmaz: biri o anki gercek gonderimin donmus kaydi, digeri tezgahtaki
+   * fiziksel gercek - tezgahtaki dosya yeniden gonderilene kadar hala eski adla durur.
+   * @returns {object} guncel program
+   */
+  renameProgram(id, newName, { by = null, clientIp = null } = {}) {
+    return this.#tx(() => {
+      const program = this.getProgram(id);
+      const oldName = program.name;
+      this.db.prepare('UPDATE programs SET name = ? WHERE id = ?').run(newName, id);
+      this.db.prepare('UPDATE program_backups SET name = ? WHERE customer = ? AND name = ?').run(newName, program.customer, oldName);
+      this.db
+        .prepare(
+          `INSERT INTO library_log (at, action, program_id, customer, name, versions, detail, by_user, client_ip)
+           VALUES (?, 'program-yeniden-adlandirma', ?, ?, ?, NULL, ?, ?, ?)`,
+        )
+        .run(Date.now(), id, program.customer, newName, JSON.stringify({ from: oldName, to: newName }), by, clientIp);
+      return this.getProgram(id);
+    });
+  }
+
+  /**
    * Programlari (tum surumleriyle) kutuphaneden siler ve her biri icin denetim kaydi yazar. Tek islemde: ya hepsi ya hicbiri.
    * Tezgahtaki dosyalara ve gonderme gecmisine dokunulmaz.
    * @returns {{id: number, customer: string, name: string, versions: number}[]}
@@ -288,6 +335,35 @@ export class LibraryDb {
       }
       return out;
     });
+  }
+
+  /* ------------------------------------------------------------ toplu gonderim yedekleri */
+
+  /**
+   * Ezilen tornadaki eski hali saklar. Ayni (musteri, ad, SHA-256) ikinci kez saklanmaz (baska tornadan gelse bile).
+   * @returns {{id: number, created: boolean}}
+   */
+  addBackup({ customer, name, machineId, content, sha256, createdBy = null, transferId = null }) {
+    const found = this.db.prepare('SELECT id FROM program_backups WHERE customer = ? AND name = ? AND sha256 = ?').get(customer, name, sha256);
+    if (found) return { id: Number(found.id), created: false };
+    const ins = this.db
+      .prepare('INSERT INTO program_backups (customer, name, machine_id, sha256, size, content, created_at, created_by, transfer_id) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(customer, name, machineId, sha256, content.length, content, Date.now(), createdBy, transferId);
+    return { id: Number(ins.lastInsertRowid), created: true };
+  }
+
+  /** Bir programin yedekleri (en yeni uste), icerik yok. */
+  listBackups(customer, name) {
+    return this.db
+      .prepare('SELECT id, customer, name, machine_id, sha256, size, created_at, created_by, transfer_id FROM program_backups WHERE customer = ? AND name = ? ORDER BY id DESC')
+      .all(customer, name)
+      .map(backupMeta);
+  }
+
+  /** @returns {{meta: object, content: Buffer}|null} */
+  getBackup(id) {
+    const r = this.db.prepare('SELECT * FROM program_backups WHERE id = ?').get(id);
+    return r ? { meta: backupMeta(r), content: toBuffer(r.content) } : null;
   }
 
   /** Kutuphane denetim kaydi (en yeni uste). */
@@ -456,6 +532,7 @@ export class LibraryDb {
       programs: n('SELECT COUNT(*) AS n FROM programs'),
       versions: n('SELECT COUNT(*) AS n FROM program_versions'),
       transfers: n('SELECT COUNT(*) AS n FROM transfers'),
+      backups: n('SELECT COUNT(*) AS n FROM program_backups'),
     };
   }
 

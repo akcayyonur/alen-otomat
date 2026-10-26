@@ -101,9 +101,11 @@ const nowLocalHint = 'Boş bırakın: şimdi. Unuttuysanız en fazla 72 saat ger
 /**
  * "Bu tezgahta baslatiyorum": tezgah, (istege bagli geriye alinmis) baslangic, yapan kisi ve iş emrinin elle doldurulan alanlari.
  * @param {string} no @param {(w: object) => void} [onDone]
- * @param {{machineId?: string}} [opts] machineId: tezgah basindaki kartin tezgahi (varsayilan: is emrindeki tezgah)
+ * @param {{machineId?: string, startAt?: number|null, startNote?: string}} [opts] machineId: tezgah basindaki kartin tezgahi (varsayilan: is emrindeki tezgah).
+ *   startAt (ms): baslangic zamani onceden doldurulur (ör. tezgahta calisan programin basladigi an: is emri YUKARIDAN baglanirken sayim o andan baslar);
+ *   72 saat sinirindan eskiyse en eskiye alinir. startNote: pencerede gosterilen aciklama.
  */
-export async function openStartDialog(no, onDone = () => {}, { machineId = null } = {}) {
+export async function openStartDialog(no, onDone = () => {}, { machineId = null, startAt = null, startNote = '' } = {}) {
   const m = openModal({ title: `Üretime başlat · ${no}` });
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
   let meta;
@@ -132,6 +134,15 @@ export async function openStartDialog(no, onDone = () => {}, { machineId = null 
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">Üretime başlat</button></div></form>';
   const form = m.body.querySelector('form');
+  if (startAt != null) {
+    const earliest = Date.now() - 72 * 3_600_000 + 5 * 60_000; // sunucu 72 saatten eskiyi reddeder
+    const at = Math.max(startAt, earliest);
+    const d = new Date(at);
+    const p2 = (n) => String(n).padStart(2, '0');
+    form.elements.startAt.value = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    const hint = form.elements.startAt.closest('.fld').querySelector('small');
+    hint.textContent = `${startNote}${at > startAt ? ' (72 saat sınırı nedeniyle en erken kabul edilen zamana alındı)' : ''} Sayım bu andan itibaren yapılır; gerekirse değiştirin. Boş bırakırsanız şimdi.`;
+  }
   form.elements.person.value = rememberedPerson();
   form.elements.person.focus();
   wireGkkPick(form, w);

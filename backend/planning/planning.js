@@ -12,13 +12,17 @@ import { buildWorkOrderFormPdf } from './wo-form-pdf.js';
 import { parseSteps, parseReject, stepsToColumns, stepsText } from './card-steps.js';
 import { mergePdfs, PdfError } from '../pdf-merge.js';
 import { importFile } from './importers.js';
+import { Sources } from './sources.js';
+import { DocFolder } from './doc-folder.js';
+import { Packing } from './packing.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
 import { computeProgress } from './progress.js';
 import { buildStops, attachReasons, DEFAULT_MIN_STOP_MS } from './downtime.js';
 import { shiftOf, dateKey, parseDateKey, addDays, daysBetween } from '../../shared/shifts.js';
-import { consumptionOf, groupByMaterial } from './material.js';
+import { consumptionOf, groupByMaterial, materialKey, realConsumptionOf } from './material.js';
+import { freeStockByMaterial, reservedKgOf } from './material-reservations.js';
 import { csvDocument } from '../csv.js';
 import { orderSegments, summarize, matrixRows, productRows, dayRows, splitByShift } from './efficiency.js';
 import { slotOf, slotPosition, parseValue, normalizePlan, evaluate, limits, CHECK_KINDS, CHECK_LABEL, SLOT_MIN } from './measure.js';
@@ -58,6 +62,11 @@ function productFields(input) {
   if (has('netKg')) out.netKg = number(input.netKg, 'Net ağırlık (kg)', { max: 100 });
   if (has('grossKg')) out.grossKg = number(input.grossKg, 'Brüt ağırlık (kg)', { max: 100 });
   if (has('plannedSec')) out.plannedSec = number(input.plannedSec, 'Planlanan süre (sn)', { max: 36000 });
+  if (has('boxQty')) {
+    const q = number(input.boxQty, 'Koli içi adet', { max: 1_000_000 });
+    if (q !== null && !Number.isInteger(q)) throw new PlanningError('Koli içi adet tam sayı olmalı.');
+    out.boxQty = q;
+  }
   return out;
 }
 
@@ -77,16 +86,26 @@ export class Planning {
    */
   constructor({
     dbFile = 'data/planlama.db', listSeenPrograms = () => [], listMachines = () => [], productionEvents = () => [], liveMachine = () => null,
-    spans = () => [], downtimeConfig = { groups: [], codes: [] }, downtimeMinMs = DEFAULT_MIN_STOP_MS,
+    spans = () => [], downtimeConfig = { groups: [], codes: [] }, downtimeMinMs = DEFAULT_MIN_STOP_MS, sourcesDir = null, programRuns = () => [],
+    drawingsDir = null, stickersDir = null,
   } = {}) {
     this.db = new PlanningDb(dbFile);
     /** GKK rapor numaralari, ilk onay raporlari ve teknik resimler (ayni veritabani dosyasi). */
     this.quality = new Quality({ planning: this, db: this.db.db });
+    /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
+    this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
+    /** Teknik resim (PDF) ve etiket (Word) klasorleri: dosyalar urun koduna gore urun kartlarina eslenir (doc-folder.js). Iki AYRI klasor. */
+    this.drawingFolder = new DocFolder({ planning: this, kind: 'cizim', defaultDir: drawingsDir });
+    this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });
+    /** Paketleme formu (EYS.FR.007): urun kodu uzerinden satirlar, koli ici adet ogrenme/oneri (packing.js). */
+    this.packing = new Packing({ planning: this });
     this.listSeenPrograms = listSeenPrograms;
     this.listMachines = listMachines;
     this.productionEvents = productionEvents;
     this.liveMachine = liveMachine;
     this.spans = spans;
+    /** (machineId, fromMs, toMs, now) => [{program, startedAt, endedAt, qty, approxQty}]: telemetrinin program araliklari (Tezgah basi "calisan program"). */
+    this.programRuns = programRuns;
     this.downtimeGroups = downtimeConfig.groups ?? [];
     this.downtimeMinMs = downtimeMinMs;
     if ((downtimeConfig.codes ?? []).length > 0) this.db.syncDowntimeCodes(downtimeConfig.codes);
@@ -117,13 +136,15 @@ export class Planning {
   /* ----------------------------------------------------------------- urunler */
 
   listProducts(query) {
-    return this.db.listProducts(query);
+    const r = this.db.listProducts(query);
+    const counts = this.quality.db.productFileCounts(r.items.map((p) => p.codeKey));
+    return { ...r, items: r.items.map((p) => ({ ...p, drawingCount: counts.get(p.codeKey).cizim, stickerCount: counts.get(p.codeKey).etiket })) };
   }
 
   getProduct(stockCode) {
     const p = this.db.getProduct(foldTr(stockCode));
     if (!p) throw new PlanningError(`Ürün bulunamadı: ${stockCode}`, 404);
-    return { ...p, programs: this.db.programsOfProduct(p.codeKey) };
+    return { ...p, programs: this.db.programsOfProduct(p.codeKey), files: this.quality.listProductFiles(p.codeKey) };
   }
 
   createProduct(input, { by = null } = {}) {
@@ -441,16 +462,21 @@ export class Planning {
   getWorkOrder(no, { now = Date.now() } = {}) {
     const w = this.#get(no);
     const progress = this.#progressOf(w, now);
+    const packing = this.packing.forWorkOrder(w.no);
+    // biten + paketleme satiri olan is emrinde GERCEK tuketim gosterilir (F); diger her durumda teorik (sayac x brut).
+    const c = w.status === 'bitti' && packing.rows > 0 ? realConsumptionOf(w, packing, progress ? progress.produced : null) : consumptionOf(w, progress ? progress.produced : null);
     return {
       ...this.#woView(w),
       progress,
       crates: this.#cratesSummary(w, progress, now),
-      // hammadde sarfiyati (D): alan adi `material` is emrinin kendi hammadde metni oldugu icin `consumption`
-      consumption: { ...consumptionOf(w, progress ? progress.produced : null), fis: this.#fisOf(w) },
+      // hammadde sarfiyati (D/F): alan adi `material` is emrinin kendi hammadde metni oldugu icin `consumption`
+      consumption: { ...c, fis: this.#fisOf(w) },
+      reservation: this.db.getReservation(w.no),
       events: this.db.workOrderEvents(w.no),
       line: w.lineId == null ? null : this.db.getLine(w.lineId),
       drawings: this.quality.listDrawings(w.no),
       approvals: this.quality.approvalsOfWo(w.no),
+      packing,
     };
   }
 
@@ -583,6 +609,17 @@ export class Planning {
       if (startTotal != null) parts.push(`sayaç ${startTotal}`);
       this.db.addWorkOrderEvent(cur.no, 'baslatildi', parts.join(' · '), { by, now });
       if (changed.length > 0) this.db.addWorkOrderEvent(cur.no, 'guncellendi', changed.join('; ').slice(0, 500), { by, now });
+
+      // Hammadde rezervasyonu (F): uretime baslayinca hedef adet x brut gramaj kadar "ayrilir" (bir kez, dondurulur).
+      const matText = next.usedMaterial ?? next.material;
+      if (next.grossKg != null && next.grossKg > 0 && matText) {
+        const kg = reservedKgOf(next.targetQty, next.grossKg);
+        if (this.db.createReservation(cur.no, { materialKey: materialKey(matText), material: matText, reservedKg: kg }, { by, now })) {
+          this.db.addWorkOrderEvent(cur.no, 'hammadde-ayrildi', `${kg} kg · ${matText}`, { by, now });
+        }
+      } else {
+        warnings.push(next.grossKg != null && next.grossKg > 0 ? 'Hammadde kodu yok: hammadde ayrılmadı.' : 'Brüt ağırlık bilinmiyor: hammadde ayrılmadı.');
+      }
     });
     return { ...this.getWorkOrder(cur.no, { now }), warnings };
   }
@@ -617,6 +654,14 @@ export class Planning {
       if (endAt !== now) parts.push(`bitiş ${fmtTime(endAt)}`);
       if (finishTotal != null) parts.push(`sayaç ${finishTotal}`);
       this.db.addWorkOrderEvent(cur.no, 'bitirildi', parts.join(' · '), { by, now });
+
+      // Hammadde rezervasyonu (F): is emri bitince GERCEK tuketim belirlenir (paketlemeden varsa, yoksa teorik sayactan).
+      if (this.db.getReservation(cur.no)?.status === 'ayrildi') {
+        const packing = this.packing.forWorkOrder(cur.no);
+        const real = realConsumptionOf(cur, packing, result.produced);
+        this.db.resolveReservation(cur.no, { consumedKg: real.kg, consumedQty: real.qty, consumedSource: packing.rows > 0 ? 'paketleme' : 'teorik' }, { by, now });
+        this.db.addWorkOrderEvent(cur.no, 'hammadde-tuketildi', `${real.kg ?? '—'} kg (${packing.rows > 0 ? 'paketleme' : 'teorik'})`, { by, now });
+      }
     });
     return { ...this.getWorkOrder(cur.no, { now }), warnings };
   }
@@ -632,6 +677,12 @@ export class Planning {
     this.db.tx(() => {
       this.db.updateWorkOrder(cur.no, { status: 'uretimde', finished_at: null, finished_by: null, finished_person: null, finish_total: null, result_json: null }, { by, now });
       this.db.addWorkOrderEvent(cur.no, 'yeniden-acildi', `bitiş (${fmtTime(cur.finishedAt)}) geri alındı`, { by, now });
+
+      // Hammadde rezervasyonu (F): tuketim geri alinir, yeniden "ayrildi" sayilir (reserved_kg degismez).
+      if (this.db.getReservation(cur.no)?.status === 'tuketildi') {
+        this.db.reopenReservation(cur.no);
+        this.db.addWorkOrderEvent(cur.no, 'hammadde-tekrar-ayrildi', null, { by, now });
+      }
     });
     return this.getWorkOrder(cur.no, { now });
   }
@@ -650,6 +701,11 @@ export class Planning {
         if (openCrate) this.#closeCrateRow(openCrate, { by, person: null, to: now, now, auto: true });
         cols.finished_at = now;
         cols.result_json = JSON.stringify(this.#frozenResult(cur, cur.startedAt, now, now));
+        // Hammadde rezervasyonu (F): uretimdeyken iptal, hic tuketilmedi -> serbest kalir.
+        if (this.db.getReservation(cur.no)?.status === 'ayrildi') {
+          this.db.releaseReservation(cur.no, { by, now });
+          this.db.addWorkOrderEvent(cur.no, 'hammadde-serbest-birakildi', null, { by, now });
+        }
       }
       this.db.updateWorkOrder(cur.no, cols, { by, now });
       this.db.addWorkOrderEvent(cur.no, 'iptal', why, { by, now });
@@ -679,20 +735,25 @@ export class Planning {
     return { fromKey, toKey, fromMs: new Date(p.y, p.m - 1, p.d).getTime(), toMs: new Date(next.y, next.m - 1, next.d).getTime() };
   }
 
-  /** Sarfiyat satiri: is emri + hesaplanan hammadde (adet = gerceklesen). */
-  #consumptionRow(w, produced) {
-    const c = consumptionOf(w, produced);
+  /**
+   * Sarfiyat satiri: is emri + hesaplanan hammadde. `real`: bitmis is emirleri icin GERCEK (paketlemeden, varsa) tuketime gecer;
+   * canli/uretimdeki satirlar (`inProgress`) hep teorik (sayac) kalir.
+   */
+  #consumptionRow(w, produced, { real = false } = {}) {
+    const packing = real ? this.packing.forWorkOrder(w.no) : null;
+    const c = packing && packing.rows > 0 ? realConsumptionOf(w, packing, produced) : consumptionOf(w, produced);
     return {
       no: w.no, status: w.status, machineId: w.machineId, stockCode: w.stockCode, productName: w.productName, targetQty: w.targetQty,
       finishedAt: w.finishedAt, grossKg: w.grossKg, netKg: w.netKg, lengthMm: w.lengthMm,
       material: c.material, plannedMaterial: c.plannedMaterial, usedMaterial: c.usedMaterial, isAlt: c.isAlt, differs: c.differs,
-      produced: c.qty, qty: c.qty, kg: c.kg, bars: c.bars, scrapKg: c.scrapKg, fis: this.#fisOf(w),
+      produced: c.qty, qty: c.qty, kg: c.kg, bars: c.bars, scrapKg: c.scrapKg, qtySource: c.qtySource ?? 'teorik', fis: this.#fisOf(w),
     };
   }
 
   /**
-   * Hammadde IHTIYACI: planlanan + uretimdeki (kalan adet) is emirleri; hammadde kodu bazinda kg ve cubuk. (Mikro okuma gelince depo bakiyesiyle
-   * karsilastirilip eksik uyarisi verilecek: F asamasi.) Brut agirligi olmayan is emri kg'a katilmaz, ayrica sayilir.
+   * Hammadde IHTIYACI: planlanan + uretimdeki (kalan adet) is emirleri; hammadde kodu bazinda kg ve cubuk. Depo stogu + ayrilan/girilmemis
+   * tuketimden gelen SERBEST kg (F) ile karsilastirilir: `freeKg` (depoda eslesen kod yoksa null, bilinmiyor) ve `shortKg` (ihtiyac serbesti
+   * asiyorsa fark, asmiyorsa 0). Brut agirligi olmayan is emri kg'a katilmaz, ayrica sayilir.
    */
   materialNeed({ now = Date.now() } = {}) {
     const open = [...this.db.listWorkOrders({ status: 'uretimde', limit: 500 }).items, ...this.db.listWorkOrders({ status: 'planlandi', limit: 500 }).items];
@@ -705,12 +766,18 @@ export class Planning {
         dueDate: w.dueDate, altMaterial: w.altMaterial, material: c.material, kg: c.kg, bars: c.bars, scrapKg: c.scrapKg, qty: c.qty,
       };
     });
+    const freeByKey = new Map(this.materialStock({ now }).rows.map((r) => [r.materialKey, r.freeKg]));
+    const byMaterial = groupByMaterial(rows).map((g) => {
+      const freeKg = freeByKey.has(g.key) ? freeByKey.get(g.key) : null;
+      return { ...g, freeKg, shortKg: g.kg != null && freeKg != null ? Math.round(Math.max(0, g.kg - freeKg) * 1000) / 1000 : null };
+    });
     return {
-      now, rows, byMaterial: groupByMaterial(rows),
+      now, rows, byMaterial,
       totals: {
         orders: rows.length, kg: Math.round(rows.reduce((a, r) => a + (r.kg ?? 0), 0) * 1000) / 1000,
         bars: Math.round(rows.reduce((a, r) => a + (r.bars ?? 0), 0) * 100) / 100, noWeight: rows.filter((r) => r.kg == null).length,
         noMaterial: rows.filter((r) => !r.material).length,
+        short: byMaterial.filter((g) => (g.shortKg ?? 0) > 0).length, noStock: byMaterial.filter((g) => g.kg != null && g.freeKg == null).length,
       },
     };
   }
@@ -721,7 +788,7 @@ export class Planning {
    */
   materialConsumption({ from, to, fis = 'tumu', now = Date.now() } = {}) {
     const range = this.#dayRange(from, to, now);
-    const all = this.db.listFinishedBetween(range.fromMs, range.toMs).map((w) => this.#consumptionRow(w, w.result?.produced ?? null));
+    const all = this.db.listFinishedBetween(range.fromMs, range.toMs).map((w) => this.#consumptionRow(w, w.result?.produced ?? null, { real: true }));
     const rows = all.filter((r) => fis === 'tumu' || (fis === 'bekleyen' ? r.fis.status === 'bekliyor' : r.fis.status === 'girildi'));
     const grouped = groupByMaterial(rows.map((r) => ({ ...r, pendingKg: r.fis.status === 'bekliyor' ? r.kg ?? 0 : 0 })));
     const sum = (key, list = rows) => Math.round(list.reduce((a, r) => a + (r[key] ?? 0), 0) * 1000) / 1000;
@@ -765,6 +832,31 @@ export class Planning {
   }
 
   /**
+   * Depo hammadde stogu (F): Kaynak klasorunden gelen en son Mikro goruntusu + acik/cozulmemis rezervasyonlar -> hammadde bazinda
+   * SERBEST (kullanilabilir) kg. `material_stock`'ta satiri olmayan rezervasyon "eslesmedi" diye de ayrica dondurulur (kod yazim farki olabilir).
+   */
+  materialStock({ now = Date.now() } = {}) {
+    const stock = this.db.listMaterialStock();
+    const byKey = new Map();
+    for (const r of stock) {
+      const g = byKey.get(r.materialKey) ?? { materialKey: r.materialKey, name: r.name, stockCodes: [], stockKg: 0, known: false };
+      g.stockCodes.push(r.stockCode);
+      if (r.onHandKg != null || r.pendingKg != null) { g.stockKg += (r.onHandKg ?? 0) + (r.pendingKg ?? 0); g.known = true; }
+      byKey.set(r.materialKey, g);
+    }
+    const stockRows = [...byKey.values()].map((g) => ({ materialKey: g.materialKey, name: g.name, stockKg: g.known ? Math.round(g.stockKg * 1000) / 1000 : null, stockCodes: g.stockCodes }));
+    const rows = freeStockByMaterial(stockRows, this.db.reservationTotalsByMaterial());
+    const unmatched = rows.filter((r) => !byKey.has(r.materialKey));
+    return {
+      now, rows,
+      totals: {
+        materials: rows.length, unmatched: unmatched.length,
+        freeKg: Math.round(rows.reduce((a, r) => a + (r.freeKg ?? 0), 0) * 1000) / 1000,
+      },
+    };
+  }
+
+  /**
    * Biten is emirlerinin sarfiyat fisinin Mikro'ya ELLE girildigini isaretle (API dogrulanana kadar: PLANLAMA-TASARIM.md 7.2). Cift fis olmasin diye
    * girilmis is emri yeniden isaretlenmez. Fis kg varsayilan = hesaplanan sarfiyat; yalnizca TEK is emri icin elle degistirilebilir (Mikro'ya yazilan fiilî kg).
    * @param {{orders: string[], docNo?: string, kg?: number|string, note?: string}} input
@@ -785,7 +877,8 @@ export class Planning {
         const w = this.#get(no);
         if (w.status !== 'bitti') throw new PlanningError(`${no} bitmemiş: sarfiyat fişi yalnız biten iş emri için girilir.`, 409, 'bad-status');
         if (w.fisAt != null) throw new PlanningError(`${no} için fiş zaten girilmiş${w.fisDocNo ? ` (evrak ${w.fisDocNo})` : ''}: önce geri alın.`, 409, 'fis-exists');
-        const kg = override ?? consumptionOf(w, w.result?.produced ?? null).kg;
+        const packing = this.packing.forWorkOrder(w.no);
+        const kg = override ?? realConsumptionOf(w, packing, w.result?.produced ?? null).kg;
         if (kg == null) throw new PlanningError(`${no} için sarfiyat hesaplanamadı (brüt ağırlık ya da gerçekleşen adet yok): kg'ı elle girin.`, 409, 'no-weight');
         this.db.updateWorkOrder(no, { fis_at: now, fis_by: by, fis_doc_no: docNo, fis_kg: kg, fis_note: note }, { by, now });
         this.db.addWorkOrderEvent(no, 'fis-girildi', `${kg} kg${docNo ? ` · evrak ${docNo}` : ''}${note ? ` · ${note}` : ''}`, { by, now });
@@ -1394,6 +1487,50 @@ export class Planning {
   }
 
   /**
+   * Tezgahta SU AN calisan program: is emri BAGLANMASA da gorunur (deneme asamasinda ustalar sisteme dokunmaz, programi calistirir; is emri yukaridan baglanir).
+   * Program adi canli telemetriden (ana program), "ne zamandir / kac parca" telemetrinin program araligindan; hangi urune ait oldugu eslemeden, yoksa kural onerisinden
+   * (programin adi musteri urun kodu: 140100188). Is emri bagli degilse bu urune uyan BEKLEYEN is emirleri (bu tezgaha atanmis olanlar once) baglamak icin sunulur.
+   * Is emri bagli ve program baska urune esliyse `mismatch` doner (capraz denetim).
+   * @returns {{state: 'veri-yok'|'program-yok'|'calisiyor', name: string|null, ...}}
+   */
+  #programInfo(machineId, { active, planned, programMap, lookup, now }) {
+    const live = this.liveMachine(machineId);
+    if (!live?.connected) return { state: 'veri-yok', name: null };
+    const name = String(live.mainProgram ?? live.program ?? '').trim();
+    if (name === '') return { state: 'program-yok', name: null };
+    const key = programKey(name);
+
+    let run = null;
+    try {
+      const last = this.programRuns(machineId, now - 3 * 86_400_000, now, now).at(-1);
+      if (last && last.endedAt == null && programKey(last.program) === key) run = { startedAt: last.startedAt, parts: last.qty, approx: last.approxQty > 0 };
+    } catch { /* telemetri okunamadi: sure ve adet gosterilmez */ }
+
+    const mapped = programMap.get(key);
+    let product = null;
+    let candidates = [];
+    if (mapped) product = { stockCode: mapped.stockCode, name: mapped.productName, how: 'esleme', codeKey: mapped.codeKey };
+    else {
+      const sug = suggestProducts(name, lookup);
+      candidates = sug.candidates;
+      if (sug.kind && candidates.length === 1) product = { stockCode: candidates[0].stockCode, name: candidates[0].name, how: sug.kind, codeKey: candidates[0].codeKey };
+    }
+    const codeKeys = new Set(product ? [product.codeKey] : candidates.map((c) => c.codeKey));
+    const rank = (x) => (x.machineId === machineId ? 0 : x.machineId == null ? 1 : 2);
+    const waiting = active || codeKeys.size === 0 ? [] : planned.filter((x) => codeKeys.has(x.codeKey))
+      .sort((a, b) => rank(a) - rank(b) || (a.dueDate ?? Infinity) - (b.dueDate ?? Infinity) || a.no.localeCompare(b.no)).slice(0, 5)
+      .map((x) => ({ no: x.no, stockCode: x.stockCode, productName: x.productName, targetQty: x.targetQty, machineId: x.machineId, dueDate: x.dueDate ?? null }));
+    return {
+      state: 'calisiyor', name, subProgram: live.program && live.program !== name ? live.program : null,
+      startedAt: run?.startedAt ?? null, parts: run?.parts ?? null, approx: run?.approx ?? false,
+      product: product ? { stockCode: product.stockCode, name: product.name, how: product.how } : null,
+      ambiguous: !product && candidates.length > 1 ? candidates.slice(0, 5).map((c) => c.stockCode) : [],
+      waiting,
+      mismatch: active && product && product.codeKey !== active.codeKey ? { woStockCode: active.stockCode } : null,
+    };
+  }
+
+  /**
    * Fabrika PC'si (operator) ana ekrani: tezgah basina canli durum, uretimdeki is emri ve ilerlemesi, sirada bekleyen (planlandi) is emirleri,
    * nedeni sorulmamis duruslar. Yalniz okur.
    */
@@ -1402,6 +1539,8 @@ export class Planning {
     const planned = this.db.listWorkOrders({ status: 'planlandi', limit: 500 }).items;
     // Son 24 saatte biten is emirleri: son kasa is emri bittikten SONRA da dolabilir, kart buradan basilir.
     const finishedRecent = this.db.listWorkOrders({ status: 'bitti', limit: 500 }).items.filter((x) => x.finishedAt != null && now - x.finishedAt < 24 * 3_600_000);
+    const programMap = this.db.getProgramMap();
+    const lookup = this.#lookup();
     return {
       now,
       minStopMinutes: Math.round(this.downtimeMinMs / 60_000),
@@ -1414,6 +1553,7 @@ export class Planning {
         return {
           id: m.id, name: m.name ?? m.id,
           live: this.liveMachine(m.id) ? (({ connected, state, program }) => ({ connected, state, program }))(this.liveMachine(m.id)) : null,
+          program: this.#programInfo(m.id, { active: w, planned, programMap, lookup, now }),
           active: w ? {
             no: w.no, stockCode: w.stockCode, productName: w.productName, targetQty: w.targetQty, startedAt: w.startedAt, produced: p?.produced ?? 0, pct: p?.pct ?? 0,
             remaining: p?.remaining ?? w.targetQty, eta: p?.eta ?? null, sample: p?.sample ?? null, warnings: (p?.warnings ?? []).filter((x) => x.level === 'warn').length,

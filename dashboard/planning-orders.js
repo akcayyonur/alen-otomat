@@ -5,7 +5,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { cellText, fmtNum, dateText, debounce, chip } from './planning-common.js';
+import { cellText, fmtNum, dateText, debounce, chip, truncCell } from './planning-common.js';
 import { openNewWorkOrder } from './planning-workorders.js';
 
 /** @param {HTMLElement} host */
@@ -29,7 +29,7 @@ export function renderOrders(host) {
       '<th class="num">Satır</th><th class="num">Sipariş adedi</th><th class="num">Açık (kalan)</th></tr></thead><tbody>' +
       st.orders.map((o) =>
         `<tr class="pl-row${st.selected === groupKey(o) ? ' is-selected' : ''}" data-key="${escapeHtml(groupKey(o))}" tabindex="0">` +
-        `<td>${cellText(o.customer)}</td><td class="mono"><b>${cellText(o.custOrderNo)}</b></td><td class="mono">${cellText(o.docNo)}</td>` +
+        `<td class="trunc"${truncCell(o.customer)}>${cellText(o.customer)}</td><td class="mono trunc"${truncCell(o.custOrderNo)}><b>${cellText(o.custOrderNo)}</b></td><td class="mono trunc"${truncCell(o.docNo)}>${cellText(o.docNo)}</td>` +
         `<td>${dateText(o.orderDate)}</td><td class="num">${fmtNum(o.lineCount)}</td><td class="num">${fmtNum(o.qty)}</td>` +
         `<td class="num">${o.openQty > 0 ? `<b>${fmtNum(o.openQty)}</b>` : '<span class="is-null">0</span>'}</td></tr>`).join('') +
       '</tbody></table>';
@@ -62,9 +62,9 @@ export function renderOrders(host) {
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Ürün kodu</th><th>Ürün adı</th><th class="num">Sipariş</th><th class="num">Sevk edilen</th>' +
         '<th class="num">Kalan</th><th>Termin</th><th>Hammadde</th><th class="num">İş emrinde</th><th>Ürün kartı</th><th></th></tr></thead><tbody>' +
         lines.map((l) =>
-          `<tr><td class="mono"><b>${escapeHtml(l.stockCode)}</b></td><td>${cellText(l.itemName)}</td><td class="num">${fmtNum(l.qty)}</td>` +
+          `<tr><td class="mono"><b>${escapeHtml(l.stockCode)}</b></td><td class="trunc"${truncCell(l.itemName)}>${cellText(l.itemName)}</td><td class="num">${fmtNum(l.qty)}</td>` +
           `<td class="num">${fmtNum(l.shipped)}</td><td class="num">${l.remaining > 0 ? `<b>${fmtNum(l.remaining)}</b>` : fmtNum(l.remaining)}</td>` +
-          `<td>${dateText(l.dueDate)}</td><td class="mono">${cellText(l.material)}</td>` +
+          `<td>${dateText(l.dueDate)}</td><td class="mono trunc"${truncCell(l.material)}>${cellText(l.material)}</td>` +
           `<td class="num">${l.planned > 0 ? fmtNum(l.planned) : '<span class="is-null">0</span>'}</td>` +
           `<td>${l.hasProduct ? chip('ok', '✓', 'var') : chip('none', '·', 'yok (ürün değil ya da kart açılmamış)')}</td>` +
           `<td class="nowrap">${l.hasProduct ? `<button type="button" class="icon-btn icon-btn-sm" data-act="wo" data-line="${l.id}">İş emri aç</button>` : ''}</td></tr>`).join('') +

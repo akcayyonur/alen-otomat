@@ -134,7 +134,7 @@ test('baslat: uretimde olur, sayim penceresi baslangictan baslar; geriye alinmis
   assert.equal(b.usedMaterial, 'HM614.YU23.00');
   assert.equal(b.gkkReportNo, '26-1');
   assert.equal(b.progress.produced, 3, 'baslangictan ONCEKI (06:59) ve simdiden SONRAKI (10:00:30) olay sayilmaz');
-  assert.deepEqual(b.events.map((e) => e.kind), ['olusturuldu', 'baslatildi', 'guncellendi']);
+  assert.deepEqual(b.events.map((e) => e.kind), ['olusturuldu', 'baslatildi', 'guncellendi', 'hammadde-ayrildi']);
   assert.match(b.events[1].detail, /CNC-01 · Ayşe · başlangıç/);
   assert.deepEqual(b.warnings, [], 'tezgah bagli, program eslesiyor: uyari yok');
 
@@ -209,7 +209,8 @@ test('bitir: sonuc DONDURULUR (sonradan gelen olay degistirmez), hedef sapmasi u
   assert.equal(f.progress.produced, 4);
   assert.equal(f.progress.remaining, 1);
   assert.deepEqual(f.warnings, ['Hedefin altında bitirildi: 4 / 5 adet.']);
-  assert.match(f.events.at(-1).detail, /4 adet · hedef 5 · Veli · sayaç 5000/);
+  assert.match(f.events.find((e) => e.kind === 'bitirildi').detail, /4 adet · hedef 5 · Veli · sayaç 5000/);
+  assert.equal(f.events.at(-1).kind, 'hammadde-tuketildi', 'paketleme yok: teorik tuketim belirlenir');
 
   st.events.push(ev(day(9, 0), 10)); // pencere icinde ama is emri kapandi: sonuc degismez
   assert.equal(p.getWorkOrder(w.no).progress.produced, 4);
@@ -243,7 +244,9 @@ test('geri al: yanlislikla bitirilen uretime doner; sonraki is emri varsa redded
   assert.equal(r.result, null);
   assert.equal(r.progress.frozen, false);
   assert.equal(r.progress.to, NOW, 'pencere yeniden simdiye kadar acik');
-  assert.equal(r.events.at(-1).kind, 'yeniden-acildi');
+  assert.equal(r.events.find((e) => e.kind === 'yeniden-acildi') != null, true);
+  assert.equal(r.events.at(-1).kind, 'hammadde-tekrar-ayrildi', 'tuketim geri alinir, yeniden ayrildi sayilir');
+  assert.equal(r.reservation.status, 'ayrildi');
 
   p.finishWorkOrder(a.no, { endAt: day(8, 30) }, { now: NOW });
   const b = yeni(p);
@@ -295,6 +298,86 @@ test('liste: uretimdekiler en ustte, durum suzgecleri, adet ve yuzde; ozet durum
   assert.deepEqual(p.listWorkOrders({ status: 'bitti' }).items.map((w) => [w.no, w.produced, w.pct]), [[a.no, 2, 10]]);
   assert.equal(p.listWorkOrders({ status: 'planlandi' }).items[0].produced, null, 'baslamamis is emrinde adet yok (0 degil)');
   assert.deepEqual(p.summary().workOrders, { planlandi: 1, uretimde: 1, bitti: 1, iptal: 0 });
+});
+
+/* --------------------------------------------------- hammadde rezervasyonu (F) */
+
+test('rezervasyon: baslayinca hedef x brut kadar ayrilir; agirlik/hammadde yoksa ayrilmaz, uyarilir; fields override ile ayrilan degisir', () => {
+  const { p } = kur();
+  const a = yeni(p, { targetQty: 100 });
+  const b = p.startWorkOrder(a.no, { startAt: day(7) }, { now: NOW });
+  assert.deepEqual(b.reservation, { woNo: a.no, materialKey: 'HM614.YU23.00', material: 'HM614.YU23.00', reservedKg: 3.9, status: 'ayrildi', consumedKg: null, consumedQty: null, consumedSource: null, reservedAt: NOW, reservedBy: null, resolvedAt: null, resolvedBy: null });
+  assert.equal(b.warnings.some((w) => w.includes('ayrılmadı')), false);
+
+  // brut agirlik override (fields) ile baslatilirsa rezervasyon override'a gore (CNC-03 tek makine: her is emri bitirilip serbestlenir)
+  const e = p.startWorkOrder(yeni(p, { targetQty: 10, machineId: 'CNC-03' }).no, { fields: { grossKg: 0.5 } }, { now: NOW });
+  assert.equal(e.reservation.reservedKg, 5, '10 adet x 0,5 kg override');
+  p.finishWorkOrder(e.no, {}, { now: NOW });
+
+  // agirlik bilinmiyor: ayrilmaz, uyari verir
+  const f = p.createWorkOrder({ stockCode: 'Nİ002.001', targetQty: 10, machineId: 'CNC-03', grossKg: null }, { now: NOW });
+  const g = p.startWorkOrder(f.no, {}, { now: NOW });
+  assert.equal(g.reservation, null);
+  assert.match(g.warnings.join('|'), /Brüt ağırlık bilinmiyor: hammadde ayrılmadı/);
+  p.finishWorkOrder(g.no, {}, { now: NOW });
+
+  // hammadde kodu bos: ayrilmaz, ayri uyari
+  const h = p.createWorkOrder({ stockCode: 'Nİ002.001', targetQty: 10, machineId: 'CNC-03' }, { now: NOW });
+  p.updateWorkOrder(h.no, { material: null }, { now: NOW });
+  const i = p.startWorkOrder(h.no, {}, { now: NOW });
+  assert.equal(i.reservation, null);
+  assert.match(i.warnings.join('|'), /Hammadde kodu yok: hammadde ayrılmadı/);
+});
+
+test('rezervasyon: bitince paketleme varsa GERCEK (adet+hurda) tuketime, yoksa teorige gecer; kg farkli olabilir', () => {
+  const { p, st } = kur();
+  const teorik = yeni(p, { targetQty: 30 });
+  p.startWorkOrder(teorik.no, { startAt: day(7) }, { now: NOW });
+  st.events.push(ev(day(7, 30), 30));
+  const ft = p.finishWorkOrder(teorik.no, { endAt: day(8) }, { now: NOW });
+  assert.deepEqual([ft.reservation.status, ft.reservation.consumedSource, ft.reservation.consumedKg], ['tuketildi', 'teorik', 1.17], '30 x 0,039 (sayac)');
+
+  const paketli = yeni(p, { targetQty: 30, machineId: 'CNC-03' });
+  p.startWorkOrder(paketli.no, { startAt: day(8, 30) }, { now: NOW });
+  st.events.push(ev(day(9), 30, { machineId: 'CNC-03' }));
+  p.packing.addRow({ stockCode: 'SR001.013', operator: 'Test', boxes: 1, boxQty: 28, scrapQty: 3, woNo: paketli.no }, { now: NOW }); // 28 sevk + 3 hurda = 31 (sayacin 30'undan farkli)
+  const fp = p.finishWorkOrder(paketli.no, { endAt: day(9, 30) }, { now: NOW });
+  assert.deepEqual([fp.reservation.status, fp.reservation.consumedSource, fp.reservation.consumedKg], ['tuketildi', 'paketleme', 1.209], '(28+3) x 0,039');
+  assert.notEqual(fp.consumption.kg, ft.consumption.kg, 'gercek tuketim teorikten farkli cikabilir');
+  assert.equal(fp.consumption.qtySource, 'paketleme');
+});
+
+test('rezervasyon: uretimdeyken iptal -> serbest birakilir; planlandiyken iptal -> hic rezervasyon acilmaz', () => {
+  const { p } = kur();
+  const a = yeni(p);
+  p.startWorkOrder(a.no, { startAt: day(7) }, { now: NOW });
+  const c = p.cancelWorkOrder(a.no, { reason: 'test iptal', now: day(7, 30) });
+  assert.equal(c.reservation.status, 'serbest-birakildi');
+  assert.ok(c.events.some((e) => e.kind === 'hammadde-serbest-birakildi'));
+  assert.equal(c.events.at(-1).kind, 'iptal', 'iptal kaydi hammadde serbest birakmadan sonra, en son yazilir');
+
+  const b = yeni(p, { machineId: 'CNC-03' });
+  assert.equal(p.db.getReservation(b.no), null, 'hic baslamadi: rezervasyon hic olusmadi');
+  const d = p.cancelWorkOrder(b.no, { reason: 'hic baslamadi' });
+  assert.equal(d.reservation, null);
+});
+
+test('rezervasyon: bitmis is emri geri acilinca tuketim geri alinir, yeniden ayrilir (reserved_kg degismez)', () => {
+  const { p, st } = kur();
+  const a = yeni(p, { targetQty: 30 });
+  p.startWorkOrder(a.no, { startAt: day(7) }, { now: NOW });
+  st.events.push(ev(day(7, 30), 30));
+  p.finishWorkOrder(a.no, { endAt: day(8) }, { now: NOW });
+  const r = p.reopenWorkOrder(a.no, { now: NOW });
+  assert.deepEqual([r.reservation.status, r.reservation.consumedKg, r.reservation.consumedSource, r.reservation.reservedKg], ['ayrildi', null, null, 1.17]);
+});
+
+test('rezervasyon: createReservation ikinci kez cagrilirsa no-op (ayni is emri icin tek satir)', () => {
+  const { p } = kur();
+  const a = yeni(p);
+  assert.equal(p.db.createReservation(a.no, { materialKey: 'HM-X', material: 'HM-X', reservedKg: 1 }, { now: NOW }), true);
+  assert.equal(p.db.createReservation(a.no, { materialKey: 'HM-Y', material: 'HM-Y', reservedKg: 2 }, { now: NOW }), false, 'ikinci cagri no-op');
+  assert.equal(p.db.getReservation(a.no).material, 'HM-X', 'ilk deger degismez');
 });
 
 /* ------------------------------------------------ eski veritabani gecisi, HTTP */

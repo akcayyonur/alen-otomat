@@ -6,6 +6,7 @@ import './logger.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import { parseTelemetry } from '../shared/schema.js';
 import { loadDrivers } from '../shared/drivers.js';
 import { loadDowntimeCodes } from '../shared/downtime-codes.js';
@@ -92,7 +93,11 @@ const planning = new Planning({
   productionEvents: (machineId, fromMs, toMs) => store.db.productionEvents(machineId, fromMs, toMs), // is emrinin gerceklesen adedi
   liveMachine: (machineId) => store.liveInfo(machineId), // canli durum/program/sayac (is emri baslat-bitir)
   spans: (machineId, fromMs, toMs) => store.db.spans(machineId, fromMs, toMs), // olculmus duruslar
+  programRuns: (machineId, fromMs, toMs, now) => store.db.programRuns(machineId, fromMs, toMs, now), // tezgahin program araliklari (Tezgah basi: calisan program ne zamandir, kac parca)
   downtimeConfig: loadDowntimeCodes(), // duruş nedeni kodlari (config/downtime-codes.json)
+  sourcesDir: process.env.SOURCES_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'kaynak'), // Mikro/GKK Excel dosyalarinin varsayilan klasoru (data/kaynak)
+  drawingsDir: process.env.DRAWINGS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'teknik-resim'), // teknik resim PDF'lerinin varsayilan klasoru (data/teknik-resim)
+  stickersDir: process.env.STICKERS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'etiket'), // kutu etiketi Word dosyalarinin varsayilan klasoru (data/etiket)
 });
 // Kurulumda kapali bolumler (config/features.json; FEATURES_FILE ile degistirilir): hatali dosya sunucuyu baslatmaz.
 const features = loadFeatures(process.env.FEATURES_FILE);
@@ -119,8 +124,10 @@ const STATIC_FILES = {
   '/folder-view.js': ['../dashboard/folder-view.js', 'text/javascript; charset=utf-8'],
   '/diff.js': ['../dashboard/diff.js', 'text/javascript; charset=utf-8'],
   '/bulk-import-view.js': ['../dashboard/bulk-import-view.js', 'text/javascript; charset=utf-8'],
+  '/bulk-push-view.js': ['../dashboard/bulk-push-view.js', 'text/javascript; charset=utf-8'],
   '/delete-view.js': ['../dashboard/delete-view.js', 'text/javascript; charset=utf-8'],
   '/library-delete-view.js': ['../dashboard/library-delete-view.js', 'text/javascript; charset=utf-8'],
+  '/library-rename-view.js': ['../dashboard/library-rename-view.js', 'text/javascript; charset=utf-8'],
   '/diff-render.js': ['../dashboard/diff-render.js', 'text/javascript; charset=utf-8'],
   '/auth-view.js': ['../dashboard/auth-view.js', 'text/javascript; charset=utf-8'],
   '/users-view.js': ['../dashboard/users-view.js', 'text/javascript; charset=utf-8'],
@@ -140,6 +147,9 @@ const STATIC_FILES = {
   '/planning-efficiency.js': ['../dashboard/planning-efficiency.js', 'text/javascript; charset=utf-8'],
   '/planning-measure.js': ['../dashboard/planning-measure.js', 'text/javascript; charset=utf-8'],
   '/planning-packing.js': ['../dashboard/planning-packing.js', 'text/javascript; charset=utf-8'],
+  '/planning-packing-form.js': ['../dashboard/planning-packing-form.js', 'text/javascript; charset=utf-8'],
+  '/planning-docs.js': ['../dashboard/planning-docs.js', 'text/javascript; charset=utf-8'],
+  '/planning-sources.js': ['../dashboard/planning-sources.js', 'text/javascript; charset=utf-8'],
   '/planning-gkk.js': ['../dashboard/planning-gkk.js', 'text/javascript; charset=utf-8'],
   '/planning-approvals.js': ['../dashboard/planning-approvals.js', 'text/javascript; charset=utf-8'],
   '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],

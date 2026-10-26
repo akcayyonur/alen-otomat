@@ -58,6 +58,10 @@ test('admin: program kutuphanesi, tezgah programlari/klasorleri, aktarim, ayarla
     ['POST', '/api/machines/CNC-01/programs/import-plan'], ['GET', '/api/machines/CNC-01/programs/import-plan/abc123'],
     ['GET', '/api/machines/CNC-01/programs/import-plan/abc123/diff'], ['POST', '/api/machines/CNC-01/programs/import-apply'],
     ['POST', '/api/machines/CNC-01/programs/delete-precheck'], ['POST', '/api/machines/CNC-01/programs/delete'],
+    // toplu gonderme (tornaya yazar, ezer) ve ezilen eski hallerin yedekleri: yalniz yonetici
+    ['POST', '/api/machines/CNC-01/programs/push-plan'], ['GET', '/api/machines/CNC-01/programs/push-plan/abc123'],
+    ['POST', '/api/machines/CNC-01/programs/push-apply'], ['POST', '/api/machines/CNC-01/programs/push-stop'],
+    ['GET', '/api/library/backups/1'], ['POST', '/api/library/backups/1/restore'],
     // planlama (urun kartlari, siparisler): yalniz yonetici (program eslemesi 0.17.2'den beri operatore de acik, asagidaki operator testine bakin)
     ['GET', '/api/planning/products'], ['POST', '/api/planning/products'],
     ['GET', '/api/planning/products/SR001.013'], ['PUT', '/api/planning/products/SR001.013'], ['POST', '/api/planning/import'],
@@ -68,6 +72,7 @@ test('admin: program kutuphanesi, tezgah programlari/klasorleri, aktarim, ayarla
     // hammadde ve sarfiyat (D): yalniz yonetici (operator ve viewer goremez)
     ['GET', '/api/planning/material/need'], ['GET', '/api/planning/material/consumption'], ['GET', '/api/planning/material/consumption.csv'],
     ['POST', '/api/planning/material/fis'], ['POST', '/api/planning/material/fis/undo'],
+    ['GET', '/api/planning/sources'], ['PUT', '/api/planning/sources/dir'], ['POST', '/api/planning/sources/refresh'],
     // verimlilik ve durus raporlari (E): yalniz yonetici
     ['GET', '/api/planning/efficiency'], ['GET', '/api/planning/efficiency.csv'], ['GET', '/api/planning/downtime-report'], ['GET', '/api/planning/downtime-report.csv'],
   ];

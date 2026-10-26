@@ -86,6 +86,7 @@ const MATERIAL_UCLARI = [
   ['GET', '/api/planning/material/consumption.csv?view=hammadde'],
   ['POST', '/api/planning/material/fis'],
   ['POST', '/api/planning/material/fis/undo'],
+  ['GET', '/api/planning/material/stock'],
 ];
 
 test('sunucu: kapali hammadde bolumunde /material/* uclari reddedilir; paketleme uclari etkilenmez', async () => {

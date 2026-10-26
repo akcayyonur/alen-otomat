@@ -8,7 +8,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, chip, openListPrint } from './planning-common.js';
+import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, chip, openListPrint, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
 
 const plainDate = (ms) => (ms ? new Date(ms).toLocaleDateString('tr-TR') : '');
@@ -38,8 +38,8 @@ export function renderGkk(host) {
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th class="num">Sıra</th><th>Hammadde cinsi</th><th>Rapor no</th><th>Üretici rapor tarihi</th><th>Açıklama</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +
       st.items.map((g, i) =>
-        `<tr data-id="${g.id}"><td class="num">${fmtNum(i + 1)}</td><td><b>${escapeHtml(g.material)}</b></td><td class="mono pl-gk-no"><b>${escapeHtml(g.reportNo)}</b></td>` +
-        `<td>${dateText(g.producerDate)}</td><td>${cellText(g.note)}</td>` +
+        `<tr data-id="${g.id}"><td class="num">${fmtNum(i + 1)}</td><td class="trunc" title="${escapeHtml(g.material)}"><b>${escapeHtml(g.material)}</b></td><td class="mono pl-gk-no"><b>${escapeHtml(g.reportNo)}</b></td>` +
+        `<td>${dateText(g.producerDate)}</td><td class="trunc"${truncCell(g.note)}>${cellText(g.note)}</td>` +
         (admin ? `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="edit" data-id="${g.id}">Düzenle</button> <button type="button" class="icon-btn icon-btn-sm" data-act="delete" data-id="${g.id}">Sil</button></td>` : '') + '</tr>').join('') +
       '</tbody></table>';
   }

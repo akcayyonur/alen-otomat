@@ -9,7 +9,7 @@ import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
   put, cellText, fmtNum, dateText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip,
-  rawMaterial, plannedHours, isoDate, fmtDec, woStatusChip, isAdminRole,
+  rawMaterial, plannedHours, isoDate, fmtDec, woStatusChip, isAdminRole, truncCell,
 } from './planning-common.js';
 import { openWorkOrderForm } from './planning-wo-form.js';
 import { openProductDialog } from './planning-products.js';
@@ -31,6 +31,7 @@ const EVENT_LABEL = Object.freeze({
   'kart-basildi': 'ürün tanıtım kartı basıldı', 'olcu-kontrol': 'ölçü kontrolü girildi', 'olcu-plani': 'ölçü planı güncellendi', 'kasa-acildi': 'kasa açıldı', 'kasa-kapandi': 'kasa kapandı', 'kasa-paketlendi': 'kasa paketlendi', 'kasa-iptal': 'kasa iptal edildi',
   'fis-girildi': 'Mikro fişi girildi', 'fis-geri-alindi': 'Mikro fişi işareti geri alındı',
   'cizim-eklendi': 'teknik resim eklendi', 'cizim-silindi': 'teknik resim kaldırıldı',
+  'hammadde-ayrildi': 'hammadde ayrıldı', 'hammadde-tuketildi': 'hammadde tüketildi', 'hammadde-serbest-birakildi': 'hammadde serbest bırakıldı', 'hammadde-tekrar-ayrildi': 'hammadde yeniden ayrıldı',
 });
 
 /** Ölçü satırlarının tek satırlık özeti ("3 ölçü: Ø34,2 · Boy 14 · Ø30,8"). */
@@ -67,7 +68,7 @@ export async function renderWorkOrders(host) {
         const btn = (act, label) => `<button type="button" class="icon-btn icon-btn-sm" data-act="${act}" data-no="${no}">${label}</button> `;
         return `<tr class="pl-row${w.status === 'iptal' ? ' pl-cancelled' : ''}${w.status === 'uretimde' ? ' pl-running' : ''}" data-no="${no}" tabindex="0">` +
           `<td class="mono"><b>${no}</b></td>` +
-          `<td><span class="mono"><b>${escapeHtml(w.stockCode)}</b></span> ${cellText(w.productName)}</td><td class="mono">${cellText(w.custOrderNo)}</td>` +
+          `<td class="trunc"${truncCell(w.productName)}><span class="mono"><b>${escapeHtml(w.stockCode)}</b></span> ${cellText(w.productName)}</td><td class="mono trunc"${truncCell(w.custOrderNo)}>${cellText(w.custOrderNo)}</td>` +
           `<td class="mono">${w.machineId ? escapeHtml(w.machineId) : '<span class="is-null" title="Tezgah başlatırken seçilir">atanmadı</span>'}</td><td class="num">${fmtNum(w.targetQty)}</td>` +
           `<td class="num">${w.produced == null ? cellText(null) : `${fmtNum(w.produced)} <small class="hint">%${fmtDec(w.pct ?? 0, 0)}</small>`}</td>` +
           `<td>${dateText(w.dueDate)}</td><td>${woStatusChip(w.status)}</td>` +
@@ -180,7 +181,7 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
         st.orders = r.orders;
         box.innerHTML = r.orders.length === 0 ? '<p class="empty">Eşleşen sipariş yok.</p>' :
           '<table class="tbl tbl-pl"><thead><tr><th>Müşteri</th><th>Müşteri sip. no</th><th>Evrak no</th><th>Tarih</th><th class="num">Satır</th><th class="num">Açık</th></tr></thead><tbody>' +
-          r.orders.map((o, i) => `<tr class="pl-row" data-i="${i}" tabindex="0"><td>${cellText(o.customer)}</td><td class="mono"><b>${cellText(o.custOrderNo)}</b></td>` +
+          r.orders.map((o, i) => `<tr class="pl-row" data-i="${i}" tabindex="0"><td class="trunc"${truncCell(o.customer)}>${cellText(o.customer)}</td><td class="mono"><b>${cellText(o.custOrderNo)}</b></td>` +
             `<td class="mono">${cellText(o.docNo)}</td><td>${dateText(o.orderDate)}</td><td class="num">${fmtNum(o.lineCount)}</td><td class="num">${o.openQty > 0 ? `<b>${fmtNum(o.openQty)}</b>` : '0'}</td></tr>`).join('') +
           '</tbody></table>';
       } else {
@@ -206,7 +207,7 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
         `<h4 class="sub">${escapeHtml(st.orderTitle)} — iş emri açılacak ürünü seçin</h4>` +
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Ürün kodu</th><th>Ürün adı</th><th class="num">Sipariş</th><th class="num">Kalan</th><th class="num">İş emrinde</th><th class="num">Planlanmamış</th><th>Ürün kartı</th></tr></thead><tbody>' +
         lines.map((l, i) =>
-          `<tr class="${l.hasProduct ? 'pl-row' : 'pl-disabled'}" data-line="${i}"${l.hasProduct ? ' tabindex="0"' : ''}><td class="mono"><b>${escapeHtml(l.stockCode)}</b></td><td>${cellText(l.itemName)}</td>` +
+          `<tr class="${l.hasProduct ? 'pl-row' : 'pl-disabled'}" data-line="${i}"${l.hasProduct ? ' tabindex="0"' : ''}><td class="mono"><b>${escapeHtml(l.stockCode)}</b></td><td class="trunc"${truncCell(l.itemName)}>${cellText(l.itemName)}</td>` +
           `<td class="num">${fmtNum(l.qty)}</td><td class="num">${fmtNum(l.remaining)}</td><td class="num">${fmtNum(l.planned)}</td><td class="num">${l.unplanned > 0 ? `<b>${fmtNum(l.unplanned)}</b>` : '0'}</td>` +
           `<td>${l.hasProduct ? chip('ok', '✓', 'var') : chip('none', '✕', 'yok (ürün değil ya da kart açılmamış)')}</td></tr>`).join('') + '</tbody></table></div>';
     } catch (err) {

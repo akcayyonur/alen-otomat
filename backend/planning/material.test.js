@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Planning } from './planning.js';
 import { createPlanningRoutes } from './routes.js';
-import { consumptionOf, groupByMaterial, materialKey } from './material.js';
+import { consumptionOf, groupByMaterial, materialKey, realConsumptionOf } from './material.js';
 
 const day = (h, m = 0, s = 0, d = 12) => new Date(2026, 9, d, h, m, s).getTime();
 const NOW = day(10);
@@ -60,6 +60,21 @@ test('hesap: kg = adet x brut, cubuk, beklenen talas; bilinmeyen null (0 degil);
   assert.equal(materialKey('Nİ002.001 '), materialKey('NI002.001'));
 });
 
+test('GERCEK sarfiyat (F): paketleme varsa (adet+hurda) x brut, yoksa teorik; net/talas hep teorik; brut yoksa kg null', () => {
+  const w = { material: 'HM614.YU23.00', usedMaterial: null, grossKg: 0.039, netKg: 0.0078, lengthMm: 13 };
+  const teorik = realConsumptionOf(w, null, 30);
+  assert.deepEqual([teorik.qtySource, teorik.qty, teorik.kg], ['teorik', 30, 1.17], 'paketleme yok (null) -> teorige esit');
+  assert.deepEqual([realConsumptionOf(w, { rows: 0, pieces: 0, scrap: 0 }, 30).qtySource], ['teorik'], 'paketleme satiri (rows=0) de yok sayilir');
+
+  const paketli = realConsumptionOf(w, { rows: 2, boxes: 2, pieces: 28, scrap: 3 }, 30);
+  assert.deepEqual([paketli.qtySource, paketli.packedQty, paketli.scrapQty, paketli.qty, paketli.kg], ['paketleme', 28, 3, 31, 1.209], '(28+3) x 0,039');
+  assert.equal(paketli.netKg, teorik.netKg, 'net agirlik HER ZAMAN teorik (sayac) adedine gore');
+  assert.equal(paketli.scrapKg, teorik.scrapKg, 'beklenen talas HER ZAMAN teorik');
+
+  const agirliksiz = realConsumptionOf({ ...w, grossKg: null }, { rows: 1, pieces: 28, scrap: 3 }, 30);
+  assert.equal(agirliksiz.kg, null, 'brut agirlik yoksa gercek kg da null');
+});
+
 test('hammadde bazinda toplam: kg, cubuk, talas, bekleyen; bilinmeyenler toplama girmez ama sayilir; kg azalan', () => {
   const g = groupByMaterial([
     { material: 'HM-A', kg: 1.5, bars: 0.2, scrapKg: 0.3, qty: 10, pendingKg: 1.5 },
@@ -88,6 +103,20 @@ test('ihtiyac: planlanan (hedef) + uretimdeki (kalan) is emirleri, hammadde bazi
   assert.deepEqual([a.orders, a.qty, a.kg], [2, 235, 9.165], '(40-5) + 200 adet x 0,039');
   assert.equal(n.rows.find((r) => r.status === 'uretimde').remaining, 35);
   assert.ok(n.totals.orders === 3 && n.totals.kg > 9.16);
+});
+
+test('ihtiyac: depo stoguyla karsilastirilir (serbest kg, eksik kg); eslesmeyen hammadde ayrica sayilir', () => {
+  const { p } = kur();
+  p.db.replaceMaterialStock([{ stockCode: 'HM614.YU23.00', materialKey: materialKey('HM614.YU23.00'), onHandKg: 5, pendingKg: 0 }], { now: NOW });
+  p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 200, machineId: 'CNC-01' }, { now: NOW }); // 200 x 0,039 = 7,8 kg ihtiyac, 5 kg serbest -> 2,8 kg eksik
+  p.createWorkOrder({ stockCode: 'Nİ002.001', targetQty: 10, machineId: 'CNC-03' }, { now: NOW }); // HM617.YU18.00: depoda hic yok
+
+  const n = p.materialNeed({ now: NOW });
+  const a = n.byMaterial.find((x) => x.material === 'HM614.YU23.00');
+  assert.deepEqual([a.kg, a.freeKg, a.shortKg], [7.8, 5, 2.8]);
+  const b = n.byMaterial.find((x) => x.material === 'HM617.YU18.00');
+  assert.deepEqual([b.freeKg, b.shortKg], [null, null], 'depoda eslesen kod yok: bilinmiyor (0 degil)');
+  assert.deepEqual([n.totals.short, n.totals.noStock], [1, 1]);
 });
 
 test('sarfiyat: bitis tarih araligi, dondurulmus adet, hammadde bazinda toplam, uretimdekiler ayri', () => {
@@ -172,6 +201,28 @@ test('CSV: Excel uyumlu (BOM, sep=;, ondalik virgul), is emri bazli ve hammadde 
   assert.equal(h.filename, 'hammadde-sarfiyat-2026-10-12_2026-10-12.csv');
   assert.match(h.text, /Hammadde;İş emri;Adet;Sarfiyat \(kg\);Çubuk \(BOY\);Beklenen talaş \(kg\);Fişi bekleyen \(kg\)/);
   assert.match(h.text, /HM617.YU18.00;1;20;2,13;/);
+});
+
+test('serbest stok (F, uctan uca): stok ice al -> baslat (duser) -> bitir fissiz (hala duser) -> fis isaretle (geri doner) -> geri al (yine duser)', () => {
+  const { p, st } = kur();
+  p.db.replaceMaterialStock([{ stockCode: 'HM614.YU23.00', materialKey: materialKey('HM614.YU23.00'), name: 'Pirinç çubuk', onHandKg: 150, pendingKg: 50 }], { now: NOW });
+
+  const bos = p.materialStock({ now: NOW });
+  assert.deepEqual(bos.rows, [{ materialKey: materialKey('HM614.YU23.00'), name: 'Pirinç çubuk', stockKg: 200, reservedKg: 0, unenteredKg: 0, freeKg: 200 }]);
+
+  const w = p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-01' }, { now: NOW });
+  p.startWorkOrder(w.no, { startAt: day(7) }, { now: NOW });
+  assert.equal(p.materialStock({ now: NOW }).rows[0].freeKg, 196.1, '200 - 100 x 0,039 (ayrildi)');
+
+  st.events.push(ev('CNC-01', day(7, 30), 100));
+  p.finishWorkOrder(w.no, { endAt: day(8) }, { now: NOW });
+  assert.equal(p.materialStock({ now: NOW }).rows[0].freeKg, 196.1, 'bitti ama fis girilmedi: hala dusuk (girilmemisKg uzerinden)');
+
+  p.markFis({ orders: [w.no] }, { now: NOW });
+  assert.equal(p.materialStock({ now: NOW }).rows[0].freeKg, 200, 'fis Mikro\'ya girildi: bir sonraki Mikro goruntusu dusecegi icin bizim tarafta artik dusulmez');
+
+  p.clearFis({ orders: [w.no] }, { now: NOW });
+  assert.equal(p.materialStock({ now: NOW }).rows[0].freeKg, 196.1, 'fis geri alinirsa dusme yeniden baslar');
 });
 
 test('HTTP: ihtiyac, sarfiyat (json ve csv), fis isaretle ve geri al', async () => {

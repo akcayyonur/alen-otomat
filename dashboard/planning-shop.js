@@ -1,7 +1,7 @@
 /**
  * Planlama > Tezgah başı: fabrika bilgisayarındaki OPERATÖR ekranı (ortak hesap) ve yönetici için aynı görünüm.
  *
- * Tezgah başına bir kart: canlı durum, üretimdeki iş emri ve ilerlemesi, "İş emrini düzenle" (ilk onay rapor no, ölçülen net gramaj...), sırada bekleyen iş emirleri ("Başlat"), "Bitir" ve
+ * Tezgah başına bir kart: canlı durum, ÇALIŞAN PROGRAM (iş emri bağlı olmasa da: ne zamandır, kaç parça, hangi ürün; iş emri yukarıdan "İş emrini bağla" ile bağlanır), üretimdeki iş emri ve ilerlemesi, "İş emrini düzenle" (ilk onay rapor no, ölçülen net gramaj...), sırada bekleyen iş emirleri ("Başlat"), "Bitir" ve
  * duruş nedenleri. Duruşun SÜRESİ telemetriden gelir; operatör yalnız NEDENİ seçer (dakika yazmaz). Bir duruş birden çok nedene bölünebilir.
  * Ürün tanıtım kartı (tek adım): kasa dolunca usta iş emrinde "Ürün tanıtım kartı bas" der, kartı kasaya atıp kasayı paketlemeye yollar
  * (kart numarasını sistem verir; iş emri bittikten sonra da basılabilir). Kesin adet Paketleme bölümünde girilir.
@@ -9,7 +9,7 @@
  */
 import { escapeHtml, stateOf } from './format.js';
 import { api, post } from './lib-common.js';
-import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, isViewer, sectionClosed } from './planning-common.js';
+import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, isViewer, sectionClosed, truncCell } from './planning-common.js';
 import { openStartDialog, openFinishDialog, openEditFieldsDialog } from './planning-production.js';
 import { openCrateCard, openIssueCard } from './planning-card.js';
 import { openMeasureDialog, openMeasureReport } from './planning-measure.js';
@@ -29,6 +29,8 @@ const dur = (ms) => {
 /** ms -> <input type="datetime-local"> değeri (yerel). */
 const localDt = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const STATE_NOUN = Object.freeze({ IDLE: 'boşta', ALARM: 'alarm', OFF: 'kapalı' });
+/** Programın hangi ürüne ait sayıldığı: eşleme kesin, diğerleri kural önerisi. */
+const PRODUCT_HOW = Object.freeze({ esleme: 'programla eşli', kod: 'stok koduyla tanındı', 'musteri-kodu': 'müşteri ürün koduyla tanındı', ad: 'ürün adıyla tanındı, öneri' });
 
 /* ============================================================ ana ekran */
 
@@ -74,6 +76,34 @@ export async function renderShop(host) {
       `${c.last ? `<button type="button" class="icon-btn shop-btn" data-act="crate-card" data-id="${c.last.id}">Son kartı yeniden yazdır</button>` : ''}</div></div>`;
   }
 
+  /** Tezgahta SU AN calisan program (is emri baglanmasa da): ad, ne zamandir, kac parca, hangi urun; is emri bagliysa capraz denetim. */
+  function programBlock(m) {
+    const p = m.program;
+    if (!p || p.state === 'veri-yok') return '<p class="hint shop-program">Çalışan program bilinmiyor: tezgahtan veri gelmiyor.</p>';
+    if (p.state === 'program-yok') return '<p class="hint shop-program">Çalışan program okunamıyor.</p>';
+    const since = p.startedAt ? ` · <b>${escapeHtml(dur(data.now - p.startedAt))}</b>'dır (${escapeHtml(when(p.startedAt))}'den beri)` : '';
+    const parts = p.parts != null ? ` · <b>${fmtNum(p.parts)}</b> parça${p.approx ? ' (yaklaşık)' : ''}` : '';
+    const sub = p.subProgram ? ` · alt program <span class="mono">${escapeHtml(p.subProgram)}</span>` : '';
+    const product = p.product
+      ? `Ürün: <b class="mono">${escapeHtml(p.product.stockCode)}</b> ${cellText(p.product.name)} <span class="hint">(${escapeHtml(PRODUCT_HOW[p.product.how] ?? p.product.how)})</span>`
+      : p.ambiguous.length ? `Ürün belirsiz: birden çok ürün bu koda uyuyor (${escapeHtml(p.ambiguous.join(', '))}); Program eşleme sekmesinden eşleyin.`
+      : 'Ürün tanınmadı: Program eşleme sekmesinden eşleyin.';
+    const mismatch = p.mismatch ? ` ${chip('bad', '▲', 'program başka ürüne ait')} <span class="hint">bağlı iş emri ${escapeHtml(p.mismatch.woStockCode)}</span>` : '';
+    return `<div class="shop-program"><p><span aria-hidden="true">▶</span> Çalışan program: <b class="mono">${escapeHtml(p.name)}</b>${sub}${since}${parts}</p><p class="hint">${product}${mismatch}</p></div>`;
+  }
+
+  /** İş emri bağlı değilken: çalışan programa uyan bekleyen iş emirleri; "İş emrini bağla" sayımı programın başladığı andan başlatır. */
+  function waitingBlock(m) {
+    const w = m.program?.waiting ?? [];
+    if (w.length === 0) return '';
+    const start = m.program.startedAt;
+    return '<p class="hint">Bu programa uyan bekleyen iş emirleri:</p><ul class="shop-planned">' + w.map((x) =>
+      `<li><span><b class="mono">${escapeHtml(x.no)}</b> · <span class="mono">${escapeHtml(x.stockCode)}</span> · hedef ${fmtNum(x.targetQty)}` +
+      `${x.machineId && x.machineId !== m.id ? ` · <span class="hint">${escapeHtml(x.machineId)} için planlı</span>` : ''}<br><span class="shop-prod">${cellText(x.productName)}</span></span>` +
+      `<span class="shop-li-actions"><button type="button" class="icon-btn shop-btn" data-act="wo-form" data-no="${escapeHtml(x.no)}" title="İş emri formu ve teknik resimler">Form</button>` +
+      (readOnly ? '' : `<button type="button" class="icon-btn shop-btn btn-primary" data-act="bind" data-no="${escapeHtml(x.no)}"${start ? ` data-start="${start}"` : ''} data-program="${escapeHtml(m.program.name)}" title="Üretim sayımı programın başladığı andan itibaren (en fazla 72 saat geriye) yapılır">İş emrini bağla</button>`) + '</span></li>').join('') + '</ul>';
+  }
+
   function cardHtml(m) {
     const live = m.live;
     const info = stateOf(live?.connected ? live.state : 'NO_DATA');
@@ -93,20 +123,24 @@ export async function renderShop(host) {
           `<button type="button" class="icon-btn shop-btn" data-act="approval-new" data-no="${escapeHtml(a.no)}" title="İlk parça ölçülüp onaylanınca sıradaki ilk onay numarasını verir">İlk onay numarası al</button>` +
           `<button type="button" class="icon-btn shop-btn btn-primary" data-act="finish" data-no="${escapeHtml(a.no)}">İş emrini bitir</button></div>`);
     } else {
+      const running = m.program?.state === 'calisiyor';
+      const shown = new Set((m.program?.waiting ?? []).map((x) => x.no));
+      const planned = m.planned.filter((x) => !shown.has(x.no)); // bagla listesinde zaten gosterilenler tekrarlanmaz
       body =
-        '<p class="hint shop-none">Bu tezgahta üretimde iş emri yok.</p>' +
+        `<p class="hint shop-none">${running ? '<b>İş emri bağlı değil.</b> Program çalışıyor; üretim, iş emri bağlanınca programın başladığı andan (en fazla 72 saat) geriye dönük sayılır.' : 'Bu tezgahta üretimde iş emri yok.'}</p>` +
+        waitingBlock(m) +
         // Son kasa iş emri bittikten sonra da dolabilir: son 24 saatte biten iş emri için kart basılabilir.
         (m.finished
           ? `<div class="shop-crate"><p class="hint">Son biten iş emri: <b class="mono">${escapeHtml(m.finished.no)}</b> · <span class="mono">${escapeHtml(m.finished.stockCode)}</span> (${escapeHtml(when(m.finished.finishedAt))})</p>` +
             `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="wo-form" data-no="${escapeHtml(m.finished.no)}">İş emri formu</button>` +
             (readOnly ? '' : `<button type="button" class="icon-btn shop-btn" data-act="card-issue" data-no="${escapeHtml(m.finished.no)}">Ürün tanıtım kartı bas</button>`) + '</div></div>'
           : '') +
-        (m.planned.length
-          ? `<ul class="shop-planned">${m.planned.slice(0, 3).map((w) =>
+        (planned.length
+          ? `<ul class="shop-planned">${planned.slice(0, 3).map((w) =>
             `<li><span><b class="mono">${escapeHtml(w.no)}</b> · <span class="mono">${escapeHtml(w.stockCode)}</span> · hedef ${fmtNum(w.targetQty)}<br><span class="shop-prod">${cellText(w.productName)}</span></span>` +
             `<span class="shop-li-actions"><button type="button" class="icon-btn shop-btn" data-act="wo-form" data-no="${escapeHtml(w.no)}" title="İş emri formu ve teknik resimler">Form</button>` +
             (readOnly ? '' : `<button type="button" class="icon-btn shop-btn btn-primary" data-act="start" data-no="${escapeHtml(w.no)}">Başlat</button>`) + '</span></li>').join('')}</ul>`
-          : '<p class="hint">Bu tezgaha atanmış bekleyen iş emri yok.</p>') +
+          : (shown.size > 0 ? '' : '<p class="hint">Bu tezgaha atanmış bekleyen iş emri yok.</p>')) +
         (readOnly ? '' : `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="pick">Başka iş emri başlat…</button></div>`);
     }
     const s = m.stops;
@@ -116,7 +150,7 @@ export async function renderShop(host) {
     const ongoing = s.ongoing != null ? `<p class="hint shop-ongoing"><span aria-hidden="true">❙❙</span> Şu an duruyor: ${escapeHtml(dur(data.now - s.ongoing))} (${escapeHtml(hm(s.ongoing))}'den beri)</p>` : '';
     return `<article class="shop-card${m.active ? ' is-running' : ''}" data-machine="${escapeHtml(m.id)}">` +
       `<header class="shop-head"><div><h3>${escapeHtml(m.name)}</h3><span class="mono hint">${escapeHtml(m.id)}</span></div>${stateChip}</header>` +
-      `${ongoing}${body}${stopBtn}</article>`;
+      `${programBlock(m)}${ongoing}${body}${stopBtn}</article>`;
   }
 
   function draw() {
@@ -143,6 +177,13 @@ export async function renderShop(host) {
     const machine = btn.closest('.shop-card')?.dataset.machine;
     const act = btn.dataset.act;
     if (act === 'start') openStartDialog(btn.dataset.no, refresh, { machineId: machine });
+    else if (act === 'bind') {
+      const at = Number(btn.dataset.start) || null;
+      openStartDialog(btn.dataset.no, refresh, {
+        machineId: machine, startAt: at,
+        startNote: at ? `Tezgahta çalışan program ${btn.dataset.program}, ${when(at)} itibarıyla çalışıyor.` : '',
+      });
+    }
     else if (act === 'finish') openFinishDialog(btn.dataset.no, refresh);
     else if (act === 'edit-wo') openEditFieldsDialog(btn.dataset.no, refresh);
     else if (act === 'pick') openPicker(machine, refresh);
@@ -180,7 +221,7 @@ function openPicker(machineId, onDone) {
       if (my !== seq) return;
       list.innerHTML = r.items.length === 0 ? '<p class="empty">Bekleyen iş emri yok.</p>' :
         '<table class="tbl tbl-pl"><tbody>' + r.items.map((w) =>
-          `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td><span class="mono">${escapeHtml(w.stockCode)}</span> ${cellText(w.productName)}</td>` +
+          `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td class="trunc"${truncCell(w.productName)}><span class="mono">${escapeHtml(w.stockCode)}</span> ${cellText(w.productName)}</td>` +
           `<td class="num">${fmtNum(w.targetQty)}</td><td class="mono">${escapeHtml(w.machineId)}</td></tr>`).join('') + '</tbody></table>';
     } catch (err) {
       list.innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;

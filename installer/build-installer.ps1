@@ -221,9 +221,10 @@ foreach ($sil in 'data', 'logs') {
 }
 # Testler gelistirme icindir (npm test); uretim paketine girmez.
 Get-ChildItem (Join-Path $Payload 'backend') -Recurse -Filter '*.test.js' | Remove-Item -Force
-# Test yardimcilari (sahte FTP sunucusu, kurulum) da gelistirme icindir.
-$testYard = Join-Path $Payload 'backend\programs\test'
-if (Test-Path $testYard) { Remove-Item $testYard -Recurse -Force }
+# Test yardimcilari (sahte FTP sunucusu, test .xlsx yazicisi, kurulum) da gelistirme icindir.
+foreach ($testYard in (Join-Path $Payload 'backend\programs\test'), (Join-Path $Payload 'backend\planning\test')) {
+    if (Test-Path $testYard) { Remove-Item $testYard -Recurse -Force }
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload 'kurulum') | Out-Null
 Copy-Item (Join-Path $Kok 'kurulum\kurulum.ps1') (Join-Path $Payload 'kurulum')
 Copy-Item (Join-Path $Kok 'kurulum\KURULUM.md')   (Join-Path $Payload 'kurulum')
@@ -373,9 +374,12 @@ if (-not $TestAtla) {
         foreach ($b in $izinliBolumler) {
             $yontem = $bolumUclari[$b][0]; $yol = $bolumUclari[$b][1]
             $kod = 0
+            # Windows PowerShell 5.1 GET isteginde govde (-Body) gondermeyi reddeder (HTTP 0 gibi gorunur): yalniz POST'ta govde var.
+            $istekArg = @{ Uri = "http://127.0.0.1:$port$yol"; Method = $yontem; WebSession = $oturumCerezi; UseBasicParsing = $true; TimeoutSec = 5 }
+            if ($yontem -eq 'POST') { $istekArg.ContentType = 'application/json'; $istekArg.Body = '{}' }
             try {
-                Invoke-WebRequest "http://127.0.0.1:$port$yol" -Method $yontem -ContentType 'application/json' -Body '{}' -WebSession $oturumCerezi -UseBasicParsing -TimeoutSec 5 | Out-Null; $kod = 200
-            } catch { $kod = [int]$_.Exception.Response.StatusCode }
+                Invoke-WebRequest @istekArg | Out-Null; $kod = 200
+            } catch { $kod = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { -1 } }
             if ($kapaliListe -contains $b) { if ($kod -ne 403) { Vazgec "$b kapali olmaliydi ama $yol HTTP $kod verdi (403 beklenirdi)" } }
             elseif ($kod -eq 403) { Vazgec "$b acik olmaliydi ama $yol 403 verdi" }
         }

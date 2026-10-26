@@ -49,6 +49,30 @@ export function consumptionOf(w, qty) {
 }
 
 /**
+ * GERÇEK sarfiyat (F aşaması): paketleme satırı varsa (sevk edilen adet + hurda adedi) × brüt; yoksa ("paketleme" bölümü kapalı ya da
+ * henüz paketlenmedi) TEORİK (sayaç × brüt) kalır. Net ağırlık ve beklenen talaş HER ZAMAN teorik sayaca göredir (hurda bir parçanın
+ * net/talaş değeri tanımlı değildir) — yalnız brüt sarfiyat (kg) ve çubuk sayısı gerçek adede göre değişir.
+ * @param {{material?, usedMaterial?, altMaterial?, grossKg?, netKg?, lengthMm?}} w
+ * @param {{rows: number, boxes: number, pieces: number, scrap: number}|null} packing `Packing.forWorkOrder(woNo)` çıktısı
+ * @param {number|null} producedQty teorik (sayaç) adet — paketleme yoksa bu kullanılır
+ */
+export function realConsumptionOf(w, packing, producedQty) {
+  const theoretical = consumptionOf(w, producedQty);
+  if (!packing || packing.rows === 0) return { ...theoretical, qtySource: 'teorik' };
+  const realQty = packing.pieces + packing.scrap;
+  const grossKnown = w.grossKg != null && w.grossKg > 0;
+  return {
+    ...theoretical,
+    qtySource: 'paketleme',
+    packedQty: packing.pieces,
+    scrapQty: packing.scrap,
+    qty: realQty,
+    kg: grossKnown ? round(realQty * w.grossKg, 3) : null,
+    bars: rawMaterial({ qty: realQty, grossKg: w.grossKg, lengthMm: w.lengthMm }).bars,
+  };
+}
+
+/**
  * Satırları hammaddeye göre toplar. Her satır: {material, kg, bars, scrapKg, qty, pendingKg?}. Bilinmeyen (null) değerler toplama katılmaz;
  * kaç satırda bilinmediği `unknownKg` ile ayrıca verilir.
  * @returns {{material: string, key: string, orders: number, qty: number, kg: number, bars: number, scrapKg: number, pendingKg: number, unknownKg: number}[]} kg'a göre azalan

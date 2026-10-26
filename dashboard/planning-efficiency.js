@@ -13,7 +13,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { cellText, fmtNum, fmtDec, dateText, dateTimeText, chip, put, RANGE_PRESETS } from './planning-common.js';
+import { cellText, fmtNum, fmtDec, dateText, dateTimeText, chip, put, truncCell, RANGE_PRESETS } from './planning-common.js';
 
 const pct = (v) => (v == null ? '<span class="is-null">—</span>' : `${fmtDec(v * 100, 1)}%`);
 const hours = (sec) => (sec == null ? '<span class="is-null">—</span>' : fmtDec(sec / 3600, 1));
@@ -58,7 +58,7 @@ export async function renderEfficiency(host) {
     }
     $('controls').innerHTML =
       '<div class="pl-bar">' +
-      RANGE_PRESETS.map((p) => `<button type="button" class="icon-btn${st.preset === p.key ? ' is-on' : ''}" data-preset="${p.key}">${p.label}</button>`).join('') +
+      '<div class="seg" role="group" aria-label="Tarih aralığı">' + RANGE_PRESETS.map((p) => `<button type="button" data-preset="${p.key}" class="${st.preset === p.key ? 'is-on' : ''}">${p.label}</button>`).join('') + '</div>' +
       `<label class="fld-inline">Başlangıç <input type="date" data-role="from" value="${escapeHtml(st.from)}"></label>` +
       `<label class="fld-inline">Bitiş <input type="date" data-role="to" value="${escapeHtml(st.to)}"></label>` +
       `<label class="fld-inline">Tezgah <select data-role="machine"><option value="">Tümü</option>${st.machines.map((m) => `<option value="${escapeHtml(m.id)}"${st.machine === m.id ? ' selected' : ''}>${escapeHtml(m.id)}</option>`).join('')}</select></label>` +
@@ -67,8 +67,9 @@ export async function renderEfficiency(host) {
 
   const tile = (label, value, sub = '', hero = false) => `<div class="pl-kpi${hero ? ' is-hero' : ''}"><span class="pl-kpi-l">${label}</span><span class="pl-kpi-v">${value}</span>${sub ? `<small class="hint">${sub}</small>` : ''}</div>`;
   const warnings = (list) => (list.length ? `<ul class="checks">${list.map((w) => `<li class="check check-warn"><span class="check-ic" aria-hidden="true">▲</span><div>${escapeHtml(w)}</div></li>`).join('')}</ul>` : '');
-  const explain = '<p class="hint"><b>Verimlilik</b> = kazanılan süre ÷ ayrılan süre (kazanılan = adet × planlanan çevrim; ayrılan = iş emrinin vardiyadaki süresi). Toplamlar süre ağırlıklıdır. ' +
-    '<b>A</b> = çalışma süresi ÷ ölçülen süre, <b>P</b> = planlanan ÷ ölçülen çevrim; verimlilik ≈ A × P (yaklaşık). Kalite (fire) ölçülmez.</p>';
+  const explain = '<details class="grp"><summary>Nasıl hesaplanır?</summary><div class="grp-body"><p class="hint">' +
+    '<b>Verimlilik</b> = kazanılan süre ÷ ayrılan süre (kazanılan = adet × planlanan çevrim; ayrılan = iş emrinin vardiyadaki süresi). Toplamlar süre ağırlıklıdır. ' +
+    '<b>A</b> = çalışma süresi ÷ ölçülen süre, <b>P</b> = planlanan ÷ ölçülen çevrim; verimlilik ≈ A × P (yaklaşık). Kalite (fire) ölçülmez.</p></div></details>';
 
   /* ---------------------------------------------------------------- özet */
   function ozet() {
@@ -82,7 +83,7 @@ export async function renderEfficiency(host) {
       warnings(d.warnings) +
       (d.atRisk.length
         ? '<h4 class="sub">Termin riski olan iş emirleri</h4><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Tezgah</th><th>Ürün</th><th class="num">Kalan</th><th>Termin</th><th>Tahmini bitiş</th></tr></thead><tbody>' +
-          d.atRisk.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="num">${fmtNum(r.remaining)}</td><td>${dateText(r.dueDate)}</td><td>${escapeHtml(dateTimeText(r.etaMs))} ${chip('bad', '▲', 'termin riski')}</td></tr>`).join('') + '</tbody></table></div>'
+          d.atRisk.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="num">${fmtNum(r.remaining)}</td><td>${dateText(r.dueDate)}</td><td>${escapeHtml(dateTimeText(r.etaMs))} ${chip('bad', '▲', 'termin riski')}</td></tr>`).join('') + '</tbody></table></div>'
         : '') +
       '<h4 class="sub">Tezgah bazında</h4>' +
       '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Tezgah</th><th class="num">Ayrılan (sa)</th><th class="num">Adet</th><th>Verimlilik</th><th class="num">A</th><th class="num">P</th><th class="num">Brüt (kg)</th><th class="num">Net (kg)</th><th class="num">Talaş (kg)</th></tr></thead><tbody>' +
@@ -91,7 +92,7 @@ export async function renderEfficiency(host) {
       (d.products.length === 0 ? '<p class="empty">Bu aralıkta üretim yok.</p>' :
         '<p class="hint">Gerçekleşen = ayrılan süre ÷ adet (duruş ve yükleme kaybı dahil); ölçülen çevrim kontrolcü sayacıdır. Verimlilik %105\'in üstündeyse planlanan süre fazla temkinli olabilir: öneri çıkar (otomatik değişmez).</p>' +
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Ürün</th><th class="num">Ayrılan (sa)</th><th class="num">Adet</th><th class="num">Planlanan (sn)</th><th class="num">Ölçülen çevrim (sn)</th><th class="num">Gerçekleşen (sn)</th><th>Verimlilik</th><th class="num">A</th><th class="num">P</th><th></th></tr></thead><tbody>' +
-        d.products.map((p) => `<tr><td><span class="mono"><b>${escapeHtml(p.stockCode)}</b></span> ${cellText(p.productName)}</td><td class="num">${hours(p.allottedSec)}</td><td class="num">${fmtNum(p.qty)}</td><td class="num">${p.plannedSec == null ? cellText(null) : fmtDec(p.plannedSec, 1)}</td>` +
+        d.products.map((p) => `<tr><td class="trunc"${truncCell(p.productName)}><span class="mono"><b>${escapeHtml(p.stockCode)}</b></span> ${cellText(p.productName)}</td><td class="num">${hours(p.allottedSec)}</td><td class="num">${fmtNum(p.qty)}</td><td class="num">${p.plannedSec == null ? cellText(null) : fmtDec(p.plannedSec, 1)}</td>` +
           `<td class="num">${p.measuredCycleSec == null ? cellText(null) : fmtDec(p.measuredCycleSec, 1)}</td><td class="num">${p.realizedSec == null ? cellText(null) : fmtDec(p.realizedSec, 1)}</td><td>${effCell(p.efficiency)}</td><td class="num">${pct(p.availability)}</td><td class="num">${pct(p.performance)}</td>` +
           `<td class="nowrap">${p.suggestion ? `<button type="button" class="icon-btn icon-btn-sm" data-act="suggest" data-code="${escapeHtml(p.stockCode)}" data-sec="${p.suggestion.plannedSec}">Planlanan süreyi ${fmtDec(p.suggestion.plannedSec, 1)} sn yap…</button>` : ''}</td></tr>`).join('') + '</tbody></table></div>') +
       '<h4 class="sub">Gün bazında (tüm tezgahlar)</h4>' +
@@ -138,7 +139,7 @@ export async function renderEfficiency(host) {
         const eff = planned ? (x.qty * planned) / x.allottedSec : null;
         const avail = x.observedSec > 0 ? x.runningSec / x.observedSec : null;
         const perf = planned && x.cycleSum > 0 ? (planned * x.cycleN) / x.cycleSum : null;
-        return `<tr><td>${escapeHtml(dayText(x.date))}</td><td>${escapeHtml(x.label)}</td><td class="mono">${escapeHtml(x.machineId)}</td><td class="mono">${escapeHtml(x.woNo)}</td><td><span class="mono">${escapeHtml(x.stockCode)}</span> ${cellText(x.productName)}</td>` +
+        return `<tr><td>${escapeHtml(dayText(x.date))}</td><td>${escapeHtml(x.label)}</td><td class="mono">${escapeHtml(x.machineId)}</td><td class="mono">${escapeHtml(x.woNo)}</td><td class="trunc"${truncCell(x.productName)}><span class="mono">${escapeHtml(x.stockCode)}</span> ${cellText(x.productName)}</td>` +
           `<td class="num">${hours(x.allottedSec)}</td><td class="num">${planned == null ? cellText(null) : fmtDec(planned, 1)}</td><td class="num">${planned ? fmtNum(Math.round(x.allottedSec / planned)) : cellText(null)}</td><td class="num"><b>${fmtNum(x.qty)}</b>${x.approxQty ? ' *' : ''}</td>` +
           `<td>${effCell(eff)}</td><td class="num">${pct(avail)}</td><td class="num">${pct(perf)}</td>` +
           `<td class="num">${x.grossKg == null ? cellText(null) : kgText(x.qty * x.grossKg)}</td><td class="num">${x.netKg == null ? cellText(null) : kgText(x.qty * x.netKg)}</td><td class="num">${x.grossKg == null || x.netKg == null ? cellText(null) : kgText(x.qty * (x.grossKg - x.netKg))}</td></tr>`;
@@ -164,7 +165,7 @@ export async function renderEfficiency(host) {
       '<h4 class="sub">Neden koduna göre</h4>' +
       (d.codes.length === 0 ? '<p class="empty">Bu aralıkta nedeni girilmiş duruş yok.</p>' :
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Kod</th><th>Duruş nedeni</th><th class="num">Dakika</th><th>Pay</th></tr></thead><tbody>' +
-        d.codes.map((c) => `<tr><td class="mono"><b>${escapeHtml(c.code)}</b></td><td>${escapeHtml(c.name)}${c.kind === 'Z' ? ` ${chip('info', 'ℹ', 'devir düşüklüğü')}` : ''}</td><td class="num">${fmtDec(c.minutes, 0)}</td><td><span class="eff-cell"><span class="eff-num">${totalMin > 0 ? fmtDec((c.minutes / totalMin) * 100, 1) : '0'}%</span><span class="eff-bar"><i style="width:${totalMin > 0 ? (c.minutes / totalMin) * 100 : 0}%"></i></span></span></td></tr>`).join('') + '</tbody></table></div>') +
+        d.codes.map((c) => `<tr><td class="mono"><b>${escapeHtml(c.code)}</b></td><td class="trunc" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}${c.kind === 'Z' ? ` ${chip('info', 'ℹ', 'devir düşüklüğü')}` : ''}</td><td class="num">${fmtDec(c.minutes, 0)}</td><td><span class="eff-cell"><span class="eff-num">${totalMin > 0 ? fmtDec((c.minutes / totalMin) * 100, 1) : '0'}%</span><span class="eff-bar"><i style="width:${totalMin > 0 ? (c.minutes / totalMin) * 100 : 0}%"></i></span></span></td></tr>`).join('') + '</tbody></table></div>') +
       '<h4 class="sub">Tezgah bazında</h4>' +
       '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Tezgah</th><th class="num">Ölçülen (dk)</th><th class="num">Nedeni girilen (dk)</th><th class="num">Belirsiz (dk)</th><th class="num">Kapsama</th></tr></thead><tbody>' +
       d.machines.map((m) => `<tr><td class="mono"><b>${escapeHtml(m.machineId)}</b></td><td class="num">${fmtDec(m.stopMin, 0)}</td><td class="num">${fmtDec(m.reasonMin, 0)}</td><td class="num">${m.unknownMin > 0 ? `<b>${fmtDec(m.unknownMin, 0)}</b>` : '0'}</td><td class="num">${pct(m.coverage)}</td></tr>`).join('') + '</tbody></table></div>' +
@@ -175,7 +176,7 @@ export async function renderEfficiency(host) {
           const vals = days.map((x) => cell.get(`${code}|${x}`) ?? null);
           const sum = vals.reduce((a, v) => a + (v ?? 0), 0);
           if (sum === 0) return '';
-          return `<tr><td class="mono"><b>${escapeHtml(code)}</b></td><td>${escapeHtml(name)}</td>${vals.map((v) => `<td class="num">${v == null ? '<span class="is-null">·</span>' : fmtDec(v, 0)}</td>`).join('')}<td class="num"><b>${fmtDec(sum, 0)}</b></td></tr>`;
+          return `<tr><td class="mono"><b>${escapeHtml(code)}</b></td><td class="trunc" title="${escapeHtml(name)}">${escapeHtml(name)}</td>${vals.map((v) => `<td class="num">${v == null ? '<span class="is-null">·</span>' : fmtDec(v, 0)}</td>`).join('')}<td class="num"><b>${fmtDec(sum, 0)}</b></td></tr>`;
         }).join('') + '</tbody></table></div>')
     );
   }

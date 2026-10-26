@@ -77,6 +77,22 @@ CREATE TABLE IF NOT EXISTS wo_drawings (
   added_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wo_drawings_wo ON wo_drawings (wo_no, sort);
+
+-- URUN seviyesinde dosyalar (urun karti): teknik resim PDF'leri ('cizim') ve kutu etiketi Word dosyalari ('etiket'). Icerik drawing_files'ta
+-- (icerik adresli, ayni dosya bir kez saklanir; PDF olmayanlarda pages = 0). Yeni is emri urunun resimlerini bunlardan devralir.
+CREATE TABLE IF NOT EXISTS product_files (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  code_key TEXT    NOT NULL,
+  kind     TEXT    NOT NULL,
+  name     TEXT    NOT NULL,
+  sha      TEXT    NOT NULL,
+  sort     INTEGER NOT NULL,
+  source   TEXT    NOT NULL,
+  rel_path TEXT,
+  added_at INTEGER NOT NULL,
+  added_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_product_files_code ON product_files (code_key, kind, sort);
 `;
 
 const likeEscape = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -247,9 +263,70 @@ export class QualityDb {
     const d = this.drawingGet(id);
     if (!d) return false;
     this.db.prepare('DELETE FROM wo_drawings WHERE id = ?').run(id);
-    // başka hiçbir iş emri kullanmıyorsa dosya içeriği de silinir
-    if (Number(this.db.prepare('SELECT COUNT(*) AS n FROM wo_drawings WHERE sha = ?').get(d.sha).n) === 0) this.db.prepare('DELETE FROM drawing_files WHERE sha = ?').run(d.sha);
+    this.#dropFileIfUnused(d.sha); // başka hiçbir iş emri / ürün kullanmıyorsa dosya içeriği de silinir
     return true;
+  }
+
+  #dropFileIfUnused(sha) {
+    const used = Number(this.db.prepare('SELECT (SELECT COUNT(*) FROM wo_drawings WHERE sha = ?) + (SELECT COUNT(*) FROM product_files WHERE sha = ?) AS n').get(sha, sha).n);
+    if (used === 0) this.db.prepare('DELETE FROM drawing_files WHERE sha = ?').run(sha);
+  }
+
+  /* ---------------------------------------------------------- urun dosyalari (cizim / etiket) */
+
+  /** @param {string} codeKey @param {'cizim'|'etiket'|null} [kind] */
+  productFiles(codeKey, kind = null) {
+    return this.db.prepare(
+      `SELECT p.id, p.kind, p.name, p.sha, p.sort, p.source, p.rel_path, p.added_at, p.added_by, f.size, f.pages
+         FROM product_files p JOIN drawing_files f ON f.sha = p.sha WHERE p.code_key = ? ${kind ? 'AND p.kind = ?' : ''} ORDER BY p.kind, p.sort, p.id`,
+    ).all(...(kind ? [codeKey, kind] : [codeKey])).map((r) => ({
+      id: Number(r.id), kind: r.kind, name: r.name, sha: r.sha, sort: Number(r.sort), source: r.source, relPath: r.rel_path, size: Number(r.size), pages: Number(r.pages),
+      addedAt: Number(r.added_at), addedBy: r.added_by,
+    }));
+  }
+
+  productFileGet(id) {
+    const r = this.db.prepare('SELECT p.*, f.data FROM product_files p JOIN drawing_files f ON f.sha = p.sha WHERE p.id = ?').get(id);
+    return r ? { id: Number(r.id), codeKey: r.code_key, kind: r.kind, name: r.name, sha: r.sha, data: Buffer.from(r.data) } : null;
+  }
+
+  addProductFile(codeKey, kind, { name, sha, size, pages, data, source, relPath = null }, { by = null, now = Date.now() } = {}) {
+    this.db.prepare('INSERT OR IGNORE INTO drawing_files (sha, size, pages, data, created_at) VALUES (?,?,?,?,?)').run(sha, size, pages, data, now);
+    const sort = Number(this.db.prepare('SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM product_files WHERE code_key = ? AND kind = ?').get(codeKey, kind).s);
+    return Number(this.db.prepare('INSERT INTO product_files (code_key, kind, name, sha, sort, source, rel_path, added_at, added_by) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(codeKey, kind, name, sha, sort, source, relPath, now, by).lastInsertRowid);
+  }
+
+  deleteProductFile(id) {
+    const r = this.db.prepare('SELECT sha FROM product_files WHERE id = ?').get(id);
+    if (!r) return false;
+    this.db.prepare('DELETE FROM product_files WHERE id = ?').run(id);
+    this.#dropFileIfUnused(r.sha);
+    return true;
+  }
+
+  /** Urun kartlari icin dosya sayilari. @param {string[]} codeKeys @returns {Map<string, {cizim: number, etiket: number}>} */
+  productFileCounts(codeKeys) {
+    const out = new Map(codeKeys.map((k) => [k, { cizim: 0, etiket: 0 }]));
+    if (codeKeys.length === 0) return out;
+    const rows = this.db.prepare(`SELECT code_key, kind, COUNT(*) AS n FROM product_files WHERE code_key IN (${codeKeys.map(() => '?').join(',')}) GROUP BY code_key, kind`).all(...codeKeys);
+    for (const r of rows) out.get(r.code_key)[r.kind] = Number(r.n);
+    return out;
+  }
+
+  /** Urunun teknik resmi var mi: urun seviyesinde ya da herhangi bir is emrine yuklenmis (elle yuklenen eski resimler de sayilir). */
+  hasAnyDrawing(codeKey) {
+    return this.db.prepare(
+      `SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM product_files WHERE code_key = ? AND kind = 'cizim')
+          OR EXISTS (SELECT 1 FROM wo_drawings d JOIN work_orders w ON w.no = d.wo_no WHERE w.code_key = ?)`,
+    ).get(codeKey, codeKey) !== undefined;
+  }
+
+  /** Urunun resimsiz, henuz bitmemis (planlandi / uretimde) is emirleri. */
+  openOrdersWithoutDrawings(codeKey) {
+    return this.db.prepare(
+      `SELECT no FROM work_orders WHERE code_key = ? AND status IN ('planlandi','uretimde') AND NOT EXISTS (SELECT 1 FROM wo_drawings d WHERE d.wo_no = work_orders.no) ORDER BY no`,
+    ).all(codeKey).map((r) => r.no);
   }
 
   /** En son çizimi olan, aynı ürünün başka iş emri: yeni iş emrine çizimler bağlanır (dosya kopyalanmaz). @returns {{name: string, sha: string}[]} */

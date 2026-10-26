@@ -258,6 +258,8 @@ export function cratesHtml(w) {
         `<tbody>${rows}</tbody></table>` +
         `<p class="hint">${fmtNum(t.count)} kart · sayılan ~${fmtNum(t.counted)}${packing ? ` · paketlenen ${fmtNum(t.packed)}${t.unpacked > 0 ? ` · <b>${t.unpacked} kasa paketleme bekliyor</b>` : ''}` : ''}${t.rejected > 0 ? ` · <b>${t.rejected} kasa RET</b> (paketlemeye gitmedi)` : ''}` +
         `${t.unassigned != null && t.unassigned > 0 ? ` · kasaya atanmayan ~${fmtNum(t.unassigned)} adet (henüz kart basılmamış)` : ''}</p>`) +
+    (packing && w.packing?.rows > 0
+      ? `<p class="hint"><b>Paketleme formu:</b> ${fmtNum(w.packing.rows)} satır · ${fmtNum(w.packing.boxes)} koli · <b>${fmtNum(w.packing.pieces)}</b> adet${w.packing.scrap > 0 ? ` · hurda ${fmtNum(w.packing.scrap)}` : ''}</p>` : '') +
     '</section>'
   );
 }

@@ -87,15 +87,6 @@ export const FIELD_GROUPS = Object.freeze([
     ],
   },
   {
-    title: 'İş mili ve ilerleme',
-    fields: [
-      { key: 'spindleRpm', label: 'Mil devri', unit: 'rpm', fmt: (v) => num(v) },
-      { key: 'feedRate', label: 'İlerleme', unit: 'mm/dk', fmt: (v) => num(v) },
-      { key: 'spindleOverridePct', label: 'Mil override', unit: '%', fmt: (v) => num(v) },
-      { key: 'feedOverridePct', label: 'İlerleme override', unit: '%', fmt: (v) => num(v) },
-    ],
-  },
-  {
     title: 'Parça',
     fields: [
       { key: 'partCount', label: 'Bu partide', fmt: (v) => num(v) },

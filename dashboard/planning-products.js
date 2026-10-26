@@ -4,11 +4,14 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, cellText, fmtNum, gramText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip } from './planning-common.js';
+import { put, del, cellText, fmtNum, gramText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip, sizeText, isAdminRole, truncCell } from './planning-common.js';
 import { openMeasurePlanDialog } from './planning-measure.js';
 
 const PAGE = 100;
 const SOURCE = Object.freeze({ elle: 'elle', 'csv-isemri': 'iş emri CSV', 'csv-siparis': 'sipariş CSV' });
+
+/** Klasörden eşlenen dosyanın geldiği klasörün adı (etiketler müşteri klasörlerinde durur); kök dizindeyse boş. */
+const folderOf = (rel) => { const parts = String(rel ?? '').split(/[\\/]/); return parts.length > 1 ? parts[parts.length - 2] : ''; };
 
 /** Kalıcı ölçü planının tek satırlık özeti: ürüne göre 3, 5 ... ölçü. */
 const planSummary = (plan) => (plan?.length
@@ -33,14 +36,17 @@ export function renderProducts(host) {
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>Stok kodu</th><th>Ürün adı</th><th>Müşteri kodu</th><th>Hammadde</th>' +
       '<th class="num">Tam boy (mm)</th><th class="num">Net (g)</th><th class="num">Brüt (g)</th><th class="num">Planlanan (sn)</th>' +
-      '<th class="num">Ölçü</th><th class="num">Program</th><th>Kaynak</th></tr></thead><tbody>' +
+      '<th class="num" title="Koli içi adet (standart)">Koli içi</th><th class="num">Ölçü</th><th class="num">Program</th><th class="num" title="Ürün kartına bağlı teknik resim dosyası">Resim</th><th class="num" title="Ürün kartına bağlı kutu etiketi dosyası">Etiket</th><th>Kaynak</th></tr></thead><tbody>' +
       st.items.map((p) =>
         `<tr class="pl-row" data-code="${escapeHtml(p.stockCode)}" tabindex="0">` +
-        `<td class="mono"><b>${escapeHtml(p.stockCode)}</b></td><td>${cellText(p.name)}</td><td class="mono">${cellText(p.customerCode)}</td>` +
-        `<td class="mono">${cellText(p.material)}</td><td class="num">${fmtNum(p.lengthMm, 1)}</td><td class="num">${gramText(p.netKg)}</td>` +
+        `<td class="mono"><b>${escapeHtml(p.stockCode)}</b></td><td class="trunc"${truncCell(p.name)}>${cellText(p.name)}</td><td class="mono">${cellText(p.customerCode)}</td>` +
+        `<td class="mono trunc"${truncCell(p.material)}>${cellText(p.material)}</td><td class="num">${fmtNum(p.lengthMm, 1)}</td><td class="num">${gramText(p.netKg)}</td>` +
         `<td class="num">${gramText(p.grossKg)}</td><td class="num">${fmtNum(p.plannedSec, 1)}</td>` +
+        `<td class="num">${p.boxQty ? fmtNum(p.boxQty) : '<span class="is-null" title="Henüz paketlenmedi: ilk koli kaydedilince öğrenilir">—</span>'}</td>` +
         `<td class="num">${p.measurePlan?.length > 0 ? fmtNum(p.measurePlan.length) : '<span class="is-null" title="Kalıcı ölçü planı tanımlı değil">—</span>'}</td>` +
         `<td class="num">${p.programCount > 0 ? fmtNum(p.programCount) : '<span class="is-null" title="Hiçbir program bu ürüne eşlenmemiş">—</span>'}</td>` +
+        `<td class="num">${p.drawingCount > 0 ? fmtNum(p.drawingCount) : '<span class="is-null" title="Ürün kartına bağlı teknik resim yok">—</span>'}</td>` +
+        `<td class="num">${p.stickerCount > 0 ? fmtNum(p.stickerCount) : '<span class="is-null" title="Ürün kartına bağlı etiket dosyası yok">—</span>'}</td>` +
         `<td>${p.edited ? chip('info', '✎', 'elle') : `<span class="hint" style="margin:0">${escapeHtml(SOURCE[p.source] ?? p.source)}</span>`}</td></tr>`).join('') +
       '</tbody></table>';
     $('more').hidden = st.items.length >= st.total;
@@ -109,12 +115,14 @@ export async function openProductDialog(code, onSaved = () => {}) {
     field('netG', 'Net ağırlık (gram)', g(p?.netKg), ' inputmode="decimal"') +
     field('grossG', 'Brüt ağırlık (gram)', g(p?.grossKg), ' inputmode="decimal"') +
     field('plannedSec', 'Planlanan çevrim (sn)', v(p?.plannedSec), ' inputmode="decimal"') +
-    '</div><p class="hint" data-role="dara"></p>' +
+    field('boxQty', 'Koli içi adet (standart)', v(p?.boxQty), ' inputmode="numeric" placeholder="ilk koliden öğrenilir"') +
+    '</div><p class="hint">Koli içi adet: paketleme ilk koliyi kaydedince burası kendiliğinden dolar ve bir sonraki paketlemede öneri olarak gelir; buradan değiştirebilirsiniz.</p><p class="hint" data-role="dara"></p>' +
     `<label class="fld"><span>Not</span><input name="note" value="${escapeHtml(p?.note ?? '')}" maxlength="500" autocomplete="off"></label>` +
     (p ? `<p class="hint">Kaynak: ${escapeHtml(SOURCE[p.source] ?? p.source)} · son güncelleme ${escapeHtml(dateTimeText(p.updatedAt))}${p.updatedBy ? ` · ${escapeHtml(p.updatedBy)}` : ''}</p>` : '') +
     (p ? '<h4 class="sub">Ölçü satırları (ölçü kontrol föyü)</h4>' +
       `<p class="hint" data-role="plan-summary">${planSummary(p.measurePlan)}</p>` +
       '<button type="button" class="icon-btn" data-act="measure-plan">Ölçü satırlarını tanımla / düzenle…</button>' : '') +
+    (p ? '<h4 class="sub">Dosyalar: teknik resim ve etiket</h4><div data-role="files"></div>' : '') +
     (p ? `<h4 class="sub">Bu ürünü üreten programlar</h4>${p.programs.length === 0
       ? '<p class="empty">Hiçbir program bu ürüne eşlenmemiş (Program eşleme sekmesinden bağlanır).</p>'
       : `<p>${p.programs.map((x) => `<span class="chip chip-none mono">${escapeHtml(x.name)}</span>`).join(' ')}</p>`}` : '') +
@@ -122,6 +130,34 @@ export async function openProductDialog(code, onSaved = () => {}) {
     `<div class="dt-actions"><button type="submit" class="icon-btn btn-primary">${isNew ? 'Ürünü ekle' : 'Kaydet'}</button></div></form>`;
 
   const form = m.body.querySelector('form');
+  /** Ürün kartına bağlı dosyalar (klasörden eşlenen ya da elle eklenen); yönetici kaldırabilir. */
+  const drawFiles = () => {
+    const box = m.body.querySelector('[data-role="files"]');
+    if (!box || !p) return;
+    const KIND_LABEL = { cizim: 'Teknik resim', etiket: 'Etiket' };
+    box.innerHTML = p.files.length === 0
+      ? '<p class="empty">Bu ürün kartına bağlı dosya yok. Teknik resimler ve etiketler klasörden eşlenir (Ürün kartları › "Teknik resimleri eşle…" / "Etiketleri eşle…").</p>'
+      : `<ul class="pl-list">${p.files.map((f) => `<li>${escapeHtml(KIND_LABEL[f.kind] ?? f.kind)}: <a href="/api/planning/product-files/${f.id}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a> ` +
+        `<small class="hint">${f.kind === 'cizim' ? `${f.pages} sayfa · ` : ''}${escapeHtml(sizeText(f.size))} · ${f.source === 'klasor' ? `klasörden${folderOf(f.relPath) ? `: ${escapeHtml(folderOf(f.relPath))}` : ''}` : 'elle'}</small>` +
+        `${isAdminRole() ? ` <button type="button" class="icon-btn icon-btn-sm" data-act="pf-del" data-id="${f.id}">Kaldır</button>` : ''}</li>`).join('')}</ul>`;
+  };
+  drawFiles();
+  m.body.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-act="pf-del"]');
+    if (!b) return;
+    const f = p.files.find((x) => x.id === Number(b.dataset.id));
+    if (!window.confirm(`${f?.name ?? 'Bu dosya'} ürün kartından kaldırılsın mı? (Bu dosyayı zaten almış iş emirleri etkilenmez.)`)) return;
+    try {
+      await del(`/api/planning/product-files/${b.dataset.id}`);
+      p = await api(`/api/planning/products/${encodeURIComponent(code)}`);
+      drawFiles();
+      onSaved();
+    } catch (e) {
+      const err = m.body.querySelector('[data-role="err"]');
+      err.textContent = e.message;
+      err.hidden = false;
+    }
+  });
   form.querySelector('[data-act="measure-plan"]')?.addEventListener('click', () => {
     openMeasurePlanDialog({ stockCode: p.stockCode }, async () => {
       try {
@@ -150,7 +186,7 @@ export async function openProductDialog(code, onSaved = () => {}) {
     const body = {
       name: form.elements.name.value, customerCode: form.customerCode.value, material: form.material.value, altMaterial: form.altMaterial.value,
       lengthMm: parseInput(form.lengthMm.value), netKg: gramToKg(parseInput(form.netG.value)), grossKg: gramToKg(parseInput(form.grossG.value)),
-      plannedSec: parseInput(form.plannedSec.value), note: form.note.value,
+      plannedSec: parseInput(form.plannedSec.value), note: form.note.value, boxQty: parseInput(form.boxQty.value),
     };
     try {
       if (isNew) await post('/api/planning/products', { stockCode: form.stockCode.value.trim(), ...body });

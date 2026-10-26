@@ -23,6 +23,8 @@ export const fmtNum = (v, digits = 0) => (v === null || v === undefined ? DASH :
 export const gramText = (kg) => (kg === null || kg === undefined ? DASH : nf(2).format(kg * 1000));
 export const dateText = (ms) => (ms === null || ms === undefined ? DASH : escapeHtml(new Date(ms).toLocaleDateString('tr-TR')));
 export const dateTimeText = (ms) => (ms ? new Date(ms).toLocaleString('tr-TR', { hour12: false }) : '—');
+/** Uzun metinli hucre: `class="trunc"` ile birlikte kullanilir (tek satirda kirpilir), tam metin `title` ile gelir. */
+export const truncCell = (text) => (text ? ` title="${escapeHtml(text)}"` : '');
 
 /** Gram/ondalik metni (virgul ya da nokta) sayiya; bos null; cozulemezse metin aynen (sunucu anlasilir hata versin). */
 export function parseInput(value) {

@@ -1,5 +1,6 @@
 /**
- * Planlama > Paketleme: kasa kapandıktan sonra paketlemede belli bir adetle paketlenen KESİN adedin girilmesi (K aşaması).
+ * Planlama > Paketleme: iki görünüm — PAKETLEME FORMU (EYS.FR.007, ürün koduyla vardiya sayfası; planning-packing-form.js, varsayılan) ve KASALAR (kart numarasıyla
+ * kesin adet girişi, aşağıda). Kasalar görünümü: kasa kapandıktan sonra paketlemede belli bir adetle paketlenen KESİN adedin girilmesi (K aşaması).
  *
  * Kasa dolarken adet bilinmez; kapanışta tezgah sayacından hesaplanan adet yalnız TAHMİNDİR. Burada girilen adet kesindir ve
  * iş emrinin paketlenen toplamına yazılır; sayılan ile paketlenen arasındaki fark gizlenmez. Büyük dokunmatik alanlar (fabrika PC'si / tablet).
@@ -7,10 +8,11 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { cellText, fmtNum, dateTimeText, rememberedPerson, rememberPerson } from './planning-common.js';
+import { cellText, fmtNum, dateTimeText, rememberedPerson, rememberPerson, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
 import { openCrateCard, crateStateChip, stepsCell } from './planning-card.js';
 import { openMeasureSheet } from './planning-measure.js';
+import { renderPackingForm } from './planning-packing-form.js';
 
 const REFRESH_MS = 20_000;
 const FILTERS = Object.freeze([
@@ -21,8 +23,24 @@ const FILTERS = Object.freeze([
 ]);
 const sign = (n) => (n > 0 ? `+${fmtNum(n)}` : fmtNum(n));
 
-/** @param {HTMLElement} host */
+/** Paketleme sekmesi: "Paketleme formu" (varsayılan) ve "Kasalar (kart no ile)" görünümleri arasında geçiş. @param {HTMLElement} host */
 export async function renderPacking(host) {
+  host.innerHTML =
+    '<div class="seg pl-tabs" role="group" aria-label="Paketleme görünümü" data-role="views">' +
+    '<button type="button" data-view="form">Paketleme formu</button><button type="button" data-view="kasa">Kasalar (kart no ile)</button></div><div data-role="slot"></div>';
+  const show = (view) => {
+    for (const b of host.querySelectorAll('[data-view]')) { const on = b.dataset.view === view; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(on)); }
+    // her gecis TAZE bir kap: eski gorunumun zamanlayicisi kapsiz kalinca kendiliginden durur
+    const body = document.createElement('div');
+    host.querySelector('[data-role="slot"]').replaceChildren(body);
+    return view === 'form' ? renderPackingForm(body) : renderCrates(body);
+  };
+  host.querySelector('[data-role="views"]').addEventListener('click', (ev) => { const b = ev.target.closest('[data-view]'); if (b) show(b.dataset.view); });
+  await show('form');
+}
+
+/** @param {HTMLElement} host */
+async function renderCrates(host) {
   const token = Symbol('packing');
   host.__packToken = token;
   const st = { state: 'kapali', items: [], total: 0, seq: 0 };
@@ -49,7 +67,7 @@ export async function renderPacking(host) {
       st.items.map((k) => {
         const canPack = k.state === 'kapali' || k.state === 'paketlendi';
         return `<tr data-id="${k.id}"><td class="mono"><b>${escapeHtml(k.cardNo)}</b></td><td class="mono">${escapeHtml(k.woNo)}</td>` +
-          `<td><span class="mono">${escapeHtml(k.stockCode ?? '')}</span> ${cellText(k.productName)}</td><td class="mono">${escapeHtml(k.machineId)}</td>` +
+          `<td class="trunc"${truncCell(k.productName)}><span class="mono">${escapeHtml(k.stockCode ?? '')}</span> ${cellText(k.productName)}</td><td class="mono">${escapeHtml(k.machineId)}</td>` +
           `<td>${k.closedAt ? escapeHtml(dateTimeText(k.closedAt)) : '<span class="is-null">açık</span>'}</td><td class="num">${k.countedQty == null ? cellText(null) : `~${fmtNum(k.countedQty)}`}</td>` +
           `<td class="nowrap">${canPack
             ? `<input class="pack-qty" inputmode="numeric" autocomplete="off" aria-label="${escapeHtml(k.cardNo)} paketlenen adet" value="${k.packedQty ?? ''}" placeholder="adet"> ` +

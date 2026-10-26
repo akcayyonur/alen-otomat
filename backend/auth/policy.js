@@ -49,6 +49,11 @@ const OPERATOR_PLANNING = Object.freeze([
   ['POST', /^\/api\/planning\/crates\/\d{1,12}\/(?:close|pack|void)$/],
   // program eslemesi: hangi torna programi hangi urunu uretiyor (ustalar bilir). Okuma + esle / kaldir / birebir onerileri onayla; urun karti DEGIL,
   // yalniz dar urun aramasi (stok kodu, ad, musteri kodu) acilir
+  // paketleme formu (EYS.FR.007): vardiya sayfasi, hava basinci, satir ekle/duzelt/iptal, koli ici adet onerisi; urun kartindaki dosyayi (etiket) acma.
+  // Klasorleri ayarlama / eslestirme ve dosya kaldirma yoneticiye ozel.
+  ['GET', /^\/api\/planning\/packing\/(?:sheet|suggest)$/], ['PUT', /^\/api\/planning\/packing\/sheet\/air$/],
+  ['POST', /^\/api\/planning\/packing\/rows$/], ['PUT', /^\/api\/planning\/packing\/rows\/\d{1,12}$/],
+  ['DELETE', /^\/api\/planning\/packing\/rows\/\d{1,12}$/], ['GET', /^\/api\/planning\/product-files\/\d{1,12}$/],
   ['GET', /^\/api\/planning\/programs$/], ['GET', /^\/api\/planning\/programs\/product-search$/],
   ['PUT', /^\/api\/planning\/programs\/map$/], ['DELETE', /^\/api\/planning\/programs\/map$/], ['POST', /^\/api\/planning\/programs\/confirm-exact$/],
 ]);

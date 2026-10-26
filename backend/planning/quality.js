@@ -18,6 +18,10 @@ import { inspectPdf, mergePdfs, PdfError } from '../pdf-merge.js';
 /** Bir iş emrine en çok bu kadar çizim; her biri en çok bu kadar bayt. */
 export const MAX_DRAWINGS = 8;
 export const MAX_DRAWING_BYTES = 20 * 1024 * 1024;
+/** Urun seviyesinde: her tur icin en cok bu kadar dosya; etiket (Word) dosyasi en cok bu kadar bayt. */
+export const MAX_PRODUCT_FILES = 8;
+export const MAX_STICKER_BYTES = 10 * 1024 * 1024;
+const KIND_LABEL = Object.freeze({ cizim: 'teknik resim', etiket: 'etiket' });
 
 function text(value, label, max) {
   if (value === undefined || value === null) return null;
@@ -229,45 +233,50 @@ export class Quality {
   importGkk(parsed, { warn, now = Date.now(), by = null }) {
     const { records, freeNumbers, skipped } = readGkkSheet(parsed, warn);
     const tally = { added: 0, updated: 0, unchanged: 0 };
+    const changes = { added: [], updated: [] }; // ne degisti: en fazla 40'ar kayit (toplamlar tally'de)
+    const note = (kind, item) => { if (changes[kind].length < 40) changes[kind].push(item); };
     this.planning.db.tx(() => {
       for (const r of records) {
         const cur = this.db.gkkFind(compactKey(r.reportNo), compactKey(r.material));
         if (!cur) {
           this.db.gkkInsert({ reportNo: r.reportNo, year: r.year, seq: r.seq, material: r.material, producerDate: r.producerDate, note: r.note, sortNo: r.sortNo }, { by, now });
           tally.added += 1;
+          note('added', { reportNo: r.reportNo, material: r.material });
           continue;
         }
         // dosyadaki dolu değerler güncellenir; dosyada boş olan mevcut değeri silmez
         const next = { ...cur, producerDate: r.producerDate ?? cur.producerDate, note: r.note ?? cur.note, sortNo: r.sortNo ?? cur.sortNo };
         const changed = next.producerDate !== cur.producerDate || next.note !== cur.note || next.sortNo !== cur.sortNo;
-        if (changed) { this.db.gkkUpdate(cur.id, next, { by, now }); tally.updated += 1; } else tally.unchanged += 1;
+        if (changed) { this.db.gkkUpdate(cur.id, next, { by, now }); tally.updated += 1; note('updated', { reportNo: r.reportNo, material: r.material }); } else tally.unchanged += 1;
       }
     });
-    return { totalRows: records.length, skipped, freeNumbers, ...tally, next: this.gkkNext(now) };
+    return { totalRows: records.length, skipped, freeNumbers, ...tally, changes, next: this.gkkNext(now) };
   }
 
   /** FR.013 sayfası (ilk onay listesi). */
   importApprovals(parsed, { warn, now = Date.now(), by = null }) {
     const { records, firstBlank, skipped } = readApprovalSheet(parsed, warn);
     const tally = { added: 0, updated: 0, unchanged: 0 };
+    const changes = { added: [], updated: [] };
+    const note = (kind, item) => { if (changes[kind].length < 40) changes[kind].push(item); };
     const maxFilled = new Map();
     this.planning.db.tx(() => {
       for (const r of records) {
         maxFilled.set(r.year, Math.max(maxFilled.get(r.year) ?? 0, r.seq));
         const cur = this.db.approvalByCode(r.code);
-        if (!cur) { this.db.approvalInsert(r, { by, now }); tally.added += 1; continue; }
+        if (!cur) { this.db.approvalInsert(r, { by, now }); tally.added += 1; note('added', { code: r.code, stockCode: r.stockCode ?? null }); continue; }
         const next = {
           ...cur, stockCode: r.stockCode ?? cur.stockCode, gkCode: r.gkCode ?? cur.gkCode, woNo: r.woNo ?? cur.woNo, approvedOn: r.approvedOn ?? cur.approvedOn,
           operator: r.operator ?? cur.operator, machineId: r.machineId ?? cur.machineId,
         };
         const same = ['stockCode', 'gkCode', 'woNo', 'approvedOn', 'operator', 'machineId'].every((k) => (next[k] ?? null) === (cur[k] ?? null));
-        if (same) tally.unchanged += 1; else { this.db.approvalUpdate(cur.id, next, { by, now }); tally.updated += 1; }
+        if (same) tally.unchanged += 1; else { this.db.approvalUpdate(cur.id, next, { by, now }); tally.updated += 1; note('updated', { code: r.code, stockCode: next.stockCode ?? null }); }
       }
       // sıradaki numara: kullanılmış en büyük kod ile önceden basılmış ilk BOŞ kodun bir öncesi
       const years = new Set([...maxFilled.keys(), ...firstBlank.keys()]);
       for (const y of years) this.db.raiseFloor('ilkonay', y, Math.max(maxFilled.get(y) ?? 0, (firstBlank.get(y) ?? 1) - 1));
     });
-    return { totalRows: records.length, skipped, ...tally, next: this.approvalNext(now) };
+    return { totalRows: records.length, skipped, ...tally, changes, next: this.approvalNext(now) };
   }
 
   /* =============================================================== teknik resimler (PDF) */
@@ -309,9 +318,78 @@ export class Quality {
     return this.listDrawings(woNo);
   }
 
-  /** Aynı ürünün en son çizimli iş emrinin çizimlerini yeni iş emrine bağlar (dosya kopyalanmaz). */
+  /**
+   * Yeni iş emrine çizimleri bağlar (dosya kopyalanmaz): ürünün KENDİ teknik resimleri (ürün kartı / klasörden eşlenen) varsa onlar, yoksa aynı ürünün
+   * en son çizimli iş emrinin çizimleri.
+   */
   inheritDrawings(newNo, codeKey, { by = null, now = Date.now() } = {}) {
-    for (const d of this.db.drawingsOfLatestOrderOf(codeKey, newNo)) this.db.linkDrawing(newNo, d, { by, now });
+    const own = this.db.productFiles(codeKey, 'cizim').map(({ name, sha }) => ({ name, sha }));
+    for (const d of own.length > 0 ? own : this.db.drawingsOfLatestOrderOf(codeKey, newNo)) this.db.linkDrawing(newNo, d, { by, now });
+  }
+
+  /* ===================================================== urun dosyalari (teknik resim PDF + etiket Word) */
+
+  /** Ürün kartındaki dosyalar (içerik olmadan). @returns {{id: number, kind: string, name: string, size: number, pages: number, source: string, addedAt: number}[]} */
+  listProductFiles(codeKey) {
+    return this.db.productFiles(codeKey).map(({ sha, ...f }) => f);
+  }
+
+  /**
+   * Ürüne teknik resim (PDF) ya da etiket (Word .docx / .doc ya da PDF) ekler. Teknik resim PDF'i geçerli ve şifresiz olmalı; etiket dosyası ZIP (.docx), OLE (.doc) ya da PDF imzalı olmalı.
+   * Aynı içerik aynı ürüne iki kez eklenmez. @param {string} codeKey @param {'cizim'|'etiket'} kind
+   * @param {{name: string, data: Buffer, source?: 'klasor'|'elle', relPath?: string|null}} file
+   */
+  addProductFile(codeKey, kind, { name, data, source = 'elle', relPath = null }, { by = null, now = Date.now() } = {}) {
+    if (kind !== 'cizim' && kind !== 'etiket') throw new PlanningError('Dosya türü cizim ya da etiket olmalı.');
+    if (!this.planning.db.getProduct(codeKey)) throw new PlanningError('Ürün kartı bulunamadı.', 404);
+    if (!Buffer.isBuffer(data) || data.length === 0) throw new PlanningError('Dosya boş.');
+    const have = this.db.productFiles(codeKey, kind);
+    if (have.length >= MAX_PRODUCT_FILES) throw new PlanningError(`Bir ürüne en çok ${MAX_PRODUCT_FILES} ${KIND_LABEL[kind]} dosyası eklenebilir.`, 409, 'too-many');
+    let pages = 0;
+    if (kind === 'cizim') {
+      if (data.length > MAX_DRAWING_BYTES) throw new PlanningError(`PDF çok büyük (en fazla ${Math.round(MAX_DRAWING_BYTES / 1048576)} MB).`, 413);
+      try { pages = inspectPdf(data).pages; } catch (err) {
+        if (err instanceof PdfError) throw new PlanningError(`PDF kabul edilmedi: ${err.message}`, 422, 'bad-pdf');
+        throw err;
+      }
+    } else {
+      if (data.length > MAX_STICKER_BYTES) throw new PlanningError(`Etiket dosyası çok büyük (en fazla ${Math.round(MAX_STICKER_BYTES / 1048576)} MB).`, 413);
+      const zip = data[0] === 0x50 && data[1] === 0x4b; // .docx
+      const ole = data[0] === 0xd0 && data[1] === 0xcf && data[2] === 0x11 && data[3] === 0xe0; // .doc
+      const pdf = data.subarray(0, 5).toString('latin1') === '%PDF-';
+      if (!zip && !ole && !pdf) throw new PlanningError('Etiket dosyası bir Word belgesi (.docx / .doc) ya da PDF değil.', 422, 'bad-doc');
+    }
+    const sha = createHash('sha256').update(data).digest('hex');
+    if (have.some((d) => d.sha === sha)) throw new PlanningError('Bu dosya bu ürüne zaten ekli.', 409, 'duplicate');
+    const clean = (String(name ?? '').split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) || (kind === 'cizim' ? 'resim.pdf' : 'etiket.docx');
+    const id = this.db.addProductFile(codeKey, kind, { name: clean, sha, size: data.length, pages, data, source, relPath }, { by, now });
+    return { id, kind, name: clean, size: data.length, pages, source };
+  }
+
+  removeProductFile(id) {
+    if (!this.db.deleteProductFile(Number(id))) throw new PlanningError('Dosya bulunamadı.', 404);
+  }
+
+  /** İndirme için: {name, kind, data}. */
+  productFileData(id) {
+    const f = this.db.productFileGet(Number(id));
+    if (!f) throw new PlanningError('Dosya bulunamadı.', 404);
+    return f;
+  }
+
+  /**
+   * Ürüne yeni bağlanan teknik resimleri, aynı ürünün HENÜZ BİTMEMİŞ (planlandı / üretimde) ve resimsiz iş emirlerine de bağlar (form açılınca arka sayfada çıksın).
+   * @returns {number} resim bağlanan iş emri sayısı
+   */
+  applyProductDrawingsToOpenOrders(codeKey, { by = null, now = Date.now() } = {}) {
+    const files = this.db.productFiles(codeKey, 'cizim');
+    if (files.length === 0) return 0;
+    const orders = this.db.openOrdersWithoutDrawings(codeKey);
+    for (const no of orders) {
+      for (const f of files) this.db.linkDrawing(no, { name: f.name, sha: f.sha }, { by, now });
+      this.planning.db.addWorkOrderEvent(no, 'cizim-eklendi', `${files.length} teknik resim ürün kartından bağlandı`, { by, now });
+    }
+    return orders.length;
   }
 
   /**

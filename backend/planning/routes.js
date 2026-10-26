@@ -6,7 +6,14 @@
  *   POST /api/planning/products                         yeni urun karti (JSON)
  *   GET  /api/planning/products/:kod                    urun + bagli programlar
  *   PUT  /api/planning/products/:kod                    urun karti duzenleme (JSON; duzenlenen kart iceri almada ezilmez)
+ *   GET  /api/planning/packing/sheet?day=&shift=       PAKETLEME FORMU (EYS.FR.007) vardiya sayfasi;  PUT .../packing/sheet/air {day, shift, airBar}  hava basinci
+ *   POST /api/planning/packing/rows {stockCode, operator, woNo?, boxes, boxQty, halfQty?, visualCheck?, scrapQty?, note?}  satir ekle (standart koli ici adet ogrenilir);
+ *        PUT|DELETE .../packing/rows/:id  duzelt / iptal (?reason=);  GET .../packing/suggest?stockCode=  koli ici adet onerisi, is emirleri, etiket dosyalari  (operator + yonetici)
+ *   GET  /api/planning/(drawing|sticker)-folder         TEKNIK RESIM / ETIKET klasoru durumu;  PUT .../dir {dir}  klasoru ayarla;  POST .../match {update?}  dosyalari urun koduna gore urun kartlarina esle (yonetici)
+ *   GET  /api/planning/product-files/:id                urun kartindaki dosyayi indir/ac (operator + yonetici);  DELETE ... kaldir (yonetici)
  *   POST /api/planning/import?filename=&keepOld=1       Excel'den CSV ya da .xlsx (govde = ham dosya; tur icerikten anlasilir, .xlsx'te tum sayfalar taranir)
+ *   GET  /api/planning/sources                          KAYNAK KLASORU durumu: klasor, dosyalar ve her birinin son iceri almaya gore durumu (yeni/degisti/ayni)
+ *   PUT  /api/planning/sources/dir {dir}                kaynak klasorunu ayarla (bos = varsayilan);  POST .../sources/refresh {force?}  klasoru oku, degisenleri uygula (yalniz yonetici)
  *   GET  /api/planning/orders?q=&open=1&limit=          siparisler (musteri siparis no + evrak no ile gruplu)
  *   GET  /api/planning/orders/lines?customerKey=&custOrderKey=&docKey=   bir siparisin satirlari
  *   GET  /api/planning/work-orders?q=&status=&machine=  is emirleri (status: aktif | planlandi | uretimde | bitti | iptal | tumu)
@@ -27,6 +34,7 @@
  *   POST /api/planning/work-orders/:no/cards {person?, gkkReportNo?, steps?, reject?} URUN TANITIM KARTI BAS (steps: yikama/kurutma/tavlama kutulari; reject: URUN RET tiki, ret kasa paketlemeye gitmez) (tek adim: kasa doldu; kart numarasini sistem verir, kasa kaydi kapali olusur);
  *   POST /api/planning/work-orders/:no/crates {person?} uretimdeki is emrinde yeni kasa ac (eski iki adimli akis; kart numarasini sistem verir);  PUT /api/planning/crates/sequence {last}: kart sirasi tabani (yonetici)
  *   GET  /api/planning/material/need                    hammadde IHTIYACI (planlanan + uretimdeki kalan adet; hammadde bazinda kg ve cubuk)
+ *   GET  /api/planning/material/stock                   DEPO STOGU (Kaynak klasorunden Mikro goruntusu) + ayrilan/girilmemis tuketim -> hammadde bazinda SERBEST kg
  *   GET  /api/planning/material/consumption?from=&to=&fis=   gerceklesen SARFIYAT (biten is emirleri; fis: bekleyen | girildi | tumu);  .../consumption.csv?...&view=is-emri|hammadde
  *   POST /api/planning/material/fis {orders[], docNo?, kg?, note?}   sarfiyat fisi Mikro'ya ELLE girildi isareti;  POST .../fis/undo {orders[]}  geri al
  *   GET  /api/planning/efficiency?from=&to=&machine=    verimlilik raporu (is emri x vardiya; yalniz yonetici);  .../efficiency.csv?...&view=gunluk|matris|urun|tezgah
@@ -100,6 +108,19 @@ const OPERATOR_START_FIELDS = new Set(['usedMaterial', 'gkkReportNo', 'firstAppr
 /** Islemi yapan kisi: giris yapmis kullanici (sunucu belirler); giris kapaliysa (demo/test) null. */
 const who = (req) => (req.user && !req.user.authDisabled ? req.user.username : null);
 
+/** Urun kartindaki dosya: PDF tarayicida acilir, Word dosyasi indirilir (Turkce dosya adi icin filename*). */
+function sendProductFile(res, f) {
+  const ext = /\.([A-Za-z0-9]{1,5})$/.exec(f.name)?.[1]?.toLowerCase();
+  const type = { pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword' }[ext] ?? 'application/octet-stream';
+  const ascii = f.name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  res.writeHead(200, {
+    'content-type': type, 'content-length': f.data.length, 'cache-control': 'no-store',
+    'content-disposition': `${ext === 'pdf' ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+    ...(ext === 'pdf' ? { 'x-frame-options': 'SAMEORIGIN' } : {}),
+  });
+  res.end(f.data);
+}
+
 function sendError(res, err) {
   const status = err.status ?? 500;
   if (status >= 500) console.error('[planlama]', err);
@@ -119,6 +140,7 @@ const intParam = (url, name, fallback, { min = 0, max = 1000 } = {}) => {
 function sectionOf(method, path) {
   if (/^\/api\/planning\/material(?:\/|$)/.test(path)) return 'hammadde';
   if (method === 'POST' && /^\/api\/planning\/crates\/\d{1,12}\/pack$/.test(path)) return 'paketleme';
+  if (/^\/api\/planning\/packing(?:\/|$)/.test(path)) return 'paketleme'; // paketleme formu (EYS.FR.007)
   return null;
 }
 
@@ -167,6 +189,41 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
           keepOld: url.searchParams.get('keepOld') === '1',
         });
         return sendJson(res, 200, result), true;
+      }
+
+      /* ---- kaynak klasoru: Mikro / GKK Excel dosyalarini sabit klasorden oku (yalniz yonetici) ---- */
+      if (method === 'GET' && path === '/api/planning/sources') return sendJson(res, 200, planning.sources.status()), true;
+      if (method === 'PUT' && path === '/api/planning/sources/dir') {
+        planning.sources.setDir((await readJson(req)).dir);
+        return sendJson(res, 200, planning.sources.status()), true;
+      }
+      if (method === 'POST' && path === '/api/planning/sources/refresh') {
+        const body = await readJson(req);
+        return sendJson(res, 200, planning.sources.refresh({ by: who(req), force: body.force === true })), true;
+      }
+
+      /* ---- paketleme formu (EYS.FR.007): operator + yonetici ---- */
+      if (method === 'GET' && path === '/api/planning/packing/sheet') {
+        return sendJson(res, 200, planning.packing.sheet({ day: url.searchParams.get('day') || undefined, shift: url.searchParams.get('shift') || undefined })), true;
+      }
+      if (method === 'PUT' && path === '/api/planning/packing/sheet/air') return sendJson(res, 200, planning.packing.setAirBar(await readJson(req), { by: who(req) })), true;
+      if (method === 'GET' && path === '/api/planning/packing/suggest') return sendJson(res, 200, planning.packing.suggest(url.searchParams.get('stockCode') ?? '')), true;
+      if (method === 'POST' && path === '/api/planning/packing/rows') return sendJson(res, 201, planning.packing.addRow(await readJson(req), { by: who(req) })), true;
+      if ((m = /^\/api\/planning\/packing\/rows\/(\d{1,12})$/.exec(path))) {
+        if (method === 'PUT') return sendJson(res, 200, planning.packing.updateRow(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.packing.voidRow(Number(m[1]), { reason: url.searchParams.get('reason') ?? '' }, { by: who(req) })), true;
+      }
+
+      /* ---- teknik resim ve etiket klasorleri: dosyalari urun koduna gore urun kartlarina esle (yonetici) ---- */
+      if ((m = /^\/api\/planning\/(drawing|sticker)-folder(?:\/(dir|match))?$/.exec(path))) {
+        const folder = m[1] === 'drawing' ? planning.drawingFolder : planning.stickerFolder;
+        if (!m[2] && method === 'GET') return sendJson(res, 200, folder.status()), true;
+        if (m[2] === 'dir' && method === 'PUT') { folder.setDir((await readJson(req)).dir); return sendJson(res, 200, folder.status()), true; }
+        if (m[2] === 'match' && method === 'POST') return sendJson(res, 200, folder.match({ by: who(req), update: (await readJson(req)).update === true })), true;
+      }
+      if ((m = /^\/api\/planning\/product-files\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendProductFile(res, planning.quality.productFileData(Number(m[1]))), true;
+        if (method === 'DELETE') { planning.quality.removeProductFile(Number(m[1])); return sendJson(res, 200, { ok: true }), true; }
       }
 
       /* ---- siparisler ---- */
@@ -367,6 +424,7 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
 
       /* ---- hammadde ve sarfiyat (yalniz yonetici) ---- */
       if (method === 'GET' && path === '/api/planning/material/need') return sendJson(res, 200, planning.materialNeed()), true;
+      if (method === 'GET' && path === '/api/planning/material/stock') return sendJson(res, 200, planning.materialStock()), true;
       if (method === 'GET' && (path === '/api/planning/material/consumption' || path === '/api/planning/material/consumption.csv')) {
         const fis = url.searchParams.get('fis') ?? 'tumu';
         const q = { from: url.searchParams.get('from') || undefined, to: url.searchParams.get('to') || undefined, fis: ['bekleyen', 'girildi', 'tumu'].includes(fis) ? fis : 'tumu' };

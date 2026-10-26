@@ -7,7 +7,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, planningRole, rememberedPerson, rememberPerson, openListPrint, woStatusChip } from './planning-common.js';
+import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, planningRole, rememberedPerson, rememberPerson, openListPrint, woStatusChip, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
 import { openGkkPicker } from './planning-gkk.js';
 
@@ -155,7 +155,7 @@ function openApprovalFromWo(onDone) {
       if (my !== seq) return;
       list.innerHTML = r.items.length === 0 ? '<p class="empty">Aktif iş emri yok.</p>' :
         '<table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Ürün</th><th>Tezgah</th><th>Durum</th><th></th></tr></thead><tbody>' +
-        r.items.map((w) => `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td><span class="mono">${escapeHtml(w.stockCode)}</span> ${cellText(w.productName)}</td>` +
+        r.items.map((w) => `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td class="trunc"${truncCell(w.productName)}><span class="mono">${escapeHtml(w.stockCode)}</span> ${cellText(w.productName)}</td>` +
           `<td class="mono">${cellText(w.machineId)}</td><td>${woStatusChip(w.status)}</td><td>${w.firstApprovalNo ? `<span class="hint">${escapeHtml(w.firstApprovalNo)}</span>` : ''}</td></tr>`).join('') + '</tbody></table>';
     } catch (err) {
       if (my === seq) list.innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;

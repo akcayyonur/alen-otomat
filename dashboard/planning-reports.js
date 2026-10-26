@@ -8,7 +8,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { cellText, fmtNum, dateTimeText, debounce, woStatusChip, chip } from './planning-common.js';
+import { cellText, fmtNum, dateTimeText, debounce, woStatusChip, chip, truncCell } from './planning-common.js';
 import { openMeasureSheet, openMeasureReport } from './planning-measure.js';
 
 const PAGE = 50;
@@ -30,7 +30,7 @@ export function renderMeasureReports(host) {
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Ürün</th><th>Tezgah</th><th>Durum</th><th class="num">Ölçü</th><th class="num">Sütun</th><th>Son ölçüm</th><th>Uyarı</th><th>Raporlar</th></tr></thead><tbody>' +
       st.items.map((r) =>
-        `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td><span class="mono"><b>${escapeHtml(r.stockCode)}</b></span> ${cellText(r.productName)}</td>` +
+        `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="trunc"${truncCell(r.productName)}><span class="mono"><b>${escapeHtml(r.stockCode)}</b></span> ${cellText(r.productName)}</td>` +
         `<td class="mono">${cellText(r.machineId)}</td><td>${woStatusChip(r.status)}</td><td class="num">${r.planRows || cellText(null)}</td><td class="num">${fmtNum(r.columns)}</td>` +
         `<td>${escapeHtml(dateTimeText(r.lastAt))}</td>` +
         `<td>${r.flagged > 0 ? chip('bad', '▲', `${r.flagged} sütun tolerans dışı / uygun değil`) : ''}${r.pending > 0 ? ` ${chip('none', '◔', `${r.pending} sütun kart bekliyor`)}` : ''}${r.flagged === 0 && r.pending === 0 ? '<span class="hint" style="margin:0">—</span>' : ''}</td>` +

@@ -16,7 +16,7 @@
  * yamanir - grafikler ve seritler kendi yavas donguleriyle yenilenir, boylece
  * imlec ve balon her saniye sifirlanmaz.
  */
-import { lineChart, timeline, ribbonHtml } from './charts.js';
+import { timeline, ribbonHtml } from './charts.js';
 import { renderConfig, resetConfigView } from './config-view.js';
 import { renderLibrary, resetLibraryView, renderMachinePrograms } from './library-view.js';
 import { renderProduction, resetProductionView, initMachineProduction, refreshMachineProduction } from './production-view.js';
@@ -35,12 +35,6 @@ const WINDOWS = [
   { key: '7d', label: '7 gün' },
 ];
 
-const CHARTS = [
-  { key: 'spindle_rpm', label: 'Mil devri', unit: 'rpm' },
-  { key: 'feed_rate', label: 'İlerleme', unit: 'mm/dk' },
-  { key: 'part_count', label: 'Parça sayacı', unit: 'adet', step: true },
-];
-
 /** Grafiklerin ve seridin yenilenme sikligi - canli degerlerden bagimsiz. */
 const HISTORY_REFRESH_MS = 10_000;
 
@@ -51,7 +45,6 @@ const state = {
   /** @type {string|null} */ selected: null,
   /** @type {number|null} kutuphane ekraninda secili program */ programId: null,
   window: '30m',
-  tableView: false,
   /** Secili tezgah icin son cekilen gecmis. */
   history: null,
   detailFor: null,
@@ -219,7 +212,6 @@ function renderFleet() {
         '</header>' +
         '<p class="card-since" data-role="since"></p>' +
         '<div class="card-metrics">' +
-        '<div><span class="m-label">Mil devri</span><span class="m-value" data-role="rpm"></span></div>' +
         '<div><span class="m-label">İlerleme</span><span class="m-value" data-role="feed"></span></div>' +
         '<div><span class="m-label">Parça</span><span class="m-value" data-role="part"></span></div>' +
         '<div><span class="m-label">Çalışma oranı</span><span class="m-value" data-role="ratio"></span></div>' +
@@ -248,8 +240,6 @@ function renderFleet() {
 
     card.querySelector('[data-role="since"]').textContent =
       m.statusDurationSec != null ? `${dur(m.statusDurationSec)} bu durumda` : 'veri bekleniyor';
-    card.querySelector('[data-role="rpm"]').textContent =
-      m.connected && t ? `${num(t.spindleRpm)} rpm` : '—';
     card.querySelector('[data-role="feed"]').textContent =
       m.connected && t ? `${num(t.feedRate)} mm/dk` : '—';
     card.querySelector('[data-role="part"]').textContent =
@@ -299,24 +289,15 @@ function detailShell(m) {
     '<section class="dt-block">' +
     '<div class="dt-block-head">' +
     '<h3>Durum şeridi</h3>' +
+    '<div class="dt-actions">' +
     '<div class="seg" data-role="windows" role="group" aria-label="Zaman aralığı"></div>' +
+    '<a class="icon-btn" data-role="csv" download title="Seçili zaman aralığı. Özet: üretilen her parça ve durum / program / alarm değişimleri; arada geçen saniyelik satırlar yok">CSV indir</a>' +
+    '<a class="icon-btn" data-role="csv-raw" download title="Seçili zaman aralığı. Kaydedilen her örnek (eski biçim)">Ham CSV</a>' +
+    '</div>' +
     '</div>' +
     '<div class="tl-host" data-role="timeline"></div>' +
     '<ul class="legend" data-role="legend"></ul>' +
     '<div class="dt-summary" data-role="summary"></div>' +
-    '</section>' +
-
-    '<section class="dt-block">' +
-    '<div class="dt-block-head">' +
-    '<h3>Ölçümler</h3>' +
-    '<div class="dt-actions">' +
-    '<button type="button" class="icon-btn" data-role="table-toggle">Tablo</button>' +
-    '<a class="icon-btn" data-role="csv" download title="Özet: üretilen her parça ve durum / program / alarm değişimleri; arada geçen saniyelik satırlar yok">CSV indir</a>' +
-    '<a class="icon-btn" data-role="csv-raw" download title="Kaydedilen her örnek (eski biçim)">Ham CSV</a>' +
-    '</div>' +
-    '</div>' +
-    '<div class="charts" data-role="charts"></div>' +
-    '<div class="table-wrap" data-role="table" hidden></div>' +
     '</section>' +
 
     '<section class="dt-block">' +
@@ -376,22 +357,6 @@ function renderDetailStatic(m) {
       `<li><span class="lg-swatch st-${info.cls}"></span>${escapeHtml(info.icon)} ${escapeHtml(info.label)}</li>`)
     .join('');
 
-  const toggle = refs.detail.querySelector('[data-role="table-toggle"]');
-  toggle.addEventListener('click', () => {
-    state.tableView = !state.tableView;
-    toggle.classList.toggle('is-on', state.tableView);
-    refs.detail.querySelector('[data-role="charts"]').hidden = state.tableView;
-    refs.detail.querySelector('[data-role="table"]').hidden = !state.tableView;
-    drawHistory();
-  });
-
-  refs.detail.querySelector('[data-role="charts"]').innerHTML = CHARTS.map((c) =>
-    '<figure class="chart">' +
-    `<figcaption>${escapeHtml(c.label)}` +
-    (c.unit ? ` <span class="unit">${escapeHtml(c.unit)}</span>` : '') +
-    `<b data-now="${escapeHtml(c.key)}"></b></figcaption>` +
-    `<div class="chart-host" data-chart="${escapeHtml(c.key)}"></div>` +
-    '</figure>').join('');
 }
 
 function patchDetail(m) {
@@ -414,13 +379,6 @@ function patchDetail(m) {
       // Okunamayan alan bos gorunur ama "0" ile karistirilmaz.
       cell.classList.toggle('is-null', raw === null || raw === undefined || raw === '');
     }
-  }
-
-  for (const c of CHARTS) {
-    const now = refs.detail.querySelector(`[data-now="${CSS.escape(c.key)}"]`);
-    if (!now) continue;
-    const key = { spindle_rpm: 'spindleRpm', feed_rate: 'feedRate', part_count: 'partCount' }[c.key];
-    now.textContent = m.connected ? num(t[key]) : '—';
   }
 
   // Ham degerler
@@ -458,7 +416,7 @@ async function refreshHistory() {
   const win = state.window;
   try {
     const [hist, detail] = await Promise.all([
-      fetch(`/api/machines/${encodeURIComponent(id)}/history?window=${win}&maxPoints=1200`).then((r) => r.json()),
+      fetch(`/api/machines/${encodeURIComponent(id)}/history?window=${win}&maxPoints=50`).then((r) => r.json()),
       fetch(`/api/machines/${encodeURIComponent(id)}?window=${win}`).then((r) => r.json()),
     ]);
     // Istek donerken kullanici baska tezgaha gecmis olabilir.
@@ -515,24 +473,6 @@ function drawHistory() {
       '</div>').join('');
   }
 
-  // --- grafikler ya da tablo ---
-  if (state.tableView) {
-    drawTable(h);
-  } else {
-    for (const c of CHARTS) {
-      const host = refs.detail.querySelector(`[data-chart="${CSS.escape(c.key)}"]`);
-      if (!host) continue;
-      lineChart(host, {
-        points: (h.samples ?? []).map((row) => ({ ts: Number(row.ts), value: row[c.key] })),
-        unit: c.unit,
-        step: c.step === true,
-        fromMs: h.fromMs,
-        toMs: h.toMs,
-        label: c.label,
-      });
-    }
-  }
-
   // --- durus listesi ---
   const dtHost = refs.detail.querySelector('[data-role="downtimes"]');
   if (dtHost) {
@@ -562,30 +502,30 @@ function drawHistory() {
   }
 }
 
-/** Grafiklerin tablo karsiligi - renk/konum gormeden de okunabilsin. */
-function drawTable(h) {
-  const host = refs.detail.querySelector('[data-role="table"]');
-  if (!host) return;
-  const rows = (h.samples ?? []).slice(-200).reverse();
-  host.innerHTML =
-    `<p class="hint">${num(h.total)} ölçümden son ${num(rows.length)} satır gösteriliyor. ` +
-    'Tamamı için CSV indir.</p>' +
-    '<table class="tbl"><thead><tr><th>Zaman</th><th>Durum</th>' +
-    CHARTS.map((c) => `<th class="num">${escapeHtml(c.label)}</th>`).join('') +
-    '<th>Program</th></tr></thead><tbody>' +
-    rows.map((r) => {
-      const info = stateOf(r.status);
-      return '<tr>' +
-        `<td>${escapeHtml(clock(Number(r.ts)))}</td>` +
-        `<td><span class="st-text-${info.cls}">${escapeHtml(info.icon)} ${escapeHtml(info.label)}</span></td>` +
-        CHARTS.map((c) => `<td class="num">${escapeHtml(num(r[c.key]))}</td>`).join('') +
-        `<td class="mono">${escapeHtml(r.program ?? '')}</td></tr>`;
-    }).join('') + '</tbody></table>';
-}
-
 /* ----------------------------------------------------------------------- cizim */
 
 /** Uygulamaya gore kabuk: hangi yan menu, ust cubuk yazisi, baglanti gostergesi ve alt bilgi gorunur. */
+/**
+ * Yan menu(ler) pencereye SIGAR ve gerekirse KENDI kaydirma cubuguyla kayar: uzun menude ("Ayarlar", "Program kutuphanesi" ...) alt kisma ulasmak icin
+ * butun sayfayi kaydirmak gerekmez. Menu sticky: sayfa basinda ust cubugun altinda durur, kaydirinca pencerenin 14 px altina yapisir; her iki durumda
+ * yukseklik "pencere - menunun ustu - 14 px" olmali, bu yuzden olculur. Dar ekranda menu sayfa akisindadir (sinir yok).
+ */
+function fitSidebars() {
+  const narrow = matchMedia('(max-width: 900px)').matches;
+  for (const sb of document.querySelectorAll('.sidebar')) {
+    if (sb.hidden || narrow) { sb.style.maxHeight = ''; continue; }
+    const top = Math.max(sb.getBoundingClientRect().top, 14);
+    sb.style.maxHeight = `${Math.max(180, Math.floor(innerHeight - top - 14))}px`;
+  }
+}
+let fitQueued = false;
+/** Kaydirma/yeniden boyutlandirmada her karede en fazla bir kez olcer. */
+function queueFitSidebars() {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => { fitQueued = false; fitSidebars(); });
+}
+
 function syncChrome(view) {
   const app = view === 'apps' ? 'apps' : view === 'planning' ? 'planlama' : 'telemetri';
   const tele = app === 'telemetri';
@@ -605,6 +545,7 @@ function syncChrome(view) {
   else if (app === 'apps') refs.title.textContent = 'Uygulama Seçimi';
   document.title = app === 'planlama' ? 'Planlama' : app === 'apps' ? 'CNC Telemetri Platformu' : 'CNC Filo Telemetrisi';
   refs.appsBtn.hidden = app === 'apps' || appsFor(getSession()?.user?.role).length < 2;
+  fitSidebars(); // hangi yan menu gorunuyorsa yuksekligi yeniden olculur
 }
 
 function render() {
@@ -801,6 +742,8 @@ async function init() {
   refs.libraryBtn.hidden = !isAdmin();
   refs.configBtn.hidden = !isAdmin();
   addEventListener('hashchange', () => { readRoute(); render(); });
+  addEventListener('scroll', queueFitSidebars, { passive: true });
+  addEventListener('resize', queueFitSidebars);
 
   initTheme();
   initKeyboard();

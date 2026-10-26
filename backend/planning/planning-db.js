@@ -12,7 +12,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { foldTr } from './normalize.js';
+import { foldTr, resolveCustomerCode } from './normalize.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS products (
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS products (
   gross_kg      REAL,
   planned_sec   REAL,
   note          TEXT,
+  box_qty       INTEGER,
   measure_plan  TEXT,
   measure_plan_at INTEGER,
   source        TEXT    NOT NULL,
@@ -244,6 +245,54 @@ CREATE TABLE IF NOT EXISTS seq_floor (
   year  INTEGER PRIMARY KEY,
   floor INTEGER NOT NULL
 );
+
+-- Ayarlar (anahtar/deger) ve bir kerelik gecis bayraklari.
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- Kaynak klasorundeki dosyalarin SON iceri alinan hali (degisiklik tespiti: boyut + zaman, sonra icerik ozeti). Anahtar: dosyanin tam yolu.
+CREATE TABLE IF NOT EXISTS source_files (
+  path        TEXT PRIMARY KEY,
+  size        INTEGER NOT NULL,
+  mtime_ms    INTEGER NOT NULL,
+  sha256      TEXT NOT NULL,
+  imported_at INTEGER NOT NULL,
+  summary     TEXT
+);
+
+-- Depo hammadde stogu (F asamasi): Mikro SQL sorgusunun Excel ciktisi, Kaynak klasorunden TAM DEGISTIRME (gecmis tutulmaz).
+CREATE TABLE IF NOT EXISTS material_stock (
+  stock_code   TEXT PRIMARY KEY,
+  material_key TEXT NOT NULL,
+  name         TEXT,
+  on_hand_kg   REAL,
+  pending_kg   REAL,
+  net_kg       REAL,
+  tare_kg      REAL,
+  imported_at  INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_material_stock_key ON material_stock (material_key);
+
+-- Hammadde ayirma/rezervasyon (F asamasi): is emri uretime baslayinca hedef x brut kadar "ayrilir" (Mikro bunu henuz gormez);
+-- is emri bitince GERCEK tuketime (mumkunse paketleme, yoksa teorik sayac) gecer; iptalde serbest kalir. 1 is emri = 1 satir.
+CREATE TABLE IF NOT EXISTS material_reservations (
+  wo_no           TEXT PRIMARY KEY REFERENCES work_orders(no),
+  material_key    TEXT NOT NULL,
+  material        TEXT,
+  reserved_kg     REAL NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'ayrildi',
+  consumed_kg     REAL,
+  consumed_qty    REAL,
+  consumed_source TEXT,
+  reserved_at     INTEGER NOT NULL,
+  reserved_by     TEXT,
+  resolved_at     INTEGER,
+  resolved_by     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_material_reservations_key ON material_reservations (material_key, status);
 `;
 
 /** LIKE ozel karakterlerini kacirir (kullanici metni desen olmasin). */
@@ -263,6 +312,7 @@ const productOut = (r) => (r == null ? null : {
   grossKg: r.gross_kg,
   plannedSec: r.planned_sec,
   note: r.note,
+  boxQty: r.box_qty == null ? null : Number(r.box_qty),
   measurePlan: r.measure_plan ? JSON.parse(r.measure_plan) : [],
   measurePlanAt: r.measure_plan_at == null ? null : Number(r.measure_plan_at),
   source: r.source,
@@ -299,11 +349,85 @@ export class PlanningDb {
 
     // urun karti: kalici olcu plani (her urunun olculeri farklidir; 3 olcu ya da 5 olcu olabilir)
     const haveP = new Set(this.db.prepare('PRAGMA table_info(products)').all().map((c) => c.name));
-    for (const [name, type] of [['measure_plan', 'TEXT'], ['measure_plan_at', 'INTEGER']]) if (!haveP.has(name)) this.db.exec(`ALTER TABLE products ADD COLUMN ${name} ${type}`);
+    for (const [name, type] of [['measure_plan', 'TEXT'], ['measure_plan_at', 'INTEGER'], ['box_qty', 'INTEGER']]) if (!haveP.has(name)) this.db.exec(`ALTER TABLE products ADD COLUMN ${name} ${type}`);
+
+    // urun karti: Mikro'dan (siparis dosyasi) SON gelen degerlerin anlik goruntusu. Mikro'da DEGISEN alanlari bulmak icin (yeni deger onceki Mikro
+    // degerinden farkliysa karta uygulanir; ayni kaldiysa karttaki deger, planlama Excel'inden ya da elle gelmis olsa da, korunur).
+    if (!haveP.has('src_snapshot')) this.db.exec('ALTER TABLE products ADD COLUMN src_snapshot TEXT');
+    this.#backfillCustomerCodes();
 
     // kasa/kart: yikama, kurutma, tavlama isaretleri (eski veritabanlari bos = hicbiri isaretli degil)
     const haveC = new Set(this.db.prepare('PRAGMA table_info(crates)').all().map((c) => c.name));
     for (const name of [...CRATE_STEP_COLUMNS, 'reject']) if (!haveC.has(name)) this.db.exec(`ALTER TABLE crates ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  /**
+   * BIR KERELIK (ayar bayragi): musteri urun kodu = ilk sozcuk. Iki parcali kodlar ("140100188 1234-567") ilk sozcuge indirilir, bos kodlar urun adinin
+   * basindaki koddan doldurulur ("140100188 DAİKİN ..."). Elle duzenlenmis kartlara DOKUNULMAZ. Is emirlerinin kopya degerleri de ayni kurala gore duzeltilir
+   * (is emri formunda MUSTERI URUN KODU bos geliyordu).
+   */
+  #backfillCustomerCodes() {
+    const flag = 'gecis.musteri-urun-kodu-v1';
+    if (this.getSetting(flag) !== null) return;
+    this.db.exec('BEGIN');
+    try {
+      for (const r of this.db.prepare('SELECT code_key, stock_code, name, customer_code FROM products WHERE edited = 0').all()) {
+        const next = resolveCustomerCode(r.customer_code, r.name);
+        if ((next ?? null) === (r.customer_code ?? null)) continue;
+        const searchKey = foldTr(`${r.stock_code} ${r.name ?? ''} ${next ?? ''}`);
+        this.db.prepare('UPDATE products SET customer_code = ?, search_key = ? WHERE code_key = ?').run(next, searchKey, r.code_key);
+      }
+      for (const r of this.db.prepare('SELECT no, product_name, customer_code FROM work_orders').all()) {
+        const next = resolveCustomerCode(r.customer_code, r.product_name);
+        if ((next ?? null) !== (r.customer_code ?? null)) this.db.prepare('UPDATE work_orders SET customer_code = ? WHERE no = ?').run(next, r.no);
+      }
+      this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(flag, String(Date.now()));
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /* ------------------------------------------------------------- ayarlar */
+
+  /** @returns {string|null} */
+  getSetting(key) {
+    return this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
+  }
+
+  setSetting(key, value) {
+    if (value === null || value === undefined) this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    else this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
+  }
+
+  /* ------------------------------------------------------ kaynak dosyalari */
+
+  getSourceFile(path) {
+    const r = this.db.prepare('SELECT * FROM source_files WHERE path = ?').get(path);
+    return r ? { path: r.path, size: Number(r.size), mtimeMs: Number(r.mtime_ms), sha256: r.sha256, importedAt: Number(r.imported_at), summary: r.summary ? JSON.parse(r.summary) : null } : null;
+  }
+
+  saveSourceFile(path, { size, mtimeMs, sha256, importedAt, summary = null }) {
+    this.db.prepare(
+      `INSERT INTO source_files (path, size, mtime_ms, sha256, imported_at, summary) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms, sha256 = excluded.sha256, imported_at = excluded.imported_at, summary = excluded.summary`,
+    ).run(path, size, mtimeMs, sha256, importedAt, summary === null ? null : JSON.stringify(summary));
+  }
+
+  /** Urun kartinin Mikro anlik goruntusu ({alan: deger}) ya da null (hic gelmemis). */
+  getSnapshot(codeKey) {
+    const r = this.db.prepare('SELECT src_snapshot FROM products WHERE code_key = ?').get(codeKey);
+    return r?.src_snapshot ? JSON.parse(r.src_snapshot) : null;
+  }
+
+  setSnapshot(codeKey, snapshot) {
+    this.db.prepare('UPDATE products SET src_snapshot = ? WHERE code_key = ?').run(JSON.stringify(snapshot), codeKey);
+  }
+
+  /** Standart koli ici adedi YOKSA yazar (paketleme ilk koliyi yapinca ogrenir); kart "elle duzenlendi" sayilmaz. @returns {boolean} yazildi mi */
+  setBoxQtyIfEmpty(codeKey, qty, now = Date.now()) {
+    return Number(this.db.prepare('UPDATE products SET box_qty = ?, updated_at = ? WHERE code_key = ? AND box_qty IS NULL').run(qty, now, codeKey).changes) > 0;
   }
 
   /** Urun kartinin olcu plani (JSON metni) ve zamani; yeni is emrine kopyalanir (is emrinin plani daha yeniyse o). */
@@ -424,7 +548,7 @@ export class PlanningDb {
    * Urun ekler ya da gunceller (tum alanlar verilen `fields`'tan; verilmeyen alan DOKUNULMAZ).
    * @param {string} codeKey
    * @param {{stockCode?: string, name?: string|null, customerCode?: string|null, material?: string|null, altMaterial?: string|null,
-   *          lengthMm?: number|null, netKg?: number|null, grossKg?: number|null, plannedSec?: number|null, note?: string|null}} fields
+   *          lengthMm?: number|null, netKg?: number|null, grossKg?: number|null, plannedSec?: number|null, note?: string|null, boxQty?: number|null}} fields
    * @param {{source: string, by?: string|null, edited?: boolean, now?: number}} meta
    */
   saveProduct(codeKey, fields, { source, by = null, edited, now = Date.now() }) {
@@ -441,22 +565,23 @@ export class PlanningDb {
       gross_kg: pick('grossKg', 'gross_kg'),
       planned_sec: pick('plannedSec', 'planned_sec'),
       note: pick('note', 'note'),
+      box_qty: pick('boxQty', 'box_qty'),
     };
     const searchKey = foldTr(`${next.stock_code} ${next.name ?? ''} ${next.customer_code ?? ''}`);
     const isEdited = edited ?? cur?.edited === 1;
     if (cur) {
       this.db.prepare(
         `UPDATE products SET stock_code=?, name=?, customer_code=?, material=?, alt_material=?, length_mm=?, net_kg=?, gross_kg=?,
-                planned_sec=?, note=?, source=?, edited=?, search_key=?, updated_at=?, updated_by=? WHERE code_key=?`,
+                planned_sec=?, note=?, box_qty=?, source=?, edited=?, search_key=?, updated_at=?, updated_by=? WHERE code_key=?`,
       ).run(next.stock_code, next.name, next.customer_code, next.material, next.alt_material, next.length_mm, next.net_kg, next.gross_kg,
-        next.planned_sec, next.note, source, isEdited ? 1 : 0, searchKey, now, by, codeKey);
+        next.planned_sec, next.note, next.box_qty, source, isEdited ? 1 : 0, searchKey, now, by, codeKey);
     } else {
       this.db.prepare(
         `INSERT INTO products (code_key, stock_code, name, customer_code, material, alt_material, length_mm, net_kg, gross_kg,
-                planned_sec, note, source, edited, search_key, created_at, updated_at, updated_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+                planned_sec, note, box_qty, source, edited, search_key, created_at, updated_at, updated_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(codeKey, next.stock_code, next.name, next.customer_code, next.material, next.alt_material, next.length_mm, next.net_kg,
-        next.gross_kg, next.planned_sec, next.note, source, isEdited ? 1 : 0, searchKey, now, now, by);
+        next.gross_kg, next.planned_sec, next.note, next.box_qty, source, isEdited ? 1 : 0, searchKey, now, now, by);
     }
     return this.getProduct(codeKey);
   }
@@ -571,7 +696,7 @@ export class PlanningDb {
       reject: !!r.reject,
       steps: { washTo: !!r.wash_to, washDone: !!r.wash_done, dryTo: !!r.dry_to, dryDone: !!r.dry_done, annealTo: !!r.anneal_to, annealDone: !!r.anneal_done },
       // kartta gorunen is emri bilgileri (is emrinin kopya degerleri)
-      stockCode: r.stock_code ?? null, productName: r.product_name ?? null, customerCode: r.customer_code ?? null, gkkReportNo: r.gkk_report_no ?? null,
+      stockCode: r.stock_code ?? null, productName: r.product_name ?? null, customerCode: resolveCustomerCode(r.customer_code, r.product_name), gkkReportNo: r.gkk_report_no ?? null,
       targetQty: r.target_qty == null ? null : Number(r.target_qty),
     };
   }
@@ -778,7 +903,7 @@ export class PlanningDb {
     return {
       no: r.no, year: Number(r.year), seq: Number(r.seq), status: r.status, machineId: r.machine_id === '' ? null : r.machine_id, codeKey: r.code_key, stockCode: r.stock_code,
       lineId: n(r.line_id), docNo: r.doc_no, custOrderNo: r.cust_order_no, customer: r.customer, targetQty: Number(r.target_qty), dueDate: n(r.due_date),
-      sampleQty: n(r.sample_qty), productName: r.product_name, customerCode: r.customer_code, material: r.material, altMaterial: r.alt_material,
+      sampleQty: n(r.sample_qty), productName: r.product_name, customerCode: resolveCustomerCode(r.customer_code, r.product_name), material: r.material, altMaterial: r.alt_material,
       lengthMm: r.length_mm, netKg: r.net_kg, grossKg: r.gross_kg, plannedSec: r.planned_sec, usedMaterial: r.used_material,
       measurePlan: r.measure_plan ? JSON.parse(r.measure_plan) : [],
       gkkReportNo: r.gkk_report_no, firstApprovalNo: r.first_approval_no, measuredNetKg: r.measured_net_kg,
@@ -866,6 +991,113 @@ export class PlanningDb {
   workOrderEvents(no) {
     return this.db.prepare('SELECT at, by, kind, detail FROM work_order_events WHERE wo_no = ? ORDER BY id').all(no)
       .map((r) => ({ at: Number(r.at), by: r.by, kind: r.kind, detail: r.detail }));
+  }
+
+  /* ---------------------------------------------------- hammadde rezervasyonu (F) */
+
+  #reservationOut(r) {
+    if (r == null) return null;
+    return {
+      woNo: r.wo_no, materialKey: r.material_key, material: r.material, reservedKg: r.reserved_kg, status: r.status,
+      consumedKg: r.consumed_kg, consumedQty: r.consumed_qty, consumedSource: r.consumed_source,
+      reservedAt: Number(r.reserved_at), reservedBy: r.reserved_by,
+      resolvedAt: r.resolved_at == null ? null : Number(r.resolved_at), resolvedBy: r.resolved_by,
+    };
+  }
+
+  getReservation(woNo) {
+    return this.#reservationOut(this.db.prepare('SELECT * FROM material_reservations WHERE wo_no = ?').get(woNo));
+  }
+
+  /** Rezervasyon acar (ayni is emri icin ikinci kez cagrilirsa no-op). @returns {boolean} eklendi mi */
+  createReservation(woNo, { materialKey, material, reservedKg }, { by = null, now = Date.now() } = {}) {
+    const r = this.db.prepare(
+      `INSERT INTO material_reservations (wo_no, material_key, material, reserved_kg, status, reserved_at, reserved_by)
+       VALUES (?, ?, ?, ?, 'ayrildi', ?, ?) ON CONFLICT(wo_no) DO NOTHING`,
+    ).run(woNo, materialKey, material, reservedKg, now, by);
+    return r.changes > 0;
+  }
+
+  /** 'ayrildi' -> 'tuketildi': gercek tuketim belirlendi (is emri bitti). */
+  resolveReservation(woNo, { consumedKg, consumedQty, consumedSource }, { by = null, now = Date.now() } = {}) {
+    this.db.prepare(
+      `UPDATE material_reservations SET status = 'tuketildi', consumed_kg = ?, consumed_qty = ?, consumed_source = ?, resolved_at = ?, resolved_by = ?
+         WHERE wo_no = ? AND status = 'ayrildi'`,
+    ).run(consumedKg, consumedQty, consumedSource, now, by, woNo);
+  }
+
+  /** 'ayrildi' -> 'serbest-birakildi': uretimdeyken iptal, hic tuketilmedi. */
+  releaseReservation(woNo, { by = null, now = Date.now() } = {}) {
+    this.db.prepare(
+      "UPDATE material_reservations SET status = 'serbest-birakildi', resolved_at = ?, resolved_by = ? WHERE wo_no = ? AND status = 'ayrildi'",
+    ).run(now, by, woNo);
+  }
+
+  /** 'tuketildi' -> 'ayrildi': bitmis is emri uretime geri alindi. reserved_kg DEGISMEZ, tuketim bilgisi temizlenir. */
+  reopenReservation(woNo) {
+    this.db.prepare(
+      "UPDATE material_reservations SET status = 'ayrildi', consumed_kg = NULL, consumed_qty = NULL, consumed_source = NULL, resolved_at = NULL, resolved_by = NULL WHERE wo_no = ? AND status = 'tuketildi'",
+    ).run(woNo);
+  }
+
+  /** Hammadde bazinda ayrilan + Mikro'ya HENUZ girilmemis tuketilen kg (serbest stok hesabi icin). */
+  reservationTotalsByMaterial() {
+    return this.db.prepare(
+      `SELECT r.material_key AS material_key,
+              COALESCE(SUM(CASE WHEN r.status = 'ayrildi' THEN r.reserved_kg ELSE 0 END), 0) AS reserved_kg,
+              COALESCE(SUM(CASE WHEN r.status = 'tuketildi' AND w.fis_at IS NULL THEN r.consumed_kg ELSE 0 END), 0) AS unentered_kg
+         FROM material_reservations r JOIN work_orders w ON w.no = r.wo_no
+        WHERE r.status IN ('ayrildi', 'tuketildi')
+        GROUP BY r.material_key`,
+    ).all().map((r) => ({ materialKey: r.material_key, reservedKg: Number(r.reserved_kg), unenteredKg: Number(r.unentered_kg) }));
+  }
+
+  /* --------------------------------------------------------------- depo stogu (F) */
+
+  /**
+   * Excel'den gelen depo stogunu TAM DEGISTIRIR (dosyada olmayan stok kodu SILINIR; gecmis tutulmaz, yalniz en son goruntu).
+   * @param {{stockCode: string, materialKey: string, name?: string|null, onHandKg?: number|null, pendingKg?: number|null, netKg?: number|null, tareKg?: number|null}[]} rows
+   */
+  replaceMaterialStock(rows, { now = Date.now() } = {}) {
+    const eq = (a, b) => (a ?? null) === (b ?? null);
+    return this.tx(() => {
+      const have = new Map(this.db.prepare('SELECT * FROM material_stock').all().map((r) => [r.stock_code, r]));
+      let added = 0;
+      let updated = 0;
+      let unchanged = 0;
+      const seen = new Set();
+      for (const row of rows) {
+        seen.add(row.stockCode);
+        const cur = have.get(row.stockCode);
+        if (!cur) {
+          this.db.prepare(
+            `INSERT INTO material_stock (stock_code, material_key, name, on_hand_kg, pending_kg, net_kg, tare_kg, imported_at, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?)`,
+          ).run(row.stockCode, row.materialKey, row.name ?? null, row.onHandKg ?? null, row.pendingKg ?? null, row.netKg ?? null, row.tareKg ?? null, now, now);
+          added += 1;
+        } else if (eq(cur.material_key, row.materialKey) && eq(cur.name, row.name) && eq(cur.on_hand_kg, row.onHandKg)
+          && eq(cur.pending_kg, row.pendingKg) && eq(cur.net_kg, row.netKg) && eq(cur.tare_kg, row.tareKg)) {
+          unchanged += 1;
+        } else {
+          this.db.prepare(
+            'UPDATE material_stock SET material_key=?, name=?, on_hand_kg=?, pending_kg=?, net_kg=?, tare_kg=?, updated_at=? WHERE stock_code=?',
+          ).run(row.materialKey, row.name ?? null, row.onHandKg ?? null, row.pendingKg ?? null, row.netKg ?? null, row.tareKg ?? null, now, row.stockCode);
+          updated += 1;
+        }
+      }
+      let removed = 0;
+      for (const code of have.keys()) {
+        if (!seen.has(code)) { this.db.prepare('DELETE FROM material_stock WHERE stock_code = ?').run(code); removed += 1; }
+      }
+      return { added, updated, unchanged, removed };
+    });
+  }
+
+  listMaterialStock() {
+    return this.db.prepare('SELECT * FROM material_stock ORDER BY stock_code COLLATE NOCASE').all().map((r) => ({
+      stockCode: r.stock_code, materialKey: r.material_key, name: r.name, onHandKg: r.on_hand_kg, pendingKg: r.pending_kg,
+      netKg: r.net_kg, tareKg: r.tare_kg, importedAt: Number(r.imported_at), updatedAt: Number(r.updated_at),
+    }));
   }
 
   stats() {

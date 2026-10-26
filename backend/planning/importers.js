@@ -5,6 +5,8 @@
  *       -> URUN KARTLARI (her stok kodu icin EN SON is emrindeki degerler)
  *   siparis dosyasi (_SIPARIS sayfasi): Mamul_Kodu, Evrak_No, Must_Sip_No, Miktar, Sevk_Edilen_Miktar, Kalan_Miktar, HM, TAM BOY, BR, NT, SN ...
  *       -> SIPARIS SATIRLARI (+ urun kartlarinda eksik alanlar: tam boy, hammadde, agirliklar, sure)
+ *   hammadde depo stogu (Mikro SQL sorgusu): Stok_Kod, Stok_Adi, Fiili_Stok, Gecici_Stok, Net_Agirlik, Dara
+ *       -> DEPO STOGU (F asamasi): TAM DEGISTIRME, gecmis tutulmaz (dosyada olmayan kod silinir)
  *
  * Kurallar:
  *   - Elle duzenlenmis urun kartinin (edited) alanlari iceri alma ile EZILMEZ; yalniz bos alanlar doldurulur.
@@ -14,18 +16,28 @@
  */
 import { decodeCsv, parseCsv } from './csv-read.js';
 import { XlsxError, isOle2, isZip, readXlsx } from './xlsx-read.js';
-import { cleanCode, foldTr, headerKey, isScientific, looseKey, parseDate, parseNumber, sheetRow } from './normalize.js';
+import { cleanCode, customerCodeFromName, firstToken, foldTr, headerKey, isScientific, looseKey, parseDate, parseNumber, sheetRow } from './normalize.js';
 import { findGkkHeader } from './gkk.js';
 import { findApprovalHeader } from './first-approval.js';
+import { materialKey } from './material.js';
 
 export class ImportError extends Error {
-  constructor(message, status = 400) {
+  /** @param {string} message @param {number} [status] @param {string|null} [code] 'unrecognized': dosya/sayfa hicbir bilinen bicime uymuyor (kaynak klasorunde "atlandi") */
+  constructor(message, status = 400, code = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
 const MAX_WARNINGS = 25;
+/** Sonuca konan "ne degisti" listelerinin her biri en fazla bu kadar kayit tasir (toplamlar tally'de). */
+const MAX_CHANGES = 40;
+const FIELD_LABEL = Object.freeze({
+  name: 'ad', customerCode: 'müşteri ürün kodu', material: 'hammadde', altMaterial: 'alternatif hammadde',
+  grossKg: 'brüt ağırlık', netKg: 'net ağırlık', plannedSec: 'planlanan süre', lengthMm: 'tam boy',
+});
+const pushCapped = (list, item) => { if (list.length < MAX_CHANGES) list.push(item); };
 /** Mikro stok kodu bicimi (SR001.013, Nİ002.001): bunlar urundur; PR-001 (talas), TM-001, HM... urun karti degildir. */
 const PRODUCT_CODE = /^[A-ZİÇĞÖŞÜ]{2}\d{3}\.\d{3}$/i;
 /** Urun kodunda bosluk, virgul, noktali virgul, egik cizgi olmaz (bozuk hucre). */
@@ -77,11 +89,12 @@ export function detectForm(parsed) {
   return null;
 }
 
-/** @returns {'isemri'|'siparis'|null} */
+/** @returns {'isemri'|'siparis'|'stok'|null} */
 export function detectFormat(headers) {
   const keys = new Set(headers.map(headerKey));
   if (keys.has('ALENKOD') && keys.has('MAMULADI')) return 'isemri';
   if (keys.has('MAMULKODU') && keys.has('EVRAKNO')) return 'siparis';
+  if (keys.has('STOKKOD') && keys.has('FIILISTOK')) return 'stok';
   return null;
 }
 
@@ -119,19 +132,22 @@ function importIsEmri(db, parsed, ctx) {
   });
 
   const tally = { added: 0, updated: 0, unchanged: 0 };
+  const changes = { added: [], updated: [] };
   db.tx(() => {
     for (const [key, { row, stock }] of latest) {
       const rawCustomer = cell(idx, row, 'MUSTERIKODU');
+      const productName = cell(idx, row, 'MAMULADI') || null;
       let customerCode = null;
       if (isScientific(rawCustomer)) {
         warnings.add(`${stock}: müşteri kodu bilimsel gösterimde ("${rawCustomer}"), değer kaybolmuş. Excel'de o sütunu "Sayı, 0 ondalık" yapıp yeniden kaydedin.`);
-      } else if (rawCustomer !== '') customerCode = cleanCode(rawCustomer);
+      } else if (rawCustomer !== '') customerCode = firstToken(cleanCode(rawCustomer)) || null; // müşteri ürün kodu = ilk sözcük ("140100188 1234-567" -> "140100188")
+      customerCode ??= customerCodeFromName(productName); // sütun boş/bozuksa ürün adının başındaki kod
 
       const alt = cell(idx, row, 'ALTERNATIFHM');
       const sec = positive(parseNumber(cell(idx, row, 'URETIMSN')));
       if (sec === null) noSec += 1;
       const incoming = {
-        name: cell(idx, row, 'MAMULADI') || null,
+        name: productName,
         customerCode,
         material: cell(idx, row, 'HAMMADDE') || null,
         altMaterial: alt === '' || alt === '0' ? null : alt,
@@ -139,13 +155,15 @@ function importIsEmri(db, parsed, ctx) {
         grossKg: positive(parseNumber(cell(idx, row, 'BRUTGR'))),
         netKg: positive(parseNumber(cell(idx, row, 'NETGR'))),
       };
-      tally[saveIfChanged(db, key, stock, incoming, { source: 'csv-isemri', by: ctx.by, now: ctx.now })] += 1;
+      const outcome = saveIfChanged(db, key, stock, incoming, { source: 'csv-isemri', by: ctx.by, now: ctx.now });
+      tally[outcome] += 1;
+      if (outcome !== 'unchanged') pushCapped(changes[outcome], { stockCode: stock });
     }
     for (const [year, seq] of floors) db.raiseSeqFloor(year, seq);
   });
   if (noSec > 0) warnings.add(`${noSec} üründe planlanan süre (ÜRETİM SN) boş.`);
 
-  return { totalRows, skipped, ...tally, products: { ...tally }, staleMarked: 0, seqFloor: Object.fromEntries(floors) };
+  return { totalRows, skipped, ...tally, products: { ...tally }, staleMarked: 0, seqFloor: Object.fromEntries(floors), changes: { products: changes } };
 }
 
 /* -------------------------------------------------------------- siparis -> siparis satirlari */
@@ -158,6 +176,7 @@ function importSiparis(db, parsed, ctx) {
   /** @type {Map<string, object>} urun karti ipuclari: stok kodu anahtari -> en yeni satirin degerleri */
   const hints = new Map();
   const tally = { added: 0, updated: 0, unchanged: 0 };
+  const lineChanges = { added: [], updated: [] };
   let totalRows = 0;
   let skipped = 0;
   let noDate = 0;
@@ -192,7 +211,9 @@ function importSiparis(db, parsed, ctx) {
         remaining: parseNumber(cell(idx, row, 'KALANMIKTAR'), { integer: true }),
         dueDate: parseDate(cell(idx, row, 'TEYITEDILENTARIH')), material,
       };
-      tally[db.upsertLine(line, batchId)] += 1;
+      const outcome = db.upsertLine(line, batchId);
+      tally[outcome] += 1;
+      if (outcome !== 'unchanged') pushCapped(lineChanges[outcome], { docNo, custOrderNo, stockCode: code, qty, remaining: line.remaining });
 
       if (PRODUCT_CODE.test(code)) {
         const prev = hints.get(codeKey);
@@ -208,33 +229,88 @@ function importSiparis(db, parsed, ctx) {
     });
   });
 
-  // Urun kartlari: tam boy siparis dosyasindan guncellenir; digerleri yalniz bos kalmissa doldurulur.
+  // Urun kartlari. Kural: bos alan dolar; DOLU alan yalniz Mikro'da DEGISTIYSE (bu dosyadaki deger, Mikro'dan en son gelen degerden (anlik goruntu) farkliysa)
+  // ve kart elle duzenlenmemisse guncellenir. Mikro'da degismemis alan karttaki degeri (planlama Excel'inden ya da elle gelmis olsa da) EZMEZ;
+  // elle duzenlenmis karta dokunulmaz, ama Mikro'daki fark "korunan" olarak bildirilir. Tam boy eskisi gibi duzenlenmemis kartta her zaman Mikro'dan gelir.
   const products = { added: 0, updated: 0, unchanged: 0 };
+  let protectedCards = 0; // Mikro'da degisen ama elle duzenlenmis oldugu icin dokunulmayan kart sayisi
+  const productChanges = { added: [], updated: [], protected: [] };
   db.tx(() => {
     for (const [key, h] of hints) {
       const cur = db.getProduct(key);
-      const incoming = { name: h.name, material: h.material, grossKg: h.grossKg, netKg: h.netKg, plannedSec: h.plannedSec };
-      const result = saveIfChanged(db, key, h.stock, incoming, { source: 'csv-siparis', by: ctx.by, now: ctx.now, fillOnly: true });
-      let outcome = result;
-      if (h.lengthMm !== null && (!cur || !cur.edited) && cur?.lengthMm !== h.lengthMm) {
-        db.saveProduct(key, { lengthMm: h.lengthMm }, { source: db.getProduct(key).source, by: ctx.by, now: ctx.now });
-        if (outcome === 'unchanged') outcome = 'updated';
+      const incoming = {
+        name: h.name, customerCode: customerCodeFromName(h.name), material: h.material, grossKg: h.grossKg, netKg: h.netKg, plannedSec: h.plannedSec, lengthMm: h.lengthMm,
+      };
+      const known = Object.fromEntries(Object.entries(incoming).filter(([, v]) => v !== null && v !== undefined));
+      let outcome;
+      if (!cur) {
+        db.saveProduct(key, { stockCode: h.stock, ...known }, { source: 'csv-siparis', by: ctx.by, now: ctx.now });
+        outcome = 'added';
+        pushCapped(productChanges.added, { stockCode: h.stock });
+      } else {
+        const snap = db.getSnapshot(key);
+        const fields = {};
+        const kept = [];
+        for (const [f, v] of Object.entries(known)) {
+          if (same(cur[f], v)) continue;
+          if (cur[f] === null || cur[f] === undefined) { fields[f] = v; continue; } // bos alan dolar
+          const mikroChanged = snap !== null && Object.hasOwn(snap, f) && !same(snap[f], v);
+          if (f === 'lengthMm' && !cur.edited) fields[f] = v;
+          else if (mikroChanged) { if (cur.edited) kept.push(f); else fields[f] = v; }
+        }
+        const names = Object.keys(fields);
+        if (names.length > 0) {
+          db.saveProduct(key, fields, { source: cur.source, by: ctx.by, now: ctx.now }); // kartin kaynagi olusturulduğu yer olarak kalır
+          pushCapped(productChanges.updated, { stockCode: h.stock, fields: names.map((f) => FIELD_LABEL[f] ?? f) });
+        }
+        if (kept.length > 0) { protectedCards += 1; pushCapped(productChanges.protected, { stockCode: h.stock, fields: kept.map((f) => FIELD_LABEL[f] ?? f) }); }
+        outcome = names.length > 0 ? 'updated' : 'unchanged';
       }
+      db.setSnapshot(key, { ...(db.getSnapshot(key) ?? {}), ...known });
       products[outcome] += 1;
     }
   });
 
   if (noDate > 0) warnings.add(`${noDate} satırda sipariş tarihi okunamadı (gg.aa.yyyy ya da yyyy-aa-gg beklenir).`);
   const staleMarked = ctx.keepOld ? 0 : db.markStale('csv', batchId);
-  return { totalRows, skipped, ...tally, products, staleMarked };
+  return { totalRows, skipped, ...tally, products, protectedCards, staleMarked, changes: { lines: lineChanges, products: productChanges } };
+}
+
+/* ----------------------------------------------------------- depo hammadde stogu (F) */
+
+/**
+ * Mikro'nun hammadde stok sorgusu (Stok_Kod, Stok_Adi, Fiili_Stok, Gecici_Stok, Net_Agirlik, Dara): depodaki EN SON goruntu, TAM
+ * DEGISTIRME (gecmis tutulmaz; `db.replaceMaterialStock` dosyada olmayan kodu siler). Ayni kod sayfada tekrarlarsa son satir kazanir.
+ */
+function importMaterialStock(db, parsed, ctx) {
+  const idx = indexOf(parsed.headers);
+  const warnings = ctx.warnings;
+  const byCode = new Map();
+  let totalRows = 0;
+  let skipped = 0;
+
+  for (const row of parsed.rows) {
+    const stockCode = cell(idx, row, 'STOKKOD');
+    if (stockCode === '') { skipped += 1; continue; }
+    totalRows += 1;
+    byCode.set(stockCode, {
+      stockCode, materialKey: materialKey(stockCode), name: cell(idx, row, 'STOKADI') || null,
+      onHandKg: parseNumber(cell(idx, row, 'FIILISTOK')), pendingKg: parseNumber(cell(idx, row, 'GECICISTOK')),
+      netKg: parseNumber(cell(idx, row, 'NETAGIRLIK')), tareKg: parseNumber(cell(idx, row, 'DARA')),
+    });
+  }
+  if (byCode.size === 0) warnings.add('Dosyada hiç hammadde stok satırı bulunamadı (Stok_Kod sütunu boş).');
+
+  const { added, updated, unchanged, removed } = db.replaceMaterialStock([...byCode.values()], { now: ctx.now });
+  return { totalRows, skipped, added, updated, unchanged, removed };
 }
 
 /* ------------------------------------------------------------------------------- girdi */
 
 const UNRECOGNIZED =
-  'Beklenen: iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıkları), sipariş dosyası (Mamul_Kodu, Evrak_No … başlıkları), GKK rapor numaraları (EYS.FR.011: RAPOR NO, ÜRETİCİ RAPOR TARİHİ) ya da ilk baskı onay listesi (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU).';
+  'Beklenen: iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıkları), sipariş dosyası (Mamul_Kodu, Evrak_No … başlıkları), GKK rapor numaraları (EYS.FR.011: RAPOR NO, ÜRETİCİ RAPOR TARİHİ), ilk baskı onay listesi (EYS.FR.013: İLK BASKI ONAY KODU, ÜRÜN KODU) ya da hammadde depo stoğu (Stok_Kod, Fiili_Stok … başlıkları).';
 
-/** Tablonun hangi dosya turu oldugu: form sayfalari (gkk/ilkonay; `quality` varsa) once, sonra baslik satirindan isemri/siparis. @returns {'gkk'|'ilkonay'|'isemri'|'siparis'|null} */
+/** Tablonun hangi dosya turu oldugu: form sayfalari (gkk/ilkonay; `quality` varsa) once, sonra baslik satirindan isemri/siparis/stok. @returns {'gkk'|'ilkonay'|'isemri'|'siparis'|'stok'|null} */
 function classify(parsed, quality) {
   return (quality ? detectForm(parsed) : null) ?? detectFormat(parsed.headers);
 }
@@ -252,7 +328,7 @@ function importParsed(db, parsed, kind, { filename, by, keepOld, now, quality },
 
   const batchId = db.beginBatch(kind, { filename, by, now });
   const ctx = { by, now, warnings, batchId, keepOld };
-  const result = kind === 'isemri' ? importIsEmri(db, parsed, ctx) : importSiparis(db, parsed, ctx);
+  const result = kind === 'isemri' ? importIsEmri(db, parsed, ctx) : kind === 'siparis' ? importSiparis(db, parsed, ctx) : importMaterialStock(db, parsed, ctx);
   db.finishBatch(batchId, {
     totalRows: result.totalRows, added: result.added, updated: result.updated, unchanged: result.unchanged,
     skipped: result.skipped, warnings: warnings.list(),
@@ -272,7 +348,7 @@ export function importCsv(db, buffer, { filename = null, by = null, keepOld = fa
   if (parsed.headers.length === 0) throw new ImportError('Dosyada başlık satırı bulunamadı.');
 
   const kind = classify(parsed, quality);
-  if (!kind) throw new ImportError(`Dosya tanınmadı. ${UNRECOGNIZED} Bulunan ilk başlıklar: ${parsed.headers.slice(0, 6).join(', ')}`);
+  if (!kind) throw new ImportError(`Dosya tanınmadı. ${UNRECOGNIZED} Bulunan ilk başlıklar: ${parsed.headers.slice(0, 6).join(', ')}`, 400, 'unrecognized');
   return importParsed(db, parsed, kind, { filename, by, keepOld, now, quality }, { encoding, delimiter: parsed.delimiter });
 }
 
@@ -316,6 +392,8 @@ export function importXlsx(db, buffer, { filename = null, by = null, keepOld = f
   if (sheets.length === 0) {
     throw new ImportError(
       `Çalışma kitabındaki hiçbir sayfa tanınmadı (${book.sheets.map((s) => s.name).join(', ')}). ${UNRECOGNIZED}`,
+      400,
+      'unrecognized',
     );
   }
   const warnings = sheets.flatMap((s) => s.warnings.map((w) => `${s.sheet}: ${w}`));

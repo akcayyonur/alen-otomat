@@ -10,7 +10,7 @@
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
 import { getSession, closedSections } from './auth-view.js';
-import { openModal, dateTimeText } from './planning-common.js';
+import { openModal } from './planning-common.js';
 import { renderProducts } from './planning-products.js';
 import { renderOrders } from './planning-orders.js';
 import { renderPrograms } from './planning-programs.js';
@@ -22,20 +22,22 @@ import { renderEfficiency } from './planning-efficiency.js';
 import { renderGkk } from './planning-gkk.js';
 import { renderApprovals } from './planning-approvals.js';
 import { renderMeasureReports } from './planning-reports.js';
+import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
+import { openFolderDialog } from './planning-docs.js';
 import { TAB_ROLES, tabsForRole, defaultTabFor } from './planning-tabs.js';
 
 const TABS = Object.freeze([
-  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Tezgah başına üretimdeki iş emri, bekleyenler ve duruş nedenleri. Duruşun süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', roles: TAB_ROLES.tezgahbasi, plain: true, render: renderShop },
-  { key: 'paketleme', label: 'Paketleme', sub: 'kasa adedi gir', hint: 'Kasa kapandıktan sonra paketlemede belli bir adetle paketlenen kesin adedi girin; kasa kartı buradan da yeniden basılır. Kartında ÜRÜN RET tikli kasalar paketlemeye gitmez ("Ret edilenler"de görünür).', roles: TAB_ROLES.paketleme, plain: true, render: renderPacking },
-  { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca iş emri formu (ve arka sayfada teknik resimler) açılır; "Düzenle" ile iş emri değiştirilir. Siparişten ya da siparişsiz yeni iş emri açılır.', roles: TAB_ROLES.isemirleri, render: renderWorkOrders },
-  { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor numarası takip formu (EYS.FR.011): iş emrine yazılacak GK numarasını hammadde cinsinden bulun.', roles: TAB_ROLES.gkk, plain: true, importer: true, render: renderGkk },
-  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013): ilk parça onayı için numara alın; ürün, GK kodu, iş emri, tarih, operatör ve CNC no ile kaydedilir.', roles: TAB_ROLES.ilkonay, plain: true, importer: true, render: renderApprovals },
-  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'İş emirlerine bağlı ölçü kontrolü raporları: saatlik ölçümler kaydedilir; kalite kontrole ve paketlemeye ürünle birlikte giden rapor buradan açılır ve basılır.', roles: TAB_ROLES.olcuraporlari, plain: true, render: renderMeasureReports },
-  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Verimlilik (kazanılan süre ÷ ayrılan süre), kullanılabilirlik ve performans; tezgah × gün × vardiya matrisi, günlük üretim kartları ve duruş nedeni dakikaları.', roles: TAB_ROLES.verimlilik, plain: true, render: renderEfficiency },
-  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Hammadde ihtiyacı, gerçekleşen sarfiyat (sayaç × brüt gramaj, kg) ve Mikro sarfiyat fişi takibi.', roles: TAB_ROLES.hammadde, plain: true, render: renderMaterial },
-  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: 'Ürün kartları: hammadde, tam boy, net/brüt ağırlık ve planlanan çevrim süresi.', roles: TAB_ROLES.urunler, render: renderProducts },
-  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: 'Siparişler ve satırları; satırdan doğrudan iş emri açılır.', roles: TAB_ROLES.siparisler, render: renderOrders },
-  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Tornalarda çalışmış programları ürünlerle eşleyin: önerileri onaylayın ya da ürünü kendiniz seçin. Eşleme adedi belirlemez, yalnız iş emri ve raporlarda doğru ürünü gösterir.', roles: TAB_ROLES.programlar, render: renderPrograms },
+  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Duruş süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', roles: TAB_ROLES.tezgahbasi, plain: true, render: renderShop },
+  { key: 'paketleme', label: 'Paketleme', sub: 'paketleme formu (EYS.FR.007)', hint: 'Koli içi adet ürün başına öğrenilir ve önerilir.', roles: TAB_ROLES.paketleme, plain: true, render: renderPacking },
+  { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca form açılır; "Düzenle" ile değiştirin.', roles: TAB_ROLES.isemirleri, render: renderWorkOrders },
+  { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor no takibi (EYS.FR.011).', roles: TAB_ROLES.gkk, plain: true, importer: true, render: renderGkk },
+  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013).', roles: TAB_ROLES.ilkonay, plain: true, importer: true, render: renderApprovals },
+  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', roles: TAB_ROLES.olcuraporlari, plain: true, render: renderMeasureReports },
+  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Kazanılan süre ÷ ayrılan süre.', roles: TAB_ROLES.verimlilik, plain: true, render: renderEfficiency },
+  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', roles: TAB_ROLES.hammadde, plain: true, render: renderMaterial },
+  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', roles: TAB_ROLES.urunler, render: renderProducts },
+  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', roles: TAB_ROLES.siparisler, render: renderOrders },
+  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', roles: TAB_ROLES.programlar, render: renderPrograms },
 ]);
 
 const roleOf = () => getSession()?.user?.role ?? 'viewer';
@@ -74,31 +76,53 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   const showImport = admin && (!current.plain || current.importer === true);
   host.innerHTML =
     '<section class="dt-block">' +
-    `<div class="dt-block-head"><div><h3>${escapeHtml(current.label)}</h3><p class="hint">${escapeHtml(current.hint)}</p></div>` +
-    (showImport ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="import">Excel içeri al…</button></div>' : '') + '</div>' +
-    (showAdminBar ? '<p class="hint" data-role="summary"></p>' : '') +
+    `<div class="dt-block-head"><div><h3>${escapeHtml(current.label)}</h3>${current.hint ? `<p class="hint">${escapeHtml(current.hint)}</p>` : ''}</div>` +
+    (showImport
+      ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="refresh" title="Mikro / GKK Excel dosyalarının durduğu klasörü okur, değişenleri uygular">Kaynak dosyadan yenile</button>' +
+        '<button type="button" class="icon-btn" data-act="sources">Kaynak klasörü…</button>' +
+        (current.key === 'urunler'
+          ? '<button type="button" class="icon-btn" data-act="docs-cizim" title="Teknik resim klasöründeki PDF\'leri ürün koduna göre ürün kartlarına bağlar">Teknik resimleri eşle…</button>' +
+            '<button type="button" class="icon-btn" data-act="docs-etiket" title="Etiket klasöründeki dosyaları ürün koduna göre ürün kartlarına bağlar">Etiketleri eşle…</button>'
+          : '') +
+        '<button type="button" class="icon-btn" data-act="import">Excel içeri al…</button></div>'
+      : '') + '</div>' +
+    (showImport ? '<p class="hint-meta" data-role="source-status"></p>' : '') +
+    (showAdminBar ? '<div class="pl-kpis pl-kpis-summary" data-role="summary"></div>' : '') +
     '<div data-role="tab"></div></section>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
   async function summary() {
     if (!showAdminBar) return;
+    const el = $('summary');
     try {
       const s = await api('/api/planning/summary');
-      const last = s.lastImports[0];
-      $('summary').textContent =
-        `${n(s.products)} ürün kartı · ${n(s.orders)} sipariş (${n(s.orderLines)} satır, ${n(s.openOrderLines)} açık) · ${n(s.mappedPrograms)} program eşli` +
-        (last ? ` · son içeri alma: ${KIND_LABEL[last.kind] ?? last.kind}, ${dateTimeText(last.at)}${last.by ? ` (${last.by})` : ''}` : ' · henüz içeri alma yapılmadı');
+      el.innerHTML =
+        `<div class="pl-kpi"><span class="pl-kpi-l">Ürün kartı</span><span class="pl-kpi-v">${n(s.products)}</span></div>` +
+        `<div class="pl-kpi"><span class="pl-kpi-l">Sipariş</span><span class="pl-kpi-v">${n(s.orders)}` +
+        (s.openOrderLines > 0 ? `<span class="pl-kpi-sub">${n(s.openOrderLines)} açık</span>` : '') + `</span></div>` +
+        `<div class="pl-kpi"><span class="pl-kpi-l">Program eşli</span><span class="pl-kpi-v">${n(s.mappedPrograms)}</span></div>`;
     } catch (err) {
-      $('summary').textContent = `Özet alınamadı: ${err.message}`;
+      el.innerHTML = `<p class="hint-meta is-attn">Özet alınamadı: ${escapeHtml(err.message)}</p>`;
     }
   }
 
   const mountTab = () => current.render($('tab'));
+  const afterChange = () => { summary(); mountTab(); showSourceStatus(host); };
   host.onclick = (ev) => {
-    if (ev.target.closest('[data-act="import"]')) openImportDialog(() => { summary(); mountTab(); });
+    if (ev.target.closest('[data-act="import"]')) openImportDialog(afterChange);
+    else if (ev.target.closest('[data-act="refresh"]')) runRefresh({ onDone: afterChange });
+    else if (ev.target.closest('[data-act="sources"]')) openSourcesDialog({ onDone: () => showSourceStatus(host) });
+    else if (ev.target.closest('[data-act="docs-cizim"]')) openFolderDialog('cizim', { onDone: mountTab });
+    else if (ev.target.closest('[data-act="docs-etiket"]')) openFolderDialog('etiket', { onDone: mountTab });
   };
   summary();
   mountTab();
+  // Kaynak klasorunde degisiklik var mi: ekran acilirken ve dakikada bir (Mikro dosyayi guncelledikce dugme "N degisiklik" der).
+  clearInterval(host.sourceTimer);
+  if (showImport) {
+    showSourceStatus(host);
+    host.sourceTimer = setInterval(() => { if (!host.querySelector('[data-role="source-status"]')) clearInterval(host.sourceTimer); else showSourceStatus(host); }, 60_000);
+  }
 }
 
 /** Bir tablonun (CSV'nin tamamı ya da bir Excel sayfası) iceri alma sonucu. */

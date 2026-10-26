@@ -9,3 +9,7 @@ installer/payload/
 installer/output/
 *.exe
 *.dll
+
+# Claude Code arac/skill durumu: kisisel gelistirme araci, uygulamanin bir parcasi degil (binari icerir).
+.claude/
+.impeccable/

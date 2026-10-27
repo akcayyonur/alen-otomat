@@ -465,13 +465,18 @@ function gecici() {
 
 test('geriye doldurma: eski ornekler uretim olayina cevrilir, bir kez calisir, cevrim suresi uydurulmaz', () => {
   const { file, sil } = gecici();
+  // T0 (sabit takvim tarihi) DEGIL: bu test db.js pruneOld()'u (her acilista samples'tan SAMPLE_RETENTION_DAYS
+  // yani 7 gunden eskiyi gercek Date.now()'a gore siler) store'u KAPATIP YENIDEN ACARAK tetikliyor. T0 yazildigi
+  // gunden birkac hafta sonra bu sinirdan eski kalirsa ikinci acilis ornekleri pruneOld() ile kaybeder ("b" hic
+  // olay bulamaz). Her zaman tazede kalan, goreli bir an.
+  const taban = Date.now() - 2 * 86_400_000;
   try {
     const a = new TelemetryDb(file);
     // ozellik oncesi gibi: yalniz ornekler var
     let toplam = 500;
     for (let i = 0; i < 20; i += 1) {
       if (i % 5 === 0) toplam += 1;
-      const r = parseTelemetry({ machineId: 'CNC-01', status: 'RUNNING', ts: new Date(T0 + i * 5 * SN).toISOString(), partTotal: toplam, partCount: toplam - 400, program: 'P1', mainProgram: 'P1', cycleTimeSec: 20 });
+      const r = parseTelemetry({ machineId: 'CNC-01', status: 'RUNNING', ts: new Date(taban + i * 5 * SN).toISOString(), partTotal: toplam, partCount: toplam - 400, program: 'P1', mainProgram: 'P1', cycleTimeSec: 20 });
       assert.ok(r.ok, JSON.stringify(r.errors));
       a.recordSample(r.value, { force: true });
     }
@@ -494,6 +499,9 @@ test('geriye doldurma: eski ornekler uretim olayina cevrilir, bir kez calisir, c
 test('depo: ingest sirasinda olaylar yazilir; yeniden baslamada kapali kalinan sure artisi kaybolmaz', () => {
   const { file, sil } = gecici();
   const acik = [];
+  // Yukaridaki "geriye doldurma" testindeki gibi T0 degil, goreli bir an: bu test de store'u kapatip
+  // yeniden aciyor, pruneOld() T0 eskiyince "b"nin seed'ini (lastCounters) sessizce kaybeder.
+  const taban = Date.now() - 2 * 86_400_000;
   try {
     const ac = () => { const s = new TelemetryStore(file); acik.push(s); return s; };
     const ver = (store, ts, toplam) => {
@@ -502,20 +510,20 @@ test('depo: ingest sirasinda olaylar yazilir; yeniden baslamada kapali kalinan s
       store.ingest(r.value);
     };
     const a = ac();
-    ver(a, T0, 1000);
-    ver(a, T0 + 25 * SN, 1001);
-    ver(a, T0 + 50 * SN, 1002);
+    ver(a, taban, 1000);
+    ver(a, taban + 25 * SN, 1001);
+    ver(a, taban + 50 * SN, 1002);
     a.db.flush();
-    assert.equal(a.db.productionEvents('CNC-01', 0, T0 * 2).length, 2);
+    assert.equal(a.db.productionEvents('CNC-01', 0, taban * 2).length, 2);
     clearInterval(a.db.flushTimer);
     a.db.db.close(); // ani kapanis
 
     const b = ac();
-    ver(b, T0 + 600 * SN, 1010); // 10 dk sonra, arada 8 parca uretilmis
-    const ev = b.db.productionEvents('CNC-01', 0, T0 * 2).at(-1);
+    ver(b, taban + 600 * SN, 1010); // 10 dk sonra, arada 8 parca uretilmis
+    const ev = b.db.productionEvents('CNC-01', 0, taban * 2).at(-1);
     assert.equal(ev.qty, 8);
     assert.ok(ev.gapMs >= 500 * SN, 'zamani yaklasik olarak isaretli');
-    assert.equal(b.db.productionWindow(0, T0 * 2, 'CNC-01')[0].qty, 10, 'toplam tezgah sayacina esit (1000 -> 1010)');
+    assert.equal(b.db.productionWindow(0, taban * 2, 'CNC-01')[0].qty, 10, 'toplam tezgah sayacina esit (1000 -> 1010)');
   } finally {
     for (const s of acik) { clearInterval(s.db.flushTimer); try { s.db.db.close(); } catch { /* kapali */ } }
     sil();

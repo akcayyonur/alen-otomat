@@ -10,6 +10,7 @@
  */
 import { escapeHtml, num, dur } from './format.js';
 import { api } from './lib-common.js';
+import { lineChart, barChart } from './charts.js';
 
 const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 const WEEKDAYS = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
@@ -408,7 +409,8 @@ function drawBody() {
     body.innerHTML = summary + '<p class="empty">Bu aralıkta sayılan parça yok.</p>' + notesHtml(d);
     return;
   }
-  body.innerHTML = summary + (v.mode === 'urun' ? productTable(d) : v.mode === 'gunluk' ? dayTable(d) : machineTable(d)) + notesHtml(d);
+  body.innerHTML = summary + chartFigureHtml(v, d) + (v.mode === 'urun' ? productTable(d) : v.mode === 'gunluk' ? dayTable(d) : machineTable(d)) + notesHtml(d);
+  drawReportCharts(body, v, d);
 }
 
 const nameOf = (d, id) => d.machines.find((m) => m.id === id)?.name ?? id;
@@ -420,6 +422,49 @@ function totalRow(d, list, label) {
   return `<tfoot><tr class="prod-total"><td colspan="1">${escapeHtml(label)}</td>` +
     d.shifts.map((s) => `<td class="num">${qtyCell(stat(sumShift(list, s.id)), { time: false })}</td>`).join('') +
     `<td class="num">${qtyCell(stat(total), { time: false })}</td><td></td></tr></tfoot>`;
+}
+
+const dayToMs = (key) => { const [y, m, dd] = key.split('-').map(Number); return new Date(y, m - 1, dd).getTime(); };
+const msToDayLabel = (ts) => new Date(ts).toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+
+/** Mod degisince cizilen grafik: gunluk=egilim, makine/urun=siralanmis cubuk. Tablo altinda zaten tam sayilar var. */
+function chartFigureHtml(v, d) {
+  if (v.mode === 'gunluk') {
+    if (d.days.length < 2) return ''; // tek gunde egilim grafigi anlamsiz, tablo yeter
+    return '<figure class="chart"><figcaption>Günlük üretim<span class="unit">seçili aralık</span></figcaption><div class="chart-host" data-role="prod-trend"></div></figure>';
+  }
+  if (v.mode === 'makine' && d.byMachine.some((m) => m.total.qty > 0)) {
+    return '<figure class="chart"><figcaption>Tezgah bazında üretim<span class="unit">çoktan aza</span></figcaption><div class="chart-host" data-role="prod-machines"></div></figure>';
+  }
+  if (v.mode === 'urun' && d.byProduct.length > 0) {
+    return `<figure class="chart"><figcaption>Ürün bazında üretim<span class="unit">ilk ${Math.min(10, d.byProduct.length)}</span></figcaption><div class="chart-host" data-role="prod-products"></div></figure>`;
+  }
+  return '';
+}
+
+/** chartFigureHtml ile mount edilen yer tutucuyu doldurur (innerHTML string dondurdugu icin mount sonrasi ayrı cagrilir). */
+function drawReportCharts(host, v, d) {
+  if (v.mode === 'gunluk') {
+    const trendHost = host.querySelector('[data-role="prod-trend"]');
+    if (trendHost) {
+      const points = d.days.map((x) => ({ ts: dayToMs(x.date), value: x.total.qty }));
+      lineChart(trendHost, { points, unit: ' adet', label: 'Günlük üretim', xLabel: msToDayLabel });
+    }
+  } else if (v.mode === 'makine') {
+    const mHost = host.querySelector('[data-role="prod-machines"]');
+    if (mHost) {
+      const items = d.byMachine.filter((m) => m.total.qty > 0).sort((a, b) => b.total.qty - a.total.qty)
+        .map((m) => { const label = nameOf(d, m.machineId); return { label: m.machineId, value: m.total.qty, title: `${m.machineId}${label !== m.machineId ? ` · ${label}` : ''}: ${num(m.total.qty)} adet` }; });
+      barChart(mHost, { items, unit: ' adet', ariaLabel: 'Tezgah bazında üretim' });
+    }
+  } else if (v.mode === 'urun') {
+    const pHost = host.querySelector('[data-role="prod-products"]');
+    if (pHost) {
+      const items = d.byProduct.slice().sort((a, b) => b.total.qty - a.total.qty).slice(0, 10)
+        .map((p) => ({ label: programText(p.program), value: p.total.qty, title: `${programText(p.program)}: ${num(p.total.qty)} adet` }));
+      barChart(pHost, { items, unit: ' adet', ariaLabel: 'Ürün bazında üretim' });
+    }
+  }
 }
 
 function machineTable(d) {

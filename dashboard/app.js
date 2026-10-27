@@ -244,7 +244,17 @@ function renderFleet() {
       m.connected && t ? `${num(t.feedRate)} mm/dk` : '—';
     card.querySelector('[data-role="part"]').textContent =
       t?.partCount != null ? `${num(t.partCount)} / ${num(t.partTarget)}` : '—';
-    card.querySelector('[data-role="ratio"]').textContent = pct(m.runRatio);
+    // Suren vardiyadan (8 sa) gelen oran; hemen alttaki serit yalniz son 15 dk'yi gosterir - tezgah az once
+    // sustuysa serit tamamen "veri yok" taramali gorunurken oran hala eski (dogru) sayiyi tasir: celiskili
+    // GORUNUR ama degilDIR (farkli paydalar, bkz. CLAUDE.md "coverage ayri raporlanir"); acikca isaretle.
+    const ratioEl = card.querySelector('[data-role="ratio"]');
+    ratioEl.textContent = pct(m.runRatio);
+    if (!m.connected && m.runRatio != null) {
+      ratioEl.textContent += ' (kısmi)';
+      ratioEl.title = 'Şu an veri gelmiyor; bu oran, verinin kesilmeden önceki vardiya ölçümüne ait.';
+    } else {
+      ratioEl.removeAttribute('title');
+    }
     card.querySelector('[data-role="ribbon"]').innerHTML = ribbonHtml(m.ribbon);
 
     const alarm = t?.alarms?.[0];

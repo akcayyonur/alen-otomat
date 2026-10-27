@@ -113,6 +113,11 @@ function showGate(s) {
     gate.innerHTML = `<div class="auth-card">${gateHtml(s, notice)}</div>`;
     document.body.append(gate);
     gate.querySelector('input')?.focus();
+    // .auth-gate gorsel olarak tam opak (position:fixed, inset:0) ama arkasindaki .app kabugu DOM'da
+    // kalir: inert olmadan Tab ile giris formunu gecip ekranda gorunmeyen ust cubuk/menu dugmelerine
+    // odak gidebiliyordu (bkz. DESIGN.md kritigi). Gate kapanincaysa (asagida gate.remove() ile) geri acilir.
+    const shell = document.querySelector('.app');
+    if (shell) shell.inert = true;
 
     const form = gate.querySelector('form');
     if (!form) return; // hesap yok ve burasi sunucu degil: yalniz bilgi gosterilir
@@ -133,6 +138,7 @@ function showGate(s) {
           username: String(f.get('username')).trim(), password: String(f.get('password')),
         });
         gate.remove();
+        if (shell) shell.inert = false;
         resolve(await fetchSession());
       } catch (e) {
         err.textContent = e.message;

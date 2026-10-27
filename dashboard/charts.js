@@ -36,13 +36,34 @@ function niceTicks(min, max, count = 4) {
 }
 
 /**
- * Tek serili zaman grafigi.
+ * Kap genisligi degisince (pencere yeniden boyutlandirma, kenar cubugu acilip kapanmasi...) grafigi
+ * ayni opts ile yeniden cizer - SVG genisligi cizim anindaki olcumle SABIT oldugu icin bu olmadan
+ * grafik eski genislikte kalip tasar ya da kucuk gorunurdu. Host basina tek gozlemci (yeniden
+ * cizilen host ayni nesne oldugunda ustuste yiginilmasin).
+ */
+function observeResize(host, redraw) {
+  if (host.__ro || !('ResizeObserver' in window)) return;
+  let last = host.clientWidth;
+  const ro = new ResizeObserver((entries) => {
+    if (!host.isConnected) { ro.disconnect(); host.__ro = null; return; }
+    const w = entries[0]?.contentRect.width ?? host.clientWidth;
+    if (Math.abs(w - last) < 4) return; // gurultuyu atla
+    last = w;
+    redraw();
+  });
+  host.__ro = ro;
+  ro.observe(host);
+}
+
+/**
+ * Tek serili zaman grafigi. Varsayilan eksen etiketi saniye ici saat (telemetri icin); gunluk/
+ * haftalik egilimler gibi gun-taneli seriler icin `xLabel` ile (ör. "27.10" ) gecersiz kilinir.
  * @param {HTMLElement} host  icine cizilecek kap (position:relative olmali)
  * @param {{points:{ts:number,value:number|null}[], unit?:string, step?:boolean,
- *          fromMs?:number, toMs?:number, label:string}} opts
+ *          fromMs?:number, toMs?:number, label:string, xLabel?:(ts:number)=>string}} opts
  */
 export function lineChart(host, opts) {
-  const { points, unit = '', step = false, label } = opts;
+  const { points, unit = '', step = false, label, xLabel = clock } = opts;
   host.textContent = '';
 
   const width = Math.max(260, host.clientWidth || 600);
@@ -87,13 +108,13 @@ export function lineChart(host, opts) {
     svg.append(text);
   }
 
-  // --- x ekseni: bastaki ve sondaki saat ---
+  // --- x ekseni: bastaki ve sondaki etiket ---
   for (const [ts, anchor] of [[fromMs, 'start'], [toMs, 'end']]) {
     const text = el('text', {
       x: anchor === 'start' ? PAD.left : width - PAD.right,
       y: HEIGHT - 5, class: 'axis', 'text-anchor': anchor,
     });
-    text.textContent = clock(ts);
+    text.textContent = xLabel(ts);
     svg.append(text);
   }
 
@@ -154,7 +175,7 @@ export function lineChart(host, opts) {
 
     tip.hidden = false;
     tip.innerHTML =
-      `<span class="tooltip-time">${escapeHtml(clock(near.ts))}</span>` +
+      `<span class="tooltip-time">${escapeHtml(xLabel(near.ts))}</span>` +
       `<span class="tooltip-value">${escapeHtml(num(near.value, 1))}` +
       (unit ? ` <span class="tooltip-unit">${escapeHtml(unit)}</span>` : '') +
       '</span>';
@@ -166,6 +187,105 @@ export function lineChart(host, opts) {
   hit.addEventListener('pointerleave', hide);
 
   host.append(svg, tip);
+  observeResize(host, () => lineChart(host, opts));
+}
+
+/**
+ * Yatay cubuk listesi: tek olcumun kategoriye gore buyuklugu (tezgah/urun/neden kodu karsilastirmasi).
+ * Tek vurgu rengi - DEGERE gore ton degismez (bkz. DESIGN.md); esik asimlari effCell ile ayni
+ * desende (▼/▲ isareti) gosterilir, renk degil. Her satir gercek deger zaten yaninda yazili oldugu
+ * icin tablo gorunumu ayrica gerekmez; cagiran taraf altinda zaten tam tabloyu tutar.
+ * @param {HTMLElement} host  icine cizilecek kap
+ * @param {{items:{label:string,value:number,title?:string}[], unit?:string, valueFmt?:(v:number)=>string,
+ *          max?:number, markLow?:number, markHigh?:number, ariaLabel?:string}} opts
+ */
+export function barChart(host, opts) {
+  const { items, unit = '', valueFmt, max, markLow, markHigh, ariaLabel = 'Karşılaştırma' } = opts;
+  host.textContent = '';
+
+  if (items.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'chart-empty';
+    empty.textContent = 'Bu aralık için veri yok.';
+    host.append(empty);
+    return;
+  }
+
+  const fmt = valueFmt ?? ((v) => `${num(v, Math.abs(v) < 10 ? 1 : 0)}${unit}`);
+  const hi = Math.max(max ?? 0, ...items.map((x) => x.value), 1e-9);
+
+  const list = document.createElement('div');
+  list.className = 'bars';
+  list.setAttribute('role', 'img');
+  list.setAttribute('aria-label', ariaLabel);
+
+  const tip = document.createElement('div');
+  tip.className = 'tooltip';
+  tip.hidden = true;
+
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.tabIndex = 0;
+
+    const label = document.createElement('span');
+    label.className = 'bar-label';
+    label.textContent = it.label; // untrusted veri: textContent
+    if (it.title) label.title = it.title;
+    row.append(label);
+
+    const track = document.createElement('div');
+    track.className = 'bar-track';
+    const fill = document.createElement('div');
+    fill.className = 'bar-fill';
+    fill.style.width = `${Math.max(0, Math.min(100, (it.value / hi) * 100))}%`;
+    track.append(fill);
+    row.append(track);
+
+    const value = document.createElement('span');
+    value.className = 'bar-value';
+    value.textContent = fmt(it.value);
+    if (markLow != null && it.value < markLow) {
+      const mark = document.createElement('span');
+      mark.className = 'bar-mark';
+      mark.setAttribute('aria-label', 'düşük');
+      mark.textContent = '▼';
+      value.append(mark);
+    } else if (markHigh != null && it.value > markHigh) {
+      const mark = document.createElement('span');
+      mark.className = 'bar-mark';
+      mark.setAttribute('aria-label', "planlananın üstünde");
+      mark.textContent = '▲';
+      value.append(mark);
+    }
+    row.append(value);
+
+    const show = () => {
+      row.classList.add('is-hot');
+      tip.hidden = false;
+      tip.textContent = ''; // onceki icerigi temizle (textContent kullandigimiz icin guvenli)
+      const t = document.createElement('span');
+      t.className = 'tooltip-time';
+      t.textContent = it.title ?? it.label;
+      const v = document.createElement('span');
+      v.className = 'tooltip-value';
+      v.textContent = fmt(it.value);
+      tip.append(t, v);
+      const hostBox = host.getBoundingClientRect();
+      const rowBox = row.getBoundingClientRect();
+      tip.style.left = `${rowBox.left - hostBox.left + rowBox.width / 2}px`;
+      tip.style.top = `${rowBox.top - hostBox.top - tip.offsetHeight - 6}px`;
+    };
+    const hide = () => { row.classList.remove('is-hot'); tip.hidden = true; };
+    row.addEventListener('pointerenter', show);
+    row.addEventListener('pointerleave', hide);
+    row.addEventListener('focus', show);
+    row.addEventListener('blur', hide);
+
+    list.append(row);
+  }
+
+  host.append(list, tip);
 }
 
 /**

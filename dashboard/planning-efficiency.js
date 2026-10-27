@@ -14,6 +14,7 @@
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
 import { cellText, fmtNum, fmtDec, dateText, dateTimeText, chip, put, truncCell, RANGE_PRESETS } from './planning-common.js';
+import { lineChart, barChart } from './charts.js';
 
 const pct = (v) => (v == null ? '<span class="is-null">—</span>' : `${fmtDec(v * 100, 1)}%`);
 const hours = (sec) => (sec == null ? '<span class="is-null">—</span>' : fmtDec(sec / 3600, 1));
@@ -85,12 +86,19 @@ export async function renderEfficiency(host) {
         ? '<h4 class="sub">Termin riski olan iş emirleri</h4><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Tezgah</th><th>Ürün</th><th class="num">Kalan</th><th>Termin</th><th>Tahmini bitiş</th></tr></thead><tbody>' +
           d.atRisk.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="num">${fmtNum(r.remaining)}</td><td>${dateText(r.dueDate)}</td><td>${escapeHtml(dateTimeText(r.etaMs))} ${chip('bad', '▲', 'termin riski')}</td></tr>`).join('') + '</tbody></table></div>'
         : '') +
+      (d.days.length === 0 && d.machines.every((m) => m.efficiency == null) ? '' :
+        '<div class="charts">' +
+        '<figure class="chart"><figcaption>Günlük verimlilik<span class="unit">seçili aralık</span></figcaption><div class="chart-host" data-role="trend"></div></figure>' +
+        '<figure class="chart"><figcaption>Tezgah bazında verimlilik<span class="unit">yüksekten düşüğe</span></figcaption><div class="chart-host" data-role="machines"></div></figure>' +
+        '</div>') +
       '<h4 class="sub">Tezgah bazında</h4>' +
       '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Tezgah</th><th class="num">Ayrılan (sa)</th><th class="num">Adet</th><th>Verimlilik</th><th class="num">A</th><th class="num">P</th><th class="num">Brüt (kg)</th><th class="num">Net (kg)</th><th class="num">Talaş (kg)</th></tr></thead><tbody>' +
       d.machines.map((m) => `<tr><td class="mono"><b>${escapeHtml(m.machineId)}</b></td><td class="num">${hours(m.allottedSec)}</td><td class="num">${fmtNum(m.qty)}</td><td>${effCell(m.efficiency)}</td><td class="num">${pct(m.availability)}</td><td class="num">${pct(m.performance)}</td><td class="num">${kgText(m.grossKg)}</td><td class="num">${kgText(m.netKg)}</td><td class="num">${kgText(m.scrapKg)}</td></tr>`).join('') + '</tbody></table></div>' +
       '<h4 class="sub">Ürün bazında</h4>' +
       (d.products.length === 0 ? '<p class="empty">Bu aralıkta üretim yok.</p>' :
         '<p class="hint">Gerçekleşen = ayrılan süre ÷ adet (duruş ve yükleme kaybı dahil); ölçülen çevrim kontrolcü sayacıdır. Verimlilik %105\'in üstündeyse planlanan süre fazla temkinli olabilir: öneri çıkar (otomatik değişmez).</p>' +
+        (d.products.filter((p) => p.efficiency != null).length === 0 ? '' :
+          `<figure class="chart"><figcaption>Ürün bazında verimlilik<span class="unit">adede göre ilk ${Math.min(10, d.products.filter((p) => p.efficiency != null).length)}</span></figcaption><div class="chart-host" data-role="products"></div></figure>`) +
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Ürün</th><th class="num">Ayrılan (sa)</th><th class="num">Adet</th><th class="num">Planlanan (sn)</th><th class="num">Ölçülen çevrim (sn)</th><th class="num">Gerçekleşen (sn)</th><th>Verimlilik</th><th class="num">A</th><th class="num">P</th><th></th></tr></thead><tbody>' +
         d.products.map((p) => `<tr><td class="trunc"${truncCell(p.productName)}><span class="mono"><b>${escapeHtml(p.stockCode)}</b></span> ${cellText(p.productName)}</td><td class="num">${hours(p.allottedSec)}</td><td class="num">${fmtNum(p.qty)}</td><td class="num">${p.plannedSec == null ? cellText(null) : fmtDec(p.plannedSec, 1)}</td>` +
           `<td class="num">${p.measuredCycleSec == null ? cellText(null) : fmtDec(p.measuredCycleSec, 1)}</td><td class="num">${p.realizedSec == null ? cellText(null) : fmtDec(p.realizedSec, 1)}</td><td>${effCell(p.efficiency)}</td><td class="num">${pct(p.availability)}</td><td class="num">${pct(p.performance)}</td>` +
@@ -100,6 +108,30 @@ export async function renderEfficiency(host) {
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Üretim günü</th><th class="num">Adet</th><th>Gündüz</th><th>Gece</th><th>Gün</th></tr></thead><tbody>' +
         d.days.map((x) => `<tr><td>${escapeHtml(dayText(x.date))}</td><td class="num">${fmtNum(x.qty)}</td><td>${effCell(x.shifts.gunduz?.efficiency)}</td><td>${effCell(x.shifts.gece?.efficiency)}</td><td>${effCell(x.efficiency)}</td></tr>`).join('') + '</tbody></table></div>')
     );
+  }
+
+  const dayToMs = (key) => { const [y, m, dd] = key.split('-').map(Number); return new Date(y, m - 1, dd).getTime(); };
+  const msToDayLabel = (ts) => new Date(ts).toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+
+  /** Özet sekmesindeki grafikleri cizer; ozet() string dondurdugu ve mount sonrasi cagrildigi icin ayrı. */
+  function drawOzetCharts(d) {
+    const trendHost = $('trend');
+    if (trendHost) {
+      const points = d.days.map((x) => ({ ts: dayToMs(x.date), value: x.efficiency == null ? null : x.efficiency * 100 }));
+      lineChart(trendHost, { points, unit: '%', label: 'Günlük verimlilik', xLabel: msToDayLabel });
+    }
+    const machinesHost = $('machines');
+    if (machinesHost) {
+      const items = d.machines.filter((m) => m.efficiency != null).sort((a, b) => b.efficiency - a.efficiency)
+        .map((m) => ({ label: m.machineId, value: m.efficiency * 100, title: `${m.machineId}: %${fmtDec(m.efficiency * 100, 1)} · ${fmtNum(m.qty)} adet` }));
+      barChart(machinesHost, { items, unit: '%', markLow: EFF_LOW * 100, markHigh: EFF_OVER * 100, ariaLabel: 'Tezgah bazında verimlilik' });
+    }
+    const productsHost = $('products');
+    if (productsHost) {
+      const items = d.products.filter((p) => p.efficiency != null).sort((a, b) => b.qty - a.qty).slice(0, 10)
+        .map((p) => ({ label: p.stockCode, value: p.efficiency * 100, title: `${p.stockCode} ${p.productName ?? ''}: %${fmtDec(p.efficiency * 100, 1)} · ${fmtNum(p.qty)} adet` }));
+      barChart(productsHost, { items, unit: '%', markLow: EFF_LOW * 100, markHigh: EFF_OVER * 100, ariaLabel: 'Ürün bazında verimlilik' });
+    }
   }
 
   /* -------------------------------------------------------------- matris */
@@ -162,6 +194,8 @@ export async function renderEfficiency(host) {
       '<p class="hint">Süre telemetriden ölçülür (boşta/alarm/kapalı, ' + d.minStopMinutes + ' dk\'dan uzun); neden operatörün seçtiği koddur. <b>Nedeni belirsiz</b> = ölçülmüş ama kodlanmamış duruş. Gün = üretim günü (gece vardiyası başladığı güne yazılır).</p>' +
       '<div class="pl-kpis">' + tile('Ölçülen duruş', `${fmtDec(t.stopMin, 0)} dk`, `${fmtDec(t.stopMin / 60, 1)} sa`, true) + tile('Nedeni girilen', `${fmtDec(t.reasonMin, 0)} dk`) +
       tile('Nedeni belirsiz', `${fmtDec(t.unknownMin, 0)} dk`, t.unknownMin > 0 ? 'Tezgah başı › Duruşlar\'dan girilir' : '') + tile('Kapsama', pct(t.coverage), 'neden girilen ÷ ölçülen') + '</div>' +
+      (d.codes.length === 0 ? '' :
+        `<figure class="chart"><figcaption>Neden koduna göre duruş<span class="unit">en çoktan aza, ilk ${Math.min(12, d.codes.length)}</span></figcaption><div class="chart-host" data-role="codes"></div></figure>`) +
       '<h4 class="sub">Neden koduna göre</h4>' +
       (d.codes.length === 0 ? '<p class="empty">Bu aralıkta nedeni girilmiş duruş yok.</p>' :
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Kod</th><th>Duruş nedeni</th><th class="num">Dakika</th><th>Pay</th></tr></thead><tbody>' +
@@ -181,6 +215,15 @@ export async function renderEfficiency(host) {
     );
   }
 
+  /** Duruşlar sekmesindeki Pareto çubuğunu çizer (durus() string döndürdüğü için mount sonrası ayrı). */
+  function drawDurusChart(d) {
+    const host2 = $('codes');
+    if (!host2) return;
+    const items = d.codes.slice().sort((a, b) => b.minutes - a.minutes).slice(0, 12)
+      .map((c) => ({ label: c.code, value: c.minutes, title: `${c.code} ${c.name}: ${fmtDec(c.minutes, 0)} dk` }));
+    barChart(host2, { items, unit: ' dk', valueFmt: (v) => `${fmtDec(v, 0)} dk`, ariaLabel: 'Neden koduna göre duruş dakikaları' });
+  }
+
   /* --------------------------------------------------------------- yükleme */
   async function load() {
     const my = ++st.seq;
@@ -192,11 +235,13 @@ export async function renderEfficiency(host) {
         if (my !== st.seq) return;
         st.down = d;
         $('body').innerHTML = durus();
+        drawDurusChart(d);
       } else {
         const d = await api(`/api/planning/efficiency?${qs()}`);
         if (my !== st.seq) return;
         st.eff = d;
         $('body').innerHTML = st.view === 'matris' ? matris() : st.view === 'gunluk' ? gunluk() : ozet();
+        if (st.view === 'ozet') drawOzetCharts(d);
       }
     } catch (err) {
       if (my === st.seq) $('body').innerHTML = `<p class="notice notice-sim">Rapor alınamadı: ${escapeHtml(err.message)}</p>`;

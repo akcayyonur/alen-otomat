@@ -310,14 +310,14 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 /* ---------- grafikler ---------- */
 .charts{display:grid;grid-template-columns:1fr;gap:14px;}
 @media (min-width:1180px){ .charts{grid-template-columns:1fr 1fr;} }
-.chart{margin:0;}
+.chart{margin:0;min-width:0;} /* grid/flex ogesi: SVG'nin kendi olcumune gore kardes ogeyi tasimasin */
 .chart figcaption{
   display:flex;align-items:baseline;gap:7px;margin-bottom:3px;
   font-size:12.5px;font-weight:650;color:var(--ink-soft);
 }
 .chart figcaption .unit{font-weight:400;font-size:11px;color:var(--ink-faint);}
 .chart figcaption b{margin-left:auto;font-size:15px;color:var(--ink);font-variant-numeric:tabular-nums;}
-.chart-host{position:relative;}
+.chart-host{position:relative;overflow:hidden;} /* ResizeObserver yeniden cizene kadar gecici bir boyut uyusmazligi sayfayi germesin */
 .chart-empty{margin:0;padding:38px 0;text-align:center;font-size:12.5px;color:var(--ink-faint);}
 
 .grid{stroke:var(--line);stroke-width:1;}
@@ -326,6 +326,16 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
   stroke-linejoin:round;stroke-linecap:round;}
 .cursor{stroke:var(--line-strong);stroke-width:1;stroke-dasharray:3 3;}
 .cursor-dot{fill:var(--series);stroke:var(--surface);stroke-width:2;}
+
+/* yatay cubuk listesi (barChart): tek vurgu rengi, deger ucunda yazili deger - renk degere gore degismez */
+.bars{display:flex;flex-direction:column;gap:1px;}
+.bar-row{display:grid;grid-template-columns:minmax(90px,180px) 1fr auto;align-items:center;gap:10px;padding:4px 6px;border-radius:8px;cursor:default;}
+.bar-row:hover,.bar-row.is-hot,.bar-row:focus-visible{background:var(--surface-2);outline:none;}
+.bar-label{font-size:12px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bar-track{height:12px;border-radius:4px;background:var(--surface-2);border:1px solid var(--line);}
+.bar-fill{height:100%;width:0;background:var(--series);border-radius:0 4px 4px 0;min-width:2px;}
+.bar-value{font-size:12px;font-variant-numeric:tabular-nums;font-weight:650;min-width:3.2em;text-align:right;white-space:nowrap;}
+.bar-mark{font-size:10px;color:var(--ink-soft);margin-left:3px;font-weight:400;}
 
 /* [hidden] display:none verir ama asagidaki display:flex onu ezer - acikca geri al. */
 .tooltip[hidden]{display:none;}

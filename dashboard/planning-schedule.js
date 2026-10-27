@@ -66,9 +66,13 @@ export async function renderSchedule(host) {
   }
 
   async function suggest() {
-    $('body').innerHTML = `${intro}<p class="empty">Hesaplanıyor… (iş emri ve tezgah sayısına göre bir dakikaya kadar sürebilir)</p>`;
+    // Gercek bir ilerleme yuzdesi yok (tek istek, arka planda is kuyruklanmiyor): belirsiz (deger'siz) <progress>
+    // "tiklama algilandi mi" hissini onler - CP-SAT 8 tezgah olceginde dakikalarca surebilir (bkz. CLAUDE.md).
+    $('body').innerHTML = `${intro}<p class="empty">Hesaplanıyor… (iş emri ve tezgah sayısına göre bir dakikaya kadar sürebilir)<br>` +
+      '<progress class="bi-progress" aria-label="Çizelgeleme hesaplanıyor"></progress></p>';
     try {
-      st.data = await post('/api/planning/schedule/suggest', {});
+      // timeoutMs: lib-common.js'nin varsayilan 20 sn'si bu hesap icin cok kisa.
+      st.data = await post('/api/planning/schedule/suggest', {}, { timeoutMs: 120_000 });
       st.selected = new Set();
       $('body').innerHTML = resultHtml();
     } catch (err) {
@@ -79,15 +83,29 @@ export async function renderSchedule(host) {
   function openApplyDialog() {
     const nos = [...st.selected];
     const rows = st.data.assignments.filter((a) => nos.includes(a.no));
+    // Tek is emrinde liste zaten degisikligi acikca gosteriyor; coklu secimde gercek tezgah atamalarini
+    // DEGISTIREN bir toplu islem - kutuphaneden silmedeki desenle ayni (tek: ad/no, coklu: sayi) sureruk ekler.
+    const expected = nos.length === 1 ? nos[0] : String(nos.length);
+    const confirmNeeded = nos.length > 1;
     const m = openModal({ title: `Çizelgeleme önerisini uygula · ${nos.length} iş emri` });
+    const canGo = () => !confirmNeeded || m.body.querySelector('[data-role="confirm"]')?.value === expected;
     m.body.innerHTML =
       `<p class="notice">Seçilen ${nos.length} iş emrinin tezgah ataması değişecek. Arada başlatılmış ya da iptal edilmiş iş emri sessizce atlanır (sonuçta bildirilir); sıra/zamanlama bilgi amaçlıdır, yalnız tezgah ataması yazılır.</p>` +
       `<ul class="pl-list">${rows.map((r) => `<li><b>${escapeHtml(r.no)}</b> ${cellText(r.stockCode)}: ${escapeHtml(r.currentMachineId ?? '—')} → <b>${escapeHtml(r.machineId)}</b></li>`).join('')}</ul>` +
       '<p class="notice notice-sim" data-role="err" hidden></p><div data-role="result"></div>' +
-      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="go">Uygula</button></div>';
+      (confirmNeeded
+        ? '<div class="confirm-box">' +
+          `<label class="fld"><span>Uygulamak için iş emri sayısını yazın: <b class="mono">${escapeHtml(expected)}</b></span>` +
+          `<input data-role="confirm" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(expected)}" class="mono"></label></div>`
+        : '') +
+      `<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="go"${canGo() ? '' : ' disabled'}>Uygula</button></div>`;
     const $$ = (r) => m.body.querySelector(`[data-role="${r}"]`);
     m.body.querySelector('[data-act="close"]').addEventListener('click', () => m.close());
+    if (confirmNeeded) {
+      $$('confirm').addEventListener('input', () => { m.body.querySelector('[data-act="go"]').disabled = !canGo(); });
+    }
     m.body.querySelector('[data-act="go"]').addEventListener('click', async (ev) => {
+      if (!canGo()) return;
       ev.target.disabled = true;
       $$('err').hidden = true;
       try {

@@ -7,7 +7,7 @@ colors:
   surface-2: "#F0F0F8"
   ink: "#1B1B29"
   ink-soft: "#5B5B72"
-  ink-faint: "#9292A6"
+  ink-faint: "#696980"
   line: "#E7E7F1"
   line-strong: "#D3D3E6"
   accent: "#6C53E8"
@@ -121,7 +121,7 @@ An off-white/lavender neutral scale carries structure; one vivid indigo-violet a
 - **Surface 2** (`surface-2`, `#F0F0F8` light / `#252233` dark): secondary surface — hover rows, nested panels, disabled-ish fills, the "sunken" layer inside a surface.
 - **Ink** (`ink`, `#1B1B29` light / `#ECEAF6` dark): primary text.
 - **Ink Soft** (`ink-soft`, `#5B5B72` light / `#B3AFC9` dark): secondary text, field labels, table sub-text.
-- **Ink Faint** (`ink-faint`, `#9292A6` light / `#79748F` dark): tertiary text, timestamps, and — doing double duty — the color for a deliberately **unknown/null** value, so "we don't know" never looks like "zero."
+- **Ink Faint** (`ink-faint`, `#696980` light / `#938EAB` dark): tertiary text, timestamps, and — doing double duty — the color for a deliberately **unknown/null** value, so "we don't know" never looks like "zero." (Chosen over a lighter tone specifically to clear 4.5:1 against `surface`/`surface-2` at the 10-13px sizes this token actually ships at — a lighter faint color reads nicer in isolation but fails WCAG AA at those sizes.)
 - **Line** (`line`, `#E7E7F1` light / `#312D43` dark): default hairline border, table row dividers.
 - **Line Strong** (`line-strong`, `#D3D3E6` light / `#423C58` dark): input borders, segmented-control borders, anything that needs to read as a control edge rather than a divider.
 - **Accent Soft** (`accent-soft`, `#EFEBFD` light / `#2A2444` dark): wash background for the active nav item, active tab, selected table row, and info-level notices.

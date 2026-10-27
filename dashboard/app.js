@@ -645,6 +645,23 @@ function render() {
 
 /* -------------------------------------------------------------------- baglanti */
 
+/**
+ * Filo/tezgah gorunumleri `state.snapshot`e bagli; o da yalniz SSE'nin ilk karesiyle dolar (saniyede bir).
+ * Bir hashchange SSE'nin ilk karesinden ONCE gelirse `render()` veri yokken sessizce hicbir sey cizmezdi -
+ * kullanici tikladi, adres cubugu degisti, ekran eskisini gostermeye devam etti ("ilk tik hicbir sey yapmiyor").
+ * Bu, SSE'yi beklemeden TEK SEFERLIK anlik goruntuyu (ayni uc, ayni bicim) ceker.
+ */
+let snapshotFetchInFlight = false;
+async function ensureSnapshot() {
+  if (state.snapshot || snapshotFetchInFlight) return;
+  snapshotFetchInFlight = true;
+  try {
+    state.snapshot = await fetch('/api/machines').then((r) => r.json());
+    render();
+  } catch { /* SSE zaten geliyor, bir sonraki karede kendiliginden duzelir */ }
+  finally { snapshotFetchInFlight = false; }
+}
+
 function connect() {
   const es = new EventSource('/api/stream');
 
@@ -741,13 +758,14 @@ async function init() {
   // Izleyici: program kutuphanesi ve ayarlar menuden de kalkar.
   refs.libraryBtn.hidden = !isAdmin();
   refs.configBtn.hidden = !isAdmin();
-  addEventListener('hashchange', () => { readRoute(); render(); });
+  addEventListener('hashchange', () => { readRoute(); if (!state.snapshot) ensureSnapshot(); render(); });
   addEventListener('scroll', queueFitSidebars, { passive: true });
   addEventListener('resize', queueFitSidebars);
 
   initTheme();
   initKeyboard();
   readRoute();
+  ensureSnapshot();
   connect();
 
   setInterval(() => {

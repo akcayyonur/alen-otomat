@@ -14,20 +14,32 @@ export class ApiError extends Error {
   constructor(message, status, code = null) { super(message); this.status = status; this.code = code; }
 }
 
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+/**
+ * @param {string} path @param {RequestInit & {timeoutMs?: number}} [init] timeoutMs: 0 = sinirsiz (varsayilan 20 sn).
+ * Zaman asimi olmadan bir istek sonsuza dek beklerse ekran "Yukleniyor..."da donup kalir (fabrikadaki ag kesintileri
+ * dakikalarca surebiliyor, bkz. CLAUDE.md "2 dakikalik kesintiler"); cagiran bunu her zaman gorunur bir hataya cevirebilsin.
+ */
 export async function api(path, init) {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: callerSignal, ...rest } = init ?? {};
+  const ctrl = timeoutMs && !callerSignal ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   let res;
   try {
-    res = await fetch(path, init);
+    res = await fetch(path, { ...rest, signal: callerSignal ?? ctrl?.signal });
   } catch (err) {
-    throw new ApiError(`Sunucuya ulaşılamadı: ${err.message}`, 0);
+    throw new ApiError(err.name === 'AbortError' ? `Sunucu yanıt vermedi (${Math.round(timeoutMs / 1000)} sn)` : `Sunucuya ulaşılamadı: ${err.message}`, 0);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(body.error ?? `Hata (HTTP ${res.status})`, res.status, body.code ?? null);
   return body;
 }
 
-export const post = (path, obj) =>
-  api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj ?? {}) });
+export const post = (path, obj, extra) =>
+  api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj ?? {}), ...extra });
 
 /** Giris yapmis kullanicinin adi (giris sistemi aciksa); yoksa null. Sunucu da islemi yapani oturumdan alir. */
 const sessionUser = () => (authDisabled() ? null : (getSession()?.user?.username ?? null));

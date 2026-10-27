@@ -194,7 +194,8 @@ function openImportDialog(onDone) {
     try {
       const params = new URLSearchParams({ filename: file.name, ...($('hide-old').checked ? {} : { keepOld: '1' }) });
       // Sunucu turu icerikten anlar (.xlsx = ZIP); Content-Type yalniz bilgidir.
-      const r = await api(`/api/planning/import?${params}`, { method: 'POST', headers: { 'content-type': /\.xlsx$/i.test(file.name) ? XLSX_TYPE : 'text/csv' }, body: file });
+      // timeoutMs: 64 MB'a kadar dosya olabilir (bkz. MAX_UPLOAD); varsayilan 20 sn'lik api() zaman asimi cok kisa kalir.
+      const r = await api(`/api/planning/import?${params}`, { method: 'POST', headers: { 'content-type': /\.xlsx$/i.test(file.name) ? XLSX_TYPE : 'text/csv' }, body: file, timeoutMs: 180_000 });
       $('result').innerHTML = resultHtml(r);
       onDone();
     } catch (e) {

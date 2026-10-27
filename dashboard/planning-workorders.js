@@ -81,14 +81,20 @@ export async function renderWorkOrders(host) {
   async function load(reset) {
     const seq = ++st.seq;
     const offset = reset ? 0 : st.items.length;
+    // Veri gelene kadar ekran BOS kalmasin: "yukleniyor" ile "bilinen 0 sonuc" ile "hata" ayni gorunmemeli (No-Zero-Lie).
+    // api()'nin kendi zaman asimi (lib-common.js) var, ama o da dolarsa bu ekran "Yukleniyor..."da SONSUZA DEK kalmamali:
+    // hata gorunur olsun ve "yeniden dene" versin (fabrikadaki ag kesintileri dakikalarca surebiliyor, bkz. CLAUDE.md).
+    if (reset) $('count').innerHTML = 'Yükleniyor…';
     try {
       const r = await api(`/api/planning/work-orders?${new URLSearchParams({ q: st.q, status: st.status, machine: st.machine, limit: 100, offset })}`);
-      if (seq !== st.seq) return;
+      if (seq !== st.seq) return; // daha yeni bir load() zaten devam ediyor; o sonucu gosterecek
       st.total = r.total;
       st.items = reset ? r.items : [...st.items, ...r.items];
       draw();
     } catch (err) {
-      if (seq === st.seq) $('count').textContent = `İş emirleri alınamadı: ${err.message}`;
+      if (seq !== st.seq) return;
+      $('count').innerHTML = `İş emirleri alınamadı: ${escapeHtml(err.message)} ` +
+        '<button type="button" class="icon-btn icon-btn-sm" data-act="retry">Yeniden dene</button>';
     }
   }
 
@@ -117,6 +123,7 @@ export async function renderWorkOrders(host) {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (act === 'new') return openNewWorkOrder({}, () => load(true));
     if (act === 'more') return load(false);
+    if (act === 'retry') return load(true);
     const b = ev.target.closest('[data-act="start"], [data-act="finish"]');
     if (b) { ev.stopPropagation(); (b.dataset.act === 'start' ? openStartDialog : openFinishDialog)(b.dataset.no, () => load(true)); return; }
     open(ev);
@@ -380,7 +387,7 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       (w.status === 'planlandi' ? '<button type="button" class="icon-btn btn-primary" data-act="start">Üretime başlat…</button>' : '') +
       (w.status === 'uretimde' ? '<button type="button" class="icon-btn btn-primary" data-act="finish">Bitir…</button>' : '') +
       (w.status === 'bitti' ? '<button type="button" class="icon-btn" data-act="reopen-ask">Üretime geri al…</button>' : '') +
-      (canCancel ? '<button type="button" class="icon-btn" data-act="cancel-ask">İptal et…</button>' : '') +
+      (canCancel ? '<button type="button" class="icon-btn btn-danger" data-act="cancel-ask">İptal et…</button>' : '') +
       (ro ? '' : '<button type="submit" class="icon-btn btn-primary">Kaydet</button>') + '</div></form>' +
       '<div data-role="reopen-box" hidden><h4 class="sub">Üretime geri al</h4><p class="hint">Bitiş geri alınır ve dondurulmuş sonuç silinir; iş emri yeniden üretimde olur, adet yeniden canlı sayılır.</p>' +
       '<p class="notice notice-sim" data-role="reopen-err" hidden></p><div class="dt-actions"><button type="button" class="icon-btn" data-act="reopen-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="reopen-yes">Evet, geri al</button></div></div>' +

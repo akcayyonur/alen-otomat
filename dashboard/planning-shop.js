@@ -330,10 +330,10 @@ async function openReasonPicker(machineId, stop, onSaved) {
     m.body.innerHTML =
       `<p class="notice"><b class="mono">${escapeHtml(code.code)}</b> · ${escapeHtml(code.name)}</p>` +
       '<form autocomplete="off"><div class="fld-grid">' +
-      `<label class="fld"><span>Başlangıç</span><input name="from" type="datetime-local" value="${localDt(gap.from)}"></label>` +
-      `<label class="fld"><span>Bitiş</span><input name="to" type="datetime-local" value="${localDt(gap.to)}"></label>` +
-      '<label class="fld"><span>Yapan kişi (isteğe bağlı)</span><input name="person" maxlength="60"></label>' +
-      '<label class="fld"><span>Not (isteğe bağlı)</span><input name="note" maxlength="200"></label></div>' +
+      `<label class="fld fld-touch"><span>Başlangıç</span><input name="from" type="datetime-local" value="${localDt(gap.from)}"></label>` +
+      `<label class="fld fld-touch"><span>Bitiş</span><input name="to" type="datetime-local" value="${localDt(gap.to)}"></label>` +
+      '<label class="fld fld-touch"><span>Yapan kişi (isteğe bağlı)</span><input name="person" maxlength="60"></label>' +
+      '<label class="fld fld-touch"><span>Not (isteğe bağlı)</span><input name="note" maxlength="200"></label></div>' +
       '<p class="hint">Süre tezgahtan ölçüldü; yalnız duruşun bir kısmı bu nedenle ise bitişi öne çekin, kalan kısım için sonra başka neden seçersiniz.</p>' +
       '<p class="notice notice-sim" data-role="err" hidden></p>' +
       '<div class="dt-actions"><button type="button" class="icon-btn" data-act="back">Geri</button><button type="submit" class="icon-btn btn-primary">Kaydet</button></div></form>';

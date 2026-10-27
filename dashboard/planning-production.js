@@ -14,7 +14,7 @@ import { createFirstApproval } from './planning-approvals.js';
 
 /** "Listeden seç…" düğmeli GKK alanı: ustalar hammaddenin GK numarasını takip formundan bulup yazar. */
 const gkkField = (value = '', label = 'GKK rapor no') =>
-  `<label class="fld"><span>${escapeHtml(label)}</span><span class="fld-row"><input name="gkkReportNo" value="${escapeHtml(value ?? '')}" maxlength="40" autocomplete="off">` +
+  `<label class="fld fld-touch"><span>${escapeHtml(label)}</span><span class="fld-row"><input name="gkkReportNo" value="${escapeHtml(value ?? '')}" maxlength="40" autocomplete="off">` +
   '<button type="button" class="icon-btn icon-btn-sm" data-act="gkk-pick" title="Hammaddeye uyan GK numaralarını listeler">Listeden seç…</button></span></label>';
 
 /** GKK "Listeden seç…" düğmesini bağlar. @param {HTMLFormElement} form @param {object} w iş emri */
@@ -120,13 +120,15 @@ export async function openStartDialog(no, onDone = () => {}, { machineId = null,
     m.body.innerHTML = '<p class="notice notice-sim">Bu iş emri artık "planlandı" durumunda değil; listeyi yenileyin.</p>';
     return;
   }
-  const fld = (name, label, extra = '') => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${name}" autocomplete="off"${extra}></label>`;
+  // fld-touch: bu pencere Tezgah basi'ndaki operatorun en sik actigi pencere (ayrica admin'in Is emri duzenle'sinden
+  // de acilir) - DESIGN.md'nin operator-yuzeyi 44px dokunma kurali burada da gecerli.
+  const fld = (name, label, extra = '') => `<label class="fld fld-touch"><span>${escapeHtml(label)}</span><input name="${name}" autocomplete="off"${extra}></label>`;
   m.body.innerHTML =
     `<p class="pl-wohead"><b class="mono">${escapeHtml(w.no)}</b> · ${escapeHtml(w.stockCode)} ${escapeHtml(w.productName ?? '')} · hedef ${fmtNum(w.targetQty)} adet</p>` +
     '<form autocomplete="off"><div class="fld-grid">' +
-    `<label class="fld"><span>Tezgah (bu tezgahta başlatıyorum)</span><select name="machineId" required>${(machineId ?? w.machineId) ? '' : '<option value="">— tezgah seçin —</option>'}${meta.machines.map((x) =>
+    `<label class="fld fld-touch"><span>Tezgah (bu tezgahta başlatıyorum)</span><select name="machineId" required>${(machineId ?? w.machineId) ? '' : '<option value="">— tezgah seçin —</option>'}${meta.machines.map((x) =>
       `<option value="${escapeHtml(x.id)}"${x.id === (machineId ?? w.machineId) ? ' selected' : ''}>${escapeHtml(x.id)}${x.name && x.name !== x.id ? ` · ${escapeHtml(x.name)}` : ''}</option>`).join('')}</select></label>` +
-    `<label class="fld"><span>Başlangıç zamanı</span><input name="startAt" type="datetime-local"><small class="hint">${nowLocalHint}</small></label>` +
+    `<label class="fld fld-touch"><span>Başlangıç zamanı</span><input name="startAt" type="datetime-local"><small class="hint">${nowLocalHint}</small></label>` +
     fld('person', 'Yapan kişi (isteğe bağlı)', ' maxlength="60"') +
     fld('usedMaterial', 'Kullanılan hammadde (gerçek)', ` maxlength="80" placeholder="${escapeHtml(w.material ?? '')}"`) +
     gkkField(w.gkkReportNo ?? '', 'GKK rapor no (hammadde)') + fld('firstApprovalNo', 'İlk onay rapor no (boş bırakılabilir)', ' maxlength="40"') +
@@ -198,8 +200,8 @@ export async function openFinishDialog(no, onDone = () => {}) {
     'Bitirince bu sonuç dondurulur; sonradan gelen veri değiştirmez (yanlışsa "Üretime geri al" vardır).</p>' +
     warningsHtml(p?.warnings ?? []) +
     '<form autocomplete="off"><div class="fld-grid">' +
-    '<label class="fld"><span>Bitiş zamanı</span><input name="endAt" type="datetime-local"><small class="hint">Boş bırakın: şimdi. Bitirmeyi unuttuysanız gerçek bitiş zamanını girin; adet o ana kadar sayılır.</small></label>' +
-    '<label class="fld"><span>Yapan kişi (isteğe bağlı)</span><input name="person" maxlength="60" autocomplete="off"></label></div>' +
+    '<label class="fld fld-touch"><span>Bitiş zamanı</span><input name="endAt" type="datetime-local"><small class="hint">Boş bırakın: şimdi. Bitirmeyi unuttuysanız gerçek bitiş zamanını girin; adet o ana kadar sayılır.</small></label>' +
+    '<label class="fld fld-touch"><span>Yapan kişi (isteğe bağlı)</span><input name="person" maxlength="60" autocomplete="off"></label></div>' +
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">İş emrini bitir</button></div></form>';
   const form = m.body.querySelector('form');
@@ -250,17 +252,17 @@ export async function openEditFieldsDialog(no, onDone = () => {}) {
     return;
   }
   const gram = (kg) => (kg === null || kg === undefined ? '' : String(Number((kg * 1000).toFixed(4))).replace('.', ','));
-  const fld = (name, label, value, extra = '') => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${name}" autocomplete="off" value="${escapeHtml(value ?? '')}"${extra}></label>`;
+  const fld = (name, label, value, extra = '') => `<label class="fld fld-touch"><span>${escapeHtml(label)}</span><input name="${name}" autocomplete="off" value="${escapeHtml(value ?? '')}"${extra}></label>`;
   m.body.innerHTML =
     `<p class="pl-wohead"><b class="mono">${escapeHtml(w.no)}</b> · ${escapeHtml(w.stockCode)} ${escapeHtml(w.productName ?? '')} · ${escapeHtml(w.machineId ?? '')}</p>` +
     '<p class="hint">İlk parça yapılıp ölçülünce <b>ilk onay rapor no</b> ve <b>ölçülen net gramaj</b> buradan girilir. Değişiklikler iş emri geçmişine yazılır.</p>' +
     '<form autocomplete="off"><div class="fld-grid">' +
-    `<label class="fld"><span>İlk onay rapor no</span><span class="fld-row"><input name="firstApprovalNo" value="${escapeHtml(w.firstApprovalNo ?? '')}" maxlength="40" autocomplete="off">` +
+    `<label class="fld fld-touch"><span>İlk onay rapor no</span><span class="fld-row"><input name="firstApprovalNo" value="${escapeHtml(w.firstApprovalNo ?? '')}" maxlength="40" autocomplete="off">` +
     '<button type="button" class="icon-btn icon-btn-sm" data-act="approval-new" title="Sıradaki ilk onay numarasını verir ve iş emrine yazar">Numara al…</button></span></label>' +
     fld('measuredNetG', 'Ölçülen net gramaj (gram)', gram(w.measuredNetKg), ' inputmode="decimal"') +
     gkkField(w.gkkReportNo ?? '') +
     fld('usedMaterial', 'Kullanılan hammadde (gerçek)', w.usedMaterial, ` maxlength="80" placeholder="${escapeHtml(w.material ?? '')}"`) +
-    `<label class="fld pl-wide"><span>Açıklama</span><input name="note" maxlength="500" value="${escapeHtml(w.note ?? '')}"></label></div>` +
+    `<label class="fld fld-touch pl-wide"><span>Açıklama</span><input name="note" maxlength="500" value="${escapeHtml(w.note ?? '')}"></label></div>` +
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">Kaydet</button></div></form>';
   const form = m.body.querySelector('form');

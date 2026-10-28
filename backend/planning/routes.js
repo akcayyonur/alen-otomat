@@ -15,6 +15,7 @@
  *   GET  /api/planning/sources                          KAYNAK KLASORU durumu: klasor, dosyalar ve her birinin son iceri almaya gore durumu (yeni/degisti/ayni)
  *   PUT  /api/planning/sources/dir {dir}                kaynak klasorunu ayarla (bos = varsayilan);  POST .../sources/refresh {force?}  klasoru oku, degisenleri uygula (yalniz yonetici)
  *   GET  /api/planning/mikro                            MikroAPI durumu (yapilandirildi mi, son senkron); POST .../mikro/test baglanti denemesi; POST .../mikro/refresh {} canli SQL ile senkronize et (yalniz yonetici)
+ *   POST /api/planning/work-orders/import-legacy        Eski Excel is emri sisteminden BIR KEZLIK gecis (govde = ham .xlsx): renk -> durum (yesil=bitti/kirmizi=iptal/diger=planlandi), idempotent (yalniz yonetici)
  *   GET  /api/planning/orders?q=&open=1&limit=          siparisler (musteri siparis no + evrak no ile gruplu)
  *   GET  /api/planning/orders/lines?customerKey=&custOrderKey=&docKey=   bir siparisin satirlari
  *   GET  /api/planning/work-orders?q=&status=&machine=  is emirleri (status: aktif | planlandi | uretimde | bitti | iptal | tumu)
@@ -192,6 +193,11 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
           keepOld: url.searchParams.get('keepOld') === '1',
         });
         return sendJson(res, 200, result), true;
+      }
+      // Eski Excel is emri sisteminden BIR KEZLIK gecis (renk -> durum; wo-import.js): gercek is emri kayitlari olusturur.
+      if (method === 'POST' && path === '/api/planning/work-orders/import-legacy') {
+        const body = await readBuffer(req, MAX_CSV_BYTES);
+        return sendJson(res, 200, planning.importLegacyWorkOrders(body, { by: who(req) })), true;
       }
 
       /* ---- kaynak klasoru: Mikro / GKK Excel dosyalarini sabit klasorden oku (yalniz yonetici) ---- */

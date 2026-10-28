@@ -117,7 +117,9 @@ export async function renderWorkOrders(host) {
       '<div class="pl-seq"><input type="text" inputmode="numeric" maxlength="10" data-role="seq-last" placeholder="ör. 2026001109" aria-label="Şirkette en son verilen iş emri numarası">' +
       '<button type="button" class="icon-btn" data-act="seq-set">Bu numaradan devam ettir</button></div>' +
       '<p class="hint">Şirkette hâlâ kullanılan bir numaralandırma varsa (Excel/kâğıt), en son verilen numarayı bir kez buraya girin; sıradaki numaralar ondan devam eder. Numara yalnız yükseltilebilir, geri alınamaz.</p>' +
-      '<p class="notice notice-sim" data-role="seq-err" hidden></p></div>';
+      '<p class="notice notice-sim" data-role="seq-err" hidden></p></div>' +
+      '<div class="pl-seq-box"><p class="hint-meta">Eski (Excel) iş emri listeniz varsa, satırlar renkleriyle (yeşil=bitti, kırmızı=iptal, diğer=planlandı) gerçek iş emri kaydına dönüştürülebilir.</p>' +
+      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="legacy-import">Eski iş emirlerini içeri aktar (bir kerelik)…</button></div></div>';
   }
 
   const search = debounce((value) => { st.q = value.trim(); load(true); }, 250);
@@ -151,12 +153,68 @@ export async function renderWorkOrders(host) {
       } catch (e) { err.textContent = e.message; err.hidden = false; }
       return;
     }
+    if (act === 'legacy-import') { openLegacyImportDialog(async () => { load(true); try { drawSeq((await api('/api/planning/summary')).nextWorkOrder); } catch { /* onemli degil */ } }); return; }
     const b = ev.target.closest('[data-act="start"], [data-act="finish"]');
     if (b) { ev.stopPropagation(); (b.dataset.act === 'start' ? openStartDialog : openFinishDialog)(b.dataset.no, () => load(true)); return; }
     open(ev);
   };
   host.onkeydown = (ev) => { if (ev.key === 'Enter') open(ev); };
   load(true);
+}
+
+/* ================================================ eski is emirlerini iceri aktar (bir kerelik) */
+
+const LEGACY_MAX_UPLOAD = 64 * 1024 * 1024;
+const LEGACY_XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+function legacyResultHtml(r) {
+  const w = r.workOrders;
+  const p = r.products;
+  const statusText = `${w.byStatus.bitti} bitti · ${w.byStatus.planlandi} planlandı · ${w.byStatus.iptal} iptal`;
+  const head = w.added === 0
+    ? `<div class="notice"><b>Yeni iş emri eklenmedi.</b> ${w.existing > 0 ? `${w.existing} satır zaten vardı (aynı numara).` : ''}</div>`
+    : `<div class="notice"><b>${w.added} iş emri oluşturuldu</b> (${statusText}).${w.existing > 0 ? ` ${w.existing} satır zaten vardı, atlandı.` : ''} Ürün kartları: ${p.products.added} yeni, ${p.products.updated} güncellendi.</div>`;
+  const warnings = (w.warnings ?? []).slice(0, 15);
+  const warnBlock = warnings.length > 0
+    ? `<h4 class="sub">Atlanan satırlar</h4><ul class="checks">${warnings.map((x) => `<li class="check check-warn"><span class="check-ic" aria-hidden="true">▲</span><div>${escapeHtml(x)}</div></li>`).join('')}</ul>`
+    : '';
+  return head + `<p class="hint">Sayfa: <span class="mono">${escapeHtml(r.sheet)}</span> · okunan satır: ${w.totalRows}, atlanan: ${w.skipped}</p>` + warnBlock;
+}
+
+/** Eski (Excel) iş emri listesini (renk -> durum) gerçek iş emri kayıtlarına dönüştürür. BİR KEZLİK geçiş, idempotent. */
+function openLegacyImportDialog(onDone) {
+  const m = openModal({ title: 'Eski iş emirlerini içeri aktar', wide: true });
+  m.body.innerHTML =
+    '<p class="hint">Eski sistemdeki iş emirleri listesini (.xlsx, "ALEN KOD / MAMÜL ADI …" başlıklı sayfa) seçin. Satırın Excel\'deki <b>rengi</b> durumu belirler: ' +
+    '<b>yeşil</b> → bitti (adet = hedef = sonuç kabul edilir), <b>kırmızı</b> → iptal, <b>diğer (sarı/renksiz)</b> → planlandı. ' +
+    'Tezgah atanmaz (başlatırken seçilir). Ürün kartları da aynı dosyadan güncellenir (mevcut "Excel içeri al" ile aynı kural: boş alan dolar, elle düzenlenmiş kart ezilmez).</p>' +
+    '<p class="hint"><b>Tekrar çalıştırmak güvenlidir:</b> aynı iş emri numarası zaten varsa o satır atlanır, hiçbir şey değişmez.</p>' +
+    '<input type="file" accept=".xlsx" data-role="file" aria-label="Eski iş emirleri Excel dosyası (.xlsx)">' +
+    '<p class="notice notice-sim" data-role="err" hidden></p><div data-role="result"></div>' +
+    '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="go">İçeri aktar</button></div>';
+  const $ = (r) => m.body.querySelector(`[data-role="${r}"]`);
+  const go = m.body.querySelector('[data-act="go"]');
+
+  go.addEventListener('click', async () => {
+    const file = $('file').files[0];
+    const err = $('err');
+    err.hidden = true;
+    $('result').innerHTML = '';
+    if (!file) { err.textContent = 'Önce bir .xlsx dosyası seçin.'; err.hidden = false; return; }
+    if (file.size > LEGACY_MAX_UPLOAD) { err.textContent = `Dosya çok büyük (${Math.round(file.size / 1048576)} MB; en fazla 64 MB).`; err.hidden = false; return; }
+    go.disabled = true;
+    go.textContent = 'Yükleniyor…';
+    try {
+      const r = await api('/api/planning/work-orders/import-legacy', { method: 'POST', headers: { 'content-type': LEGACY_XLSX_TYPE }, body: file, timeoutMs: 180_000 });
+      $('result').innerHTML = legacyResultHtml(r);
+      onDone();
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    }
+    go.disabled = false;
+    go.textContent = 'İçeri aktar';
+  });
 }
 
 /* ===================================================== yeni is emri */

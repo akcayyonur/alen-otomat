@@ -139,6 +139,35 @@ function readDateStyles(xml) {
   return styles;
 }
 
+/** @returns {number[]} stil indeksi -> dolgu (fill) id (cellXfs sirasiyla; renk-kodlu satir/durum okumak icin) */
+function readFillIds(xml) {
+  if (!xml) return [];
+  const block = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml)?.[1] ?? '';
+  const ids = [];
+  for (const m of block.matchAll(/<xf\b([^>]*?)\/?>/g)) ids.push(Number(attrs(m[1]).fillId ?? 0));
+  return ids;
+}
+
+/** @returns {(string|null)[]} dolgu id -> "RRGGBB" (alfa atilir); desensiz/tema renkli/dolgu yok -> null (tahmin edilmez) */
+function readFillColors(xml) {
+  if (!xml) return [];
+  const block = /<fills\b[^>]*>([\s\S]*?)<\/fills>/.exec(xml)?.[1] ?? '';
+  const colors = [];
+  for (const fm of block.matchAll(/<fill\b[^>]*>([\s\S]*?)<\/fill>/g)) {
+    const pfm = /<patternFill\b(?:[^>]*?)(?:\/>|>([\s\S]*?)<\/patternFill>)/.exec(fm[1]);
+    const typeM = /<patternFill\b([^>]*)/.exec(fm[1]);
+    const type = typeM ? attrs(typeM[1]).patternType : undefined;
+    let rgb = null;
+    if (type === 'solid' && pfm?.[1]) {
+      const fg = /<fgColor\b([^>]*?)\/?>/.exec(pfm[1]);
+      const argb = fg ? attrs(fg[1]).rgb : undefined;
+      if (argb && /^[0-9A-Fa-f]{8}$/.test(argb)) rgb = argb.slice(2).toUpperCase(); // ARGB -> RGB
+    }
+    colors.push(rgb);
+  }
+  return colors;
+}
+
 /* ------------------------------------------------------------------------------- degerler */
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -171,11 +200,13 @@ function columnIndex(ref) {
 
 /* ----------------------------------------------------------------------------------- sayfa */
 
-function readSheet(xml, { shared, dateStyles, date1904 }) {
+function readSheet(xml, { shared, dateStyles, date1904, fillIdsByStyle, fillColorsById }) {
   /** @type {string[][]} */
   const rows = [];
   /** `rows[k]` satirinin Excel'deki gercek satir numarasi (bos satirlar atlandigi icin dizi indeksiyle ayni degildir). */
   const rowNumbers = [];
+  /** `rows[k]` satirinin A sutunu dolgu rengi ("RRGGBB") ya da null - renk-kodlu durum (ör. yesil/sari) okumak icin. */
+  const rowFills = [];
   let rowNo = 0;
   for (const rm of xml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
     rowNo = Number(attrs(rm[1]).r) || rowNo + 1;
@@ -184,11 +215,13 @@ function readSheet(xml, { shared, dateStyles, date1904 }) {
     const row = [];
     let next = 0;
     let any = false;
+    let rowFill; // A sutununun dolgusu (bulununca bir kez atanir)
     for (const cm of body.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const a = attrs(cm[1]);
       let col = a.r ? columnIndex(a.r) : -1;
       if (col < 0) col = next;
       next = col + 1;
+      if (col === 0 && rowFill === undefined) rowFill = fillColorsById[fillIdsByStyle[Number(a.s ?? 0)] ?? 0] ?? null;
       const inner = cm[2];
       if (!inner) continue;
       const raw = /<v\b[^>]*?>([\s\S]*?)<\/v>/.exec(inner)?.[1];
@@ -211,9 +244,9 @@ function readSheet(xml, { shared, dateStyles, date1904 }) {
       row[col] = value;
       any = true;
     }
-    if (any) { rows.push(row); rowNumbers.push(rowNo); }
+    if (any) { rows.push(row); rowNumbers.push(rowNo); rowFills.push(rowFill ?? null); }
   }
-  return { rows, rowNumbers };
+  return { rows, rowNumbers, rowFills };
 }
 
 /** Hedef yolu `xl/` kokune gore cozer (`worksheets/sheet1.xml` ya da `/xl/worksheets/sheet1.xml`). */
@@ -221,8 +254,9 @@ const resolveTarget = (t) => (t.startsWith('/') ? t.slice(1) : `xl/${t.replace(/
 
 /**
  * @param {Buffer} buffer
- * @returns {{sheets: {name: string, hidden: boolean, rows: string[][], rowNumbers: number[]}[]}} rows: yalniz DOLU satirlar (bos satirlar atilir),
- *          degerler metin; rowNumbers: her satirin Excel'deki gercek satir numarasi
+ * @returns {{sheets: {name: string, hidden: boolean, rows: string[][], rowNumbers: number[], rowFills: (string|null)[]}[]}} rows: yalniz DOLU satirlar
+ *          (bos satirlar atilir), degerler metin; rowNumbers: her satirin Excel'deki gercek satir numarasi; rowFills: A sutununun dolgu rengi
+ *          ("RRGGBB") ya da null (dolgusuz/tema renkli - renk-kodlu durum okumak icin, ör. is emri listesi)
  */
 export function readXlsx(buffer) {
   if (isOle2(buffer)) {
@@ -242,7 +276,10 @@ export function readXlsx(buffer) {
 
   const shared = [];
   for (const m of (text('xl/sharedStrings.xml') ?? '').matchAll(/<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g)) shared.push(textOf(m[1] ?? ''));
-  const dateStyles = readDateStyles(text('xl/styles.xml'));
+  const stylesXml = text('xl/styles.xml');
+  const dateStyles = readDateStyles(stylesXml);
+  const fillIdsByStyle = readFillIds(stylesXml);
+  const fillColorsById = readFillColors(stylesXml);
   const date1904 = /<workbookPr\b[^>]*\bdate1904\s*=\s*"(?:1|true)"/i.test(workbook);
 
   const sheets = [];
@@ -252,7 +289,7 @@ export function readXlsx(buffer) {
     if (!a.name || !target) continue; // grafik sayfasi vb.
     const xml = text(target);
     if (xml === null) continue;
-    sheets.push({ name: a.name, hidden: (a.state ?? 'visible') !== 'visible', ...readSheet(xml, { shared, dateStyles, date1904 }) });
+    sheets.push({ name: a.name, hidden: (a.state ?? 'visible') !== 'visible', ...readSheet(xml, { shared, dateStyles, date1904, fillIdsByStyle, fillColorsById }) });
   }
   if (sheets.length === 0) throw new XlsxError('Çalışma kitabında okunabilir sayfa bulunamadı.');
   return { sheets };

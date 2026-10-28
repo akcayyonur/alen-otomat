@@ -33,11 +33,18 @@ export function zipOf(files, { store = false, flags = 0 } = {}) {
   return Buffer.concat([...locals, cd, eocd]);
 }
 
-/** Stil indeksleri: 0 genel, 1 yerlesik tarih (14), 2 ozel tarih (gg/aa/yyyy), 3 gecen sure ([h]:mm), 4 sayi + tirnakli "mm" (tarih DEGIL). */
+/**
+ * Stil indeksleri: 0 genel, 1 yerlesik tarih (14), 2 ozel tarih (gg/aa/yyyy), 3 gecen sure ([h]:mm), 4 sayi + tirnakli "mm" (tarih DEGIL),
+ * 5 yesil dolgu (92D050 - renk-kodlu durum testleri icin, ör. wo-import.test.js), 6 kirmizi dolgu (FF0000).
+ */
 const STYLES =
   '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="3">' +
   '<numFmt numFmtId="164" formatCode="dd/mm/yyyy"/><numFmt numFmtId="165" formatCode="[h]:mm"/><numFmt numFmtId="166" formatCode="0.00 &quot;mm&quot;"/></numFmts>' +
-  '<cellXfs count="5"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="166"/></cellXfs></styleSheet>';
+  '<fills count="3"><fill><patternFill patternType="none"/></fill>' +
+  '<fill><patternFill patternType="solid"><fgColor rgb="FF92D050"/><bgColor indexed="64"/></patternFill></fill>' +
+  '<fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+  '<cellXfs count="7"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="166"/>' +
+  '<xf numFmtId="0" fillId="1" applyFill="1"/><xf numFmtId="0" fillId="2" applyFill="1"/></cellXfs></styleSheet>';
 
 const colLetter = (i) => String.fromCharCode(65 + i);
 export const serial = (y, m, d) => Date.UTC(y, m - 1, d) / 86400000 + 25569;

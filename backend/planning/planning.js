@@ -11,7 +11,9 @@ import { Quality } from './quality.js';
 import { buildWorkOrderFormPdf } from './wo-form-pdf.js';
 import { parseSteps, parseReject, stepsToColumns, stepsText } from './card-steps.js';
 import { mergePdfs, PdfError } from '../pdf-merge.js';
-import { importFile } from './importers.js';
+import { importFile, importParsed, detectFormat } from './importers.js';
+import { isZip, readXlsx } from './xlsx-read.js';
+import { importHistoricalWorkOrders } from './wo-import.js';
 import { Sources } from './sources.js';
 import { Mikro } from './mikro.js';
 import { MikroClient } from './mikro-client.js';
@@ -138,6 +140,28 @@ export class Planning {
   /** Eski ad (testler): `importFile` ile aynı. */
   importCsv(buffer, opts) {
     return this.importFile(buffer, opts);
+  }
+
+  /**
+   * Eski (Excel) iş emri sisteminden BİR KEZLİK geçiş: dosyadaki iş emirleri listesi (PLANLANAN biçimi - ALEN KOD,
+   * MAMÜL ADI … başlıkları) HEM ürün kartlarını günceller (importFile ile aynı yol) HEM her satır için gerçek bir
+   * iş emri kaydı oluşturur (satır rengi -> durum: yeşil=bitti, kırmızı=iptal, diğer=planlandı; wo-import.js).
+   * Yalnız .xlsx kabul edilir (renk bilgisi CSV'de yok). İdempotent: aynı iş emri no'su zaten varsa o satır atlanır.
+   */
+  importLegacyWorkOrders(buffer, { by = null, now = Date.now() } = {}) {
+    if (!buffer || buffer.length === 0) throw new PlanningError('Dosya boş.');
+    if (!isZip(buffer)) throw new PlanningError('Yalnız .xlsx dosyası kabul edilir (renk bilgisi eski CSV biçiminde yok).', 400, 'not-xlsx');
+    let book;
+    try { book = readXlsx(buffer); } catch (err) { throw new PlanningError(err.message); }
+    const sheet = book.sheets.find((s) => s.rows.length > 0 && detectFormat(s.rows[0]) === 'isemri');
+    if (!sheet) throw new PlanningError('Çalışma kitabında iş emirleri listesi (ALEN KOD, MAMÜL ADI … başlıklı sayfa) bulunamadı.', 400, 'unrecognized');
+    const headers = sheet.rows[0];
+    const dataRows = sheet.rows.slice(1);
+    const dataFills = sheet.rowFills.slice(1);
+
+    const products = importParsed(this.db, { headers, rows: dataRows }, 'isemri', { filename: `${sheet.name} (eski iş emirleri)`, by, now, keepOld: true }, { encoding: 'xlsx', delimiter: null });
+    const workOrders = importHistoricalWorkOrders(this.db, { headers, rows: dataRows, rowFills: dataFills }, { by, now });
+    return { sheet: sheet.name, products, workOrders };
   }
 
   /* ----------------------------------------------------------------- urunler */

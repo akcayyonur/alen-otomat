@@ -24,6 +24,7 @@ import { renderGkk } from './planning-gkk.js';
 import { renderApprovals } from './planning-approvals.js';
 import { renderMeasureReports } from './planning-reports.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
+import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
 import { openFolderDialog } from './planning-docs.js';
 import { TAB_ROLES, tabsForRole, defaultTabFor } from './planning-tabs.js';
 
@@ -76,11 +77,19 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   // GKK ve ilk onay bolumlerinde yalniz "CSV iceri al" dugmesi vardir (urun/siparis ozeti degil).
   const showAdminBar = admin && !current.plain;
   const showImport = admin && (!current.plain || current.importer === true);
+  // Siparişler ve ürün kartları: Mikro'nun SIPARISLER sorgusu ikisini de tek seferde verdiği için "Mikro'dan yenile"
+  // BİRİNCİL düğme (tek tıkla doğrudan okur) - "Kaynak dosyadan yenile" (Excel) ikincil kalır, YERİNİ almaz, elden çıkmaz.
+  // GKK/ilk onay/iş emirleri/program eşleme Mikro'dan gelmez: o sekmelerde eskisi gibi Excel birincil.
+  const mikroPrimary = showImport && (current.key === 'urunler' || current.key === 'siparisler');
   host.innerHTML =
     '<section class="dt-block">' +
     `<div class="dt-block-head"><div><h3>${escapeHtml(current.label)}</h3>${current.hint ? `<p class="hint">${escapeHtml(current.hint)}</p>` : ''}</div>` +
     (showImport
-      ? '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="refresh" title="Mikro / GKK Excel dosyalarının durduğu klasörü okur, değişenleri uygular">Kaynak dosyadan yenile</button>' +
+      ? '<div class="dt-actions">' +
+        (mikroPrimary
+          ? '<button type="button" class="icon-btn btn-primary" data-act="mikro-refresh" title="MikroAPI\'den canlı SQL ile sipariş + ürün kartı okur">Mikro\'dan yenile</button>' +
+            '<button type="button" class="icon-btn" data-act="refresh" title="Mikro / GKK Excel dosyalarının durduğu klasörü okur, değişenleri uygular">Kaynak dosyadan yenile</button>'
+          : '<button type="button" class="icon-btn btn-primary" data-act="refresh" title="Mikro / GKK Excel dosyalarının durduğu klasörü okur, değişenleri uygular">Kaynak dosyadan yenile</button>') +
         '<button type="button" class="icon-btn" data-act="sources">Kaynak klasörü…</button>' +
         (current.key === 'urunler'
           ? '<button type="button" class="icon-btn" data-act="docs-cizim" title="Teknik resim klasöründeki PDF\'leri ürün koduna göre ürün kartlarına bağlar">Teknik resimleri eşle…</button>' +
@@ -88,7 +97,7 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
           : '') +
         '<button type="button" class="icon-btn" data-act="import">Excel içeri al…</button></div>'
       : '') + '</div>' +
-    (showImport ? '<p class="hint-meta" data-role="source-status"></p>' : '') +
+    (showImport ? `<p class="hint-meta" data-role="source-status"></p>${mikroPrimary ? '<p class="hint-meta" data-role="mikro-status"></p>' : ''}` : '') +
     (showAdminBar ? '<div class="pl-kpis pl-kpis-summary" data-role="summary"></div>' : '') +
     '<div data-role="tab"></div></section>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
@@ -109,9 +118,10 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   }
 
   const mountTab = () => current.render($('tab'));
-  const afterChange = () => { summary(); mountTab(); showSourceStatus(host); };
+  const afterChange = () => { summary(); mountTab(); showSourceStatus(host); if (mikroPrimary) showMikroStatus(host); };
   host.onclick = (ev) => {
     if (ev.target.closest('[data-act="import"]')) openImportDialog(afterChange);
+    else if (ev.target.closest('[data-act="mikro-refresh"]')) runMikroRefresh({ onDone: afterChange });
     else if (ev.target.closest('[data-act="refresh"]')) runRefresh({ onDone: afterChange });
     else if (ev.target.closest('[data-act="sources"]')) openSourcesDialog({ onDone: () => showSourceStatus(host) });
     else if (ev.target.closest('[data-act="docs-cizim"]')) openFolderDialog('cizim', { onDone: mountTab });
@@ -123,7 +133,8 @@ export function renderPlanning(host, tab = defaultPlanningTab()) {
   clearInterval(host.sourceTimer);
   if (showImport) {
     showSourceStatus(host);
-    host.sourceTimer = setInterval(() => { if (!host.querySelector('[data-role="source-status"]')) clearInterval(host.sourceTimer); else showSourceStatus(host); }, 60_000);
+    if (mikroPrimary) showMikroStatus(host);
+    host.sourceTimer = setInterval(() => { if (!host.querySelector('[data-role="source-status"]')) clearInterval(host.sourceTimer); else { showSourceStatus(host); if (mikroPrimary) showMikroStatus(host); } }, 60_000);
   }
 }
 

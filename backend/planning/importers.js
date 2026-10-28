@@ -315,8 +315,12 @@ function classify(parsed, quality) {
   return (quality ? detectForm(parsed) : null) ?? detectFormat(parsed.headers);
 }
 
-/** Tek bir tablo (CSV'nin tamami ya da bir .xlsx sayfasi) icin iceri alma; sonuc `source` alanlariyla (encoding, delimiter ...) birlestirilir. */
-function importParsed(db, parsed, kind, { filename, by, keepOld, now, quality }, source) {
+/**
+ * Tek bir tablo icin iceri alma; sonuc `source` alanlariyla (encoding, delimiter ...) birlestirilir. CSV/XLSX disinda
+ * (ör. mikro.js, Mikro API'den gelen satirlar) `parsed = {headers, rows}` dogrudan burada verilebilir - dosyadan
+ * gecmek SART degil, ic ice calisan tek gercek kaynak budur.
+ */
+export function importParsed(db, parsed, kind, { filename, by, keepOld, now, quality }, source) {
   const warnings = new Warnings();
   if (kind === 'gkk' || kind === 'ilkonay') {
     const batchId = db.beginBatch(kind, { filename, by, now });

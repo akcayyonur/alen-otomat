@@ -649,8 +649,10 @@ dialog.modal.modal-wide{width:min(1120px,96vw);}
 .pl-cancelled td:last-child,.pl-cancelled .chip{text-decoration:none;}
 .pl-snap{display:flex;flex-wrap:wrap;gap:6px 18px;padding:8px 12px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);font-size:12.5px;color:var(--ink-soft);}
 .pl-snap b{color:var(--ink);font-weight:650;}
-.pl-seq{display:flex;gap:8px;align-items:center;margin:8px 0 2px;}
+.pl-seq{display:flex;gap:8px;align-items:center;margin:8px 0 2px;flex-wrap:wrap;}
 .pl-seq input{padding:5px 8px;font:inherit;font-size:13px;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);color:var(--ink);width:180px;}
+.pl-seq-box{margin-top:14px;padding:10px 14px;border:1px solid var(--line);border-radius:14px;background:var(--surface);}
+.pl-seq-box .hint{margin:4px 0 0;}
 .pl-wohead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 .6em;font-size:13px;}
 .pl-events{margin:.2em 0 .4em 1.1em;padding:0;font-size:12.5px;color:var(--ink-soft);}
 .pl-events li{margin:.25em 0;}
@@ -754,6 +756,11 @@ dialog.pl-form-dlg .modal-body{background:var(--surface-2);}
 .pl-kpi-sub{font-size:11px;font-weight:600;color:var(--accent);margin-left:5px;}
 .tbl-pl tbody tr.pl-running{background:var(--accent-soft);}
 .tbl-pl tbody tr.pl-running:hover{background:var(--accent-soft);}
+/* Is emri satir rengi: durum hucresindeki ikon+etiketi (woStatusChip) pekistirir, TEK BASINA anlam tasimaz. */
+.tbl-pl tbody tr.pl-waiting{background:rgba(250,178,25,.13);}
+.tbl-pl tbody tr.pl-waiting:hover{background:rgba(250,178,25,.13);}
+.tbl-pl tbody tr.pl-done{background:rgba(12,163,12,.09);}
+.tbl-pl tbody tr.pl-done:hover{background:rgba(12,163,12,.09);}
 .pl-sample{margin:6px 0;font-size:13px;}
 
 /* planlama: tezgah basi (fabrika PC'si / operator ekrani, T) - buyuk dokunmatik dugmeler */

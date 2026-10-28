@@ -16,6 +16,7 @@ import { TelemetryStore, SHIFT_WINDOW_MS } from './store.js';
 import { Library } from './programs/library.js';
 import { MachineFiles } from './programs/machine-files.js';
 import { Planning } from './planning/planning.js';
+import { MikroClient } from './planning/mikro-client.js';
 import { createPlanningRoutes } from './planning/routes.js';
 import { createProgramRoutes } from './programs/routes.js';
 import { AuthDb } from './auth/auth-db.js';
@@ -69,6 +70,21 @@ const MAX_BODY_BYTES = 1_000_000;
  */
 const MAX_INGEST_BYTES = 40_000_000;
 
+/**
+ * MikroAPI (Mikro ERP'nin kendi PC'sindeki yerel servisi, tezgahlarla ilgisi yok): "Kaynak klasoru"ne (Excel)
+ * PARALEL, canli SQL okuma. Hicbiri ayarlanmamissa Mikro kaynagi "yapilandirilmadi" sayilir (sunucu yine acilir,
+ * Excel yolu etkilenmez). Degerler GIT'E ASLA GIRMEZ - yalniz ortam degiskeniyle (ör. --env-file) verilir.
+ */
+const mikroClient = new MikroClient({
+  host: process.env.MIKRO_API_HOST ?? null,
+  port: Number(process.env.MIKRO_API_PORT ?? 8094),
+  firmaKodu: process.env.MIKRO_FIRMA_KODU ?? null,
+  kullaniciKodu: process.env.MIKRO_KULLANICI_KODU ?? null,
+  sifre: process.env.MIKRO_SIFRE ?? null,
+  apiKey: process.env.MIKRO_API_KEY ?? null,
+  calismaYili: process.env.MIKRO_CALISMA_YILI ?? String(new Date().getFullYear()),
+});
+
 const store = new TelemetryStore(DB_FILE);
 
 // Program kutuphanesi ve tezgaha aktarim: telemetri yolundan AYRI (backend/programs/).
@@ -98,6 +114,7 @@ const planning = new Planning({
   sourcesDir: process.env.SOURCES_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'kaynak'), // Mikro/GKK Excel dosyalarinin varsayilan klasoru (data/kaynak)
   drawingsDir: process.env.DRAWINGS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'teknik-resim'), // teknik resim PDF'lerinin varsayilan klasoru (data/teknik-resim)
   stickersDir: process.env.STICKERS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'etiket'), // kutu etiketi Word dosyalarinin varsayilan klasoru (data/etiket)
+  mikroClient, // MikroAPI: canli SQL okuma, Kaynak klasorune paralel (bkz. yukarida)
 });
 // Kurulumda kapali bolumler (config/features.json; FEATURES_FILE ile degistirilir): hatali dosya sunucuyu baslatmaz.
 const features = loadFeatures(process.env.FEATURES_FILE);
@@ -157,6 +174,7 @@ const STATIC_FILES = {
   '/planning-packing-form.js': ['../dashboard/planning-packing-form.js', 'text/javascript; charset=utf-8'],
   '/planning-docs.js': ['../dashboard/planning-docs.js', 'text/javascript; charset=utf-8'],
   '/planning-sources.js': ['../dashboard/planning-sources.js', 'text/javascript; charset=utf-8'],
+  '/planning-mikro.js': ['../dashboard/planning-mikro.js', 'text/javascript; charset=utf-8'],
   '/planning-gkk.js': ['../dashboard/planning-gkk.js', 'text/javascript; charset=utf-8'],
   '/planning-approvals.js': ['../dashboard/planning-approvals.js', 'text/javascript; charset=utf-8'],
   '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],

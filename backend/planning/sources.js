@@ -25,15 +25,40 @@ const MAX_BYTES = 64 * 1024 * 1024;
 const SETTING_DIR = 'sources.dir';
 const SETTING_LAST = 'sources.last-refresh';
 
-const emptyTotals = () => ({
+/** Baska kaynaklarla (mikro.js) paylasilan sonuc sekli: bir kaynagin "ne degisti" toplamlari. */
+export const emptyTotals = () => ({
   lines: { added: 0, updated: 0 }, products: { added: 0, updated: 0, protected: 0 }, gkk: { added: 0, updated: 0 }, approvals: { added: 0, updated: 0 },
   stock: { added: 0, updated: 0, removed: 0 },
 });
-const emptyChanges = () => ({
+export const emptyChanges = () => ({
   lines: { added: [], updated: [] }, products: { added: [], updated: [], protected: [] }, gkk: { added: [], updated: [] }, approvals: { added: [], updated: [] },
 });
 const CAP = 40;
 const addCapped = (list, items) => { for (const it of items ?? []) if (list.length < CAP) list.push(it); };
+
+/** Bir sayfa/tablonun iceri alma sonucunu toplamlara ve "ne degisti" listelerine katar (Sources ve Mikro ortak kullanir). */
+export function accumulate(totals, changes, p) {
+  if (p.format === 'siparis') {
+    totals.lines.added += p.added; totals.lines.updated += p.updated;
+    totals.products.added += p.products?.added ?? 0; totals.products.updated += p.products?.updated ?? 0;
+    addCapped(changes.lines.added, p.changes?.lines?.added); addCapped(changes.lines.updated, p.changes?.lines?.updated);
+    addCapped(changes.products.added, p.changes?.products?.added); addCapped(changes.products.updated, p.changes?.products?.updated);
+    addCapped(changes.products.protected, p.changes?.products?.protected);
+    totals.products.protected += p.protectedCards ?? 0;
+  } else if (p.format === 'isemri') {
+    totals.products.added += p.products?.added ?? 0; totals.products.updated += p.products?.updated ?? 0;
+    addCapped(changes.products.added, p.changes?.products?.added); addCapped(changes.products.updated, p.changes?.products?.updated);
+  } else if (p.format === 'gkk') {
+    totals.gkk.added += p.added; totals.gkk.updated += p.updated;
+    addCapped(changes.gkk.added, p.changes?.added); addCapped(changes.gkk.updated, p.changes?.updated);
+  } else if (p.format === 'ilkonay') {
+    totals.approvals.added += p.added; totals.approvals.updated += p.updated;
+    addCapped(changes.approvals.added, p.changes?.added); addCapped(changes.approvals.updated, p.changes?.updated);
+  } else if (p.format === 'stok') {
+    // Depo stogu (F): tam degistirme, gecmis tutulmaz -> yalniz sayilar, satir bazli "ne degisti" listesi yok.
+    totals.stock.added += p.added; totals.stock.updated += p.updated; totals.stock.removed += p.removed ?? 0;
+  }
+}
 
 export class Sources {
   /**
@@ -177,7 +202,7 @@ export class Sources {
           sheet: p.sheet ?? null, format: p.format, totalRows: p.totalRows, added: p.added, updated: p.updated, unchanged: p.unchanged, skipped: p.skipped,
           products: p.products ?? null, warnings: p.warnings ?? [],
         }));
-        for (const p of parts) this.#accumulate(totals, changes, p);
+        for (const p of parts) accumulate(totals, changes, p);
         this.#db.saveSourceFile(f.path, { size: f.size, mtimeMs: f.mtimeMs, sha256, importedAt: now, summary: { parts: entry.parts.map(({ sheet, format, added, updated }) => ({ sheet, format, added, updated })) } });
       }
 
@@ -190,30 +215,6 @@ export class Sources {
       };
     } finally {
       this.busy = false;
-    }
-  }
-
-  /** Bir sayfanin sonucunu toplamlara ve "ne degisti" listelerine katar. */
-  #accumulate(totals, changes, p) {
-    if (p.format === 'siparis') {
-      totals.lines.added += p.added; totals.lines.updated += p.updated;
-      totals.products.added += p.products?.added ?? 0; totals.products.updated += p.products?.updated ?? 0;
-      addCapped(changes.lines.added, p.changes?.lines?.added); addCapped(changes.lines.updated, p.changes?.lines?.updated);
-      addCapped(changes.products.added, p.changes?.products?.added); addCapped(changes.products.updated, p.changes?.products?.updated);
-      addCapped(changes.products.protected, p.changes?.products?.protected);
-      totals.products.protected += p.protectedCards ?? 0;
-    } else if (p.format === 'isemri') {
-      totals.products.added += p.products?.added ?? 0; totals.products.updated += p.products?.updated ?? 0;
-      addCapped(changes.products.added, p.changes?.products?.added); addCapped(changes.products.updated, p.changes?.products?.updated);
-    } else if (p.format === 'gkk') {
-      totals.gkk.added += p.added; totals.gkk.updated += p.updated;
-      addCapped(changes.gkk.added, p.changes?.added); addCapped(changes.gkk.updated, p.changes?.updated);
-    } else if (p.format === 'ilkonay') {
-      totals.approvals.added += p.added; totals.approvals.updated += p.updated;
-      addCapped(changes.approvals.added, p.changes?.added); addCapped(changes.approvals.updated, p.changes?.updated);
-    } else if (p.format === 'stok') {
-      // Depo stogu (F): tam degistirme, gecmis tutulmaz -> yalniz sayilar, satir bazli "ne degisti" listesi yok.
-      totals.stock.added += p.added; totals.stock.updated += p.updated; totals.stock.removed += p.removed ?? 0;
     }
   }
 }

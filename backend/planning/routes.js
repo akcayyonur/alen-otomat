@@ -14,6 +14,7 @@
  *   POST /api/planning/import?filename=&keepOld=1       Excel'den CSV ya da .xlsx (govde = ham dosya; tur icerikten anlasilir, .xlsx'te tum sayfalar taranir)
  *   GET  /api/planning/sources                          KAYNAK KLASORU durumu: klasor, dosyalar ve her birinin son iceri almaya gore durumu (yeni/degisti/ayni)
  *   PUT  /api/planning/sources/dir {dir}                kaynak klasorunu ayarla (bos = varsayilan);  POST .../sources/refresh {force?}  klasoru oku, degisenleri uygula (yalniz yonetici)
+ *   GET  /api/planning/mikro                            MikroAPI durumu (yapilandirildi mi, son senkron); POST .../mikro/test baglanti denemesi; POST .../mikro/refresh {} canli SQL ile senkronize et (yalniz yonetici)
  *   GET  /api/planning/orders?q=&open=1&limit=          siparisler (musteri siparis no + evrak no ile gruplu)
  *   GET  /api/planning/orders/lines?customerKey=&custOrderKey=&docKey=   bir siparisin satirlari
  *   GET  /api/planning/work-orders?q=&status=&machine=  is emirleri (status: aktif | planlandi | uretimde | bitti | iptal | tumu)
@@ -202,6 +203,13 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       if (method === 'POST' && path === '/api/planning/sources/refresh') {
         const body = await readJson(req);
         return sendJson(res, 200, planning.sources.refresh({ by: who(req), force: body.force === true })), true;
+      }
+
+      /* ---- MikroAPI: canli SQL okuma, Kaynak klasorune PARALEL (yalniz yonetici) ---- */
+      if (method === 'GET' && path === '/api/planning/mikro') return sendJson(res, 200, planning.mikro.status()), true;
+      if (method === 'POST' && path === '/api/planning/mikro/test') return sendJson(res, 200, await planning.mikro.test()), true;
+      if (method === 'POST' && path === '/api/planning/mikro/refresh') {
+        return sendJson(res, 200, await planning.mikro.refresh({ by: who(req) })), true;
       }
 
       /* ---- paketleme formu (EYS.FR.007): operator + yonetici ---- */

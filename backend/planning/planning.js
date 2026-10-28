@@ -13,6 +13,8 @@ import { parseSteps, parseReject, stepsToColumns, stepsText } from './card-steps
 import { mergePdfs, PdfError } from '../pdf-merge.js';
 import { importFile } from './importers.js';
 import { Sources } from './sources.js';
+import { Mikro } from './mikro.js';
+import { MikroClient } from './mikro-client.js';
 import { DocFolder } from './doc-folder.js';
 import { Packing } from './packing.js';
 import { Schedule } from './schedule.js';
@@ -88,13 +90,15 @@ export class Planning {
   constructor({
     dbFile = 'data/planlama.db', listSeenPrograms = () => [], listMachines = () => [], productionEvents = () => [], liveMachine = () => null,
     spans = () => [], downtimeConfig = { groups: [], codes: [] }, downtimeMinMs = DEFAULT_MIN_STOP_MS, sourcesDir = null, programRuns = () => [],
-    drawingsDir = null, stickersDir = null,
+    drawingsDir = null, stickersDir = null, mikroClient = null,
   } = {}) {
     this.db = new PlanningDb(dbFile);
     /** GKK rapor numaralari, ilk onay raporlari ve teknik resimler (ayni veritabani dosyasi). */
     this.quality = new Quality({ planning: this, db: this.db.db });
     /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
+    /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */
+    this.mikro = new Mikro({ planning: this, client: mikroClient ?? new MikroClient({}) });
     /** Teknik resim (PDF) ve etiket (Word) klasorleri: dosyalar urun koduna gore urun kartlarina eslenir (doc-folder.js). Iki AYRI klasor. */
     this.drawingFolder = new DocFolder({ planning: this, kind: 'cizim', defaultDir: drawingsDir });
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });

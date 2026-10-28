@@ -53,7 +53,8 @@ export async function renderWorkOrders(host) {
     (canEdit ? '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni iş emri</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>' +
-    '<p class="pl-more" data-role="more" hidden><button type="button" class="icon-btn" data-act="more">Daha fazla göster</button></p>';
+    '<p class="pl-more" data-role="more" hidden><button type="button" class="icon-btn" data-act="more">Daha fazla göster</button></p>' +
+    (canEdit ? '<div data-role="seq-box"></div>' : '');
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
   function draw() {
@@ -66,7 +67,8 @@ export async function renderWorkOrders(host) {
       st.items.map((w) => {
         const no = escapeHtml(w.no);
         const btn = (act, label) => `<button type="button" class="icon-btn icon-btn-sm" data-act="${act}" data-no="${no}">${label}</button> `;
-        return `<tr class="pl-row${w.status === 'iptal' ? ' pl-cancelled' : ''}${w.status === 'uretimde' ? ' pl-running' : ''}" data-no="${no}" tabindex="0">` +
+        const stateClass = w.status === 'iptal' ? ' pl-cancelled' : w.status === 'uretimde' ? ' pl-running' : w.status === 'planlandi' ? ' pl-waiting' : w.status === 'bitti' ? ' pl-done' : '';
+        return `<tr class="pl-row${stateClass}" data-no="${no}" tabindex="0">` +
           `<td class="mono"><b>${no}</b></td>` +
           `<td class="trunc"${truncCell(w.productName)}><span class="mono"><b>${escapeHtml(w.stockCode)}</b></span> ${cellText(w.productName)}</td><td class="mono trunc"${truncCell(w.custOrderNo)}>${cellText(w.custOrderNo)}</td>` +
           `<td class="mono">${w.machineId ? escapeHtml(w.machineId) : '<span class="is-null" title="Tezgah başlatırken seçilir">atanmadı</span>'}</td><td class="num">${fmtNum(w.targetQty)}</td>` +
@@ -99,9 +101,24 @@ export async function renderWorkOrders(host) {
   }
 
   try {
-    st.machines = (await api('/api/planning/summary')).machines;
+    const sm = await api('/api/planning/summary');
+    st.machines = sm.machines;
     $('machine').innerHTML = '<option value="">Tümü</option>' + st.machines.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}</option>`).join('');
+    if (canEdit) drawSeq(sm.nextWorkOrder);
   } catch { /* tezgah süzgeci olmadan da çalışır */ }
+
+  /** Numara taban ayarı - "bir kere girilip oradan devam etsin" (şirketteki mevcut sırayı devretme). Yalnız yönetici. */
+  function drawSeq(n) {
+    const box = $('seq-box');
+    if (!box) return;
+    box.innerHTML =
+      '<div class="pl-seq-box"><p class="hint-meta">Sıradaki iş emri numarası: <b class="mono">' + escapeHtml(n.no) + '</b>' +
+      (n.floor > 0 || n.max > 0 ? '' : ' <span class="is-null">(taban girilmedi, 1\'den başlıyor)</span>') + '</p>' +
+      '<div class="pl-seq"><input type="text" inputmode="numeric" maxlength="10" data-role="seq-last" placeholder="ör. 2026001109" aria-label="Şirkette en son verilen iş emri numarası">' +
+      '<button type="button" class="icon-btn" data-act="seq-set">Bu numaradan devam ettir</button></div>' +
+      '<p class="hint">Şirkette hâlâ kullanılan bir numaralandırma varsa (Excel/kâğıt), en son verilen numarayı bir kez buraya girin; sıradaki numaralar ondan devam eder. Numara yalnız yükseltilebilir, geri alınamaz.</p>' +
+      '<p class="notice notice-sim" data-role="seq-err" hidden></p></div>';
+  }
 
   const search = debounce((value) => { st.q = value.trim(); load(true); }, 250);
   host.oninput = (ev) => { if (ev.target.dataset?.role === 'q') search(ev.target.value); };
@@ -119,11 +136,21 @@ export async function renderWorkOrders(host) {
     if (row) { openWorkOrderForm(row.dataset.no, canEdit ? { onEdit: () => edit(row.dataset.no) } : {}); return true; }
     return false;
   };
-  host.onclick = (ev) => {
+  host.onclick = async (ev) => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (act === 'new') return openNewWorkOrder({}, () => load(true));
     if (act === 'more') return load(false);
     if (act === 'retry') return load(true);
+    if (act === 'seq-set') {
+      const last = $('seq-box').querySelector('[data-role="seq-last"]').value.trim();
+      const err = $('seq-box').querySelector('[data-role="seq-err"]');
+      err.hidden = true;
+      try {
+        const next = await put('/api/planning/work-orders/sequence', { last });
+        drawSeq(next);
+      } catch (e) { err.textContent = e.message; err.hidden = false; }
+      return;
+    }
     const b = ev.target.closest('[data-act="start"], [data-act="finish"]');
     if (b) { ev.stopPropagation(); (b.dataset.act === 'start' ? openStartDialog : openFinishDialog)(b.dataset.no, () => load(true)); return; }
     open(ev);

@@ -116,7 +116,7 @@ export const fmtDec = (v, d = 2) => (v === null || v === undefined ? '' : new In
 
 /** Is emri durumu rozeti: renk tek basina anlam tasimaz, ikon + etiket her zaman var. */
 const WO_STATUS = Object.freeze({
-  planlandi: ['none', '◔', 'planlandı'], uretimde: ['info', '▶', 'üretimde'], bitti: ['ok', '✓', 'bitti'], iptal: ['bad', '✕', 'iptal'],
+  planlandi: ['warn', '◔', 'planlandı'], uretimde: ['info', '▶', 'üretimde'], bitti: ['ok', '✓', 'bitti'], iptal: ['bad', '✕', 'iptal'],
 });
 export const woStatusChip = (s) => chip(...(WO_STATUS[s] ?? ['none', '?', String(s)]));
 

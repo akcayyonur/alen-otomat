@@ -301,8 +301,28 @@ function GorevKur($ad, $program, $argumanlar, $calismaDizini, $gecikmeSn = 0) {
     Tamam "kaydedildi: $ad"
 }
 
+# MikroAPI kimlik bilgileri: backend gorevine HER ZAMAN --env-file verilir (2026-10-28'de bulunan eksiklik -
+# eskiden hic verilmiyordu, MikroAPI kullanan kurulumlarda elle Set-ScheduledTask duzeltmesi gerekiyordu).
+# Dosya yoksa Node --env-file hata verir; bu yuzden MUTLAKA var olmali (bos da olabilir, MikroAPI o zaman
+# "yapilandirilmadi" sayilir, sunucu yine acilir). Zaten varsa (guncelleme ya da once elle doldurulmus)
+# DOKUNULMAZ. Gomulu kaynak (build-installer.ps1 -MikroEnvFile ile paketlenmisse) yalniz ILK kurulumda kullanilir.
+$mikroEnvHedef = Join-Path $ProjeKok 'data\mikro.env'
+$mikroEnvKaynak = Join-Path $ProjeKok 'kurulum\mikro.env.govde'
+New-Item -ItemType Directory -Force -Path (Split-Path $mikroEnvHedef) | Out-Null
+if (-not (Test-Path $mikroEnvHedef)) {
+    if (Test-Path $mikroEnvKaynak) {
+        Copy-Item $mikroEnvKaynak $mikroEnvHedef
+        Tamam 'MikroAPI kimlik bilgileri gomulu paketten kuruldu (data\mikro.env)'
+    } else {
+        New-Item -ItemType File -Force -Path $mikroEnvHedef | Out-Null
+        Bilgi 'MikroAPI yapilandirilmadi (data\mikro.env bos olusturuldu) - gerekirse elle doldurun'
+    }
+} else {
+    Tamam 'data\mikro.env zaten var, dokunulmadi (mevcut yapilandirma korundu)'
+}
+
 $backendLog = Join-Path $LogDizin 'backend.log'
-GorevKur $BackendGorev $nodeYol ('backend\server.js --log "{0}"' -f $backendLog) $ProjeKok
+GorevKur $BackendGorev $nodeYol ('--env-file "{0}" backend\server.js --log "{1}"' -f $mikroEnvHedef, $backendLog) $ProjeKok
 
 if ($ajanExe) {
     $ajanLog = Join-Path $LogDizin 'ajan.log'

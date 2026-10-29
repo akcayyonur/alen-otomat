@@ -31,6 +31,16 @@
         .\build-installer.ps1 -KapaliBolumler 'hammadde'            # yalniz hammadde kapali
     Depodaki config\features.json her seyi ACIK birakir (gelistirme/demo); paketteki dosyayi bu parametre yazar.
 
+    -MikroEnvFile: MikroAPI kimlik bilgilerini (host/port/firma kodu/kullanici/sifre/anahtar) ICEREN bir .env
+    dosyasi (ornek: .claude\mikro.env formati) - verilirse paketlenir, ILK kurulumda data\mikro.env olarak
+    kopyalanir (zaten varsa dokunulmaz - guncelleme mevcut yapilandirmayi EZMEZ). Verilmezse ".claude\mikro.env"
+    otomatik aranir (depo kokunde, .gitignore'da - COMMIT EDILMEZ); o da yoksa HICBIR SEY gomulmez, kurulum.ps1
+    bos bir dosya olusturur (MikroAPI "yapilandirilmadi" sayilir, sunucu yine acilir). Bu dosya SyntecBin gibi
+    yalniz derleme ANINDA okunur, depoya YAZILMAZ; cikan Setup.exe GERCEK kimlik bilgilerini icerir - depoya
+    koyma, herkese acik paylasma (SyntecBin DLL'leriyle ayni kural).
+    -MikroWriteEnabled: verilirse embedded mikro.env'e MIKRO_WRITE_ENABLED=1 satiri eklenir - Depolar arasi
+    sevkiyat / sarfiyat (virman) fisi GERCEKTEN Mikro'ya yazar (varsayilan KAPALI kalir, yalniz onizler).
+
     Gereken: Inno Setup 6 (winget install JRSoftware.InnoSetup), Node 22.5+ (x64),
              .NET Framework 4.0 derleyicisi (Windows'ta hazir gelir).
 #>
@@ -48,6 +58,12 @@ param(
     # Bu kurulumda KAPALI Planlama bolumleri (shared/features.js: paketleme, hammadde). Bos liste = hepsi acik.
     # Varsayilan KAPALI: bu bolumler rafine edilene kadar kurulumlara girmez; acmak icin acikca @() verilir.
     [string[]]$KapaliBolumler = @('paketleme', 'hammadde'),
+
+    # MikroAPI kimlik bilgileri (.env dosyasi) - verilirse ILK kurulumda data\mikro.env olarak gomulur.
+    [string]$MikroEnvFile = $env:CNC_MIKRO_ENV,
+
+    # Gomulu mikro.env'e MIKRO_WRITE_ENABLED=1 ekler (gercek Mikro yazmasi acik gelir). Varsayilan KAPALI.
+    [switch]$MikroWriteEnabled,
 
     # Duman testini atla (onerilmez).
     [switch]$TestAtla
@@ -287,6 +303,26 @@ Copy-Item (Join-Path $Kok 'kurulum\KURULUM.md')   (Join-Path $Payload 'kurulum')
 # package.json: "type": "module" - bu olmadan .js dosyalari ES modulu sayilmaz.
 Copy-Item (Join-Path $Kok 'package.json') $Payload
 Tamam 'proje kodu'
+
+# MikroAPI kimlik bilgileri: verilmisse (ya da .claude\mikro.env depoda varsa) data\mikro.env olarak gomulur -
+# kurulum.ps1 bunu ILK kurulumda kopyalar (guncellemede dokunmaz). Dosya COMMIT EDILMEZ, yalniz bu derlemenin
+# ciktisi olan Setup.exe'ye girer - cikti da depoya girmez (.gitignore), ama Syntec DLL'leri gibi GERCEK sir
+# tasir: dagitimina dikkat.
+if (-not $MikroEnvFile) {
+    $aday = Join-Path $Kok '.claude\mikro.env'
+    if (Test-Path $aday) { $MikroEnvFile = $aday }
+}
+if ($MikroEnvFile) {
+    if (-not (Test-Path $MikroEnvFile)) { Vazgec "MikroEnvFile yok: $MikroEnvFile" }
+    $satirlar = [System.Collections.Generic.List[string]](Get-Content $MikroEnvFile | Where-Object { $_ -notmatch '^\s*MIKRO_WRITE_ENABLED=' })
+    if ($MikroWriteEnabled) { $satirlar.Add('MIKRO_WRITE_ENABLED=1') }
+    # BOM'suz UTF-8 ZORUNLU: Set-Content -Encoding utf8 BOM ekler, Node --env-file dosyanin ILK satirini/anahtarini
+    # okuyamaz hale gelir (2026-10-28'de fabrika PC'sinde ayni hatayla karsilasildi, bkz. CLAUDE.md "MikroAPI").
+    [System.IO.File]::WriteAllText((Join-Path $Payload 'kurulum\mikro.env.govde'), (($satirlar -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    Tamam "MikroAPI kimlik bilgileri gomuldu ($MikroEnvFile) - yazma: $(if ($MikroWriteEnabled) { 'ACIK' } else { 'kapali (onizleme)' })"
+} else {
+    Bilgi 'MikroAPI kimlik bilgileri gomulmedi (-MikroEnvFile verilmedi, .claude\mikro.env de yok): kurulumda bos data\mikro.env olusur, elle doldurulmali'
+}
 
 # Visual C++ 2005 SP1 (x86): Setup eksikse kurar, sonra siler.
 New-Item -ItemType Directory -Force -Path (Join-Path $Payload 'prereq') | Out-Null

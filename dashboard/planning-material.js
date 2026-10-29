@@ -255,7 +255,8 @@ export async function renderMaterial(host) {
         (isTransfer
           ? `<label class="fld"><span>Kaynak depo</span><select data-role="from"><option value="">Seçin…</option>${depotOpt(initial.fromDepotNo)}</select></label>` +
             `<label class="fld"><span>Hedef depo</span><select data-role="to"><option value="">Seçin…</option>${depotOpt(initial.toDepotNo)}</select></label>`
-          : `<label class="fld"><span>Depo</span><select data-role="depot"><option value="">Seçin…</option>${depotOpt(initial.depotNo)}</select></label>`) +
+          : `<label class="fld"><span>Depo</span><select data-role="depot"><option value="">Seçin…</option>${depotOpt(initial.depotNo)}</select></label>` +
+            `<label class="fld"><span>Yön</span><select data-role="direction"><option value="cikan"${(initial.direction ?? 'cikan') === 'cikan' ? ' selected' : ''}>Çıkan (sarfiyat)</option><option value="giren"${initial.direction === 'giren' ? ' selected' : ''}>Giren</option></select></label>`) +
         '<label class="fld pl-wide"><span>Hammadde (Mikro stok kodu)</span>' +
         `<input data-role="matQ" placeholder="Kod ya da ad ara…" value="${escapeHtml(initial.stockQuery ?? '')}" autocomplete="off"></label>` +
         '<div class="pl-pick-result" data-role="matResult" hidden></div><div data-role="matList"></div>' +
@@ -300,7 +301,7 @@ export async function renderMaterial(host) {
       const stockCode = dst.material?.stockCode;
       return isTransfer
         ? { fromDepotNo: m.body.querySelector('[data-role="from"]').value, toDepotNo: m.body.querySelector('[data-role="to"]').value, stockCode, kg: kgVal, note }
-        : { depotNo: m.body.querySelector('[data-role="depot"]').value, stockCode, kg: kgVal, note };
+        : { depotNo: m.body.querySelector('[data-role="depot"]').value, direction: m.body.querySelector('[data-role="direction"]').value, stockCode, kg: kgVal, note };
     }
 
     function previewHtml(p) {

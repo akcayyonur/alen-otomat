@@ -26,11 +26,14 @@ function dateKey(d) {
 export class MikroClient {
   /**
    * @param {{host?: string|null, port?: number, firmaKodu?: string|null, kullaniciKodu?: string|null,
-   *          sifre?: string|null, apiKey?: string|null, calismaYili?: string|null, fetchImpl?: typeof fetch}} opts
+   *          sifre?: string|null, apiKey?: string|null, calismaYili?: string|null, firmaNo?: number, subeNo?: number, fetchImpl?: typeof fetch}} opts
+   * firmaNo/subeNo: okuma uclarinda (SqlVeriOkuV2) gerekmiyor gibi gorunuyor ama yazma uclarinin (DahiliStokHareketKaydetV2)
+   * govde semasinda Mikro bloğunun bir parcasi; gercek STOK_HAREKETLERI kayitlarinin hepsinde sth_firmano=0/sth_subeno=0
+   * (tek firma/tek sube kurulumu) oldugu icin varsayilan 0 - bu TAHMIN degil, gercek veriden (2026-10-29).
    */
   constructor({
     host = null, port = DEFAULT_PORT, firmaKodu = null, kullaniciKodu = null, sifre = null,
-    apiKey = null, calismaYili = String(new Date().getFullYear()), fetchImpl = fetch,
+    apiKey = null, calismaYili = String(new Date().getFullYear()), firmaNo = 0, subeNo = 0, fetchImpl = fetch,
   } = {}) {
     this.host = host;
     this.port = port;
@@ -39,6 +42,8 @@ export class MikroClient {
     this.sifre = sifre;
     this.apiKey = apiKey;
     this.calismaYili = calismaYili;
+    this.firmaNo = firmaNo;
+    this.subeNo = subeNo;
     this.fetchImpl = fetchImpl;
   }
 
@@ -53,20 +58,26 @@ export class MikroClient {
   }
 
   /**
-   * `endpoint` ör. "SqlVeriOkuV2"; `body` Mikro disindaki alanlar (ör. {SQLSorgu}). Hem HTTP hatasini
+   * `endpoint` ör. "SqlVeriOkuV2"; `body` metodun kendi alanlari (ör. {SQLSorgu}). Hem HTTP hatasini
    * hem govde-ici `IsError:true`'yu (gercek Mikro PC'sinde gorduk: HTTP 200 icinde hata donebiliyor)
    * ayni PlanningError'a cevirir.
+   *
+   * `nestInMikro`: Mikro'nun uclari KENDI ICINDE TUTARSIZ — `SqlVeriOkuV2` `SQLSorgu`'yu `Mikro`
+   * bloğunun DIŞINDA bekliyor (varsayılan, `false`); `DahiliStokHareketKaydetV2` ise `evraklar`'ı
+   * `Mikro` bloğunun İÇİNDE bekliyor (`true`) — ikisi de GERÇEK Mikro'ya karşı ölçüldü (2026-10-29):
+   * `SqlVeriOkuV2`'ye `SQLSorgu` içeride gönderilince "SQLSorgu parametresi gönderilmelidir!" hatası,
+   * `DahiliStokHareketKaydetV2`'ye `evraklar` içeride gönderilince GERÇEK BAŞARILI kayıt (daha önceki
+   * 8 deneme hep DIŞARIDA gönderip hep aynı boş `StatusCode:400` hatasını almıştı). Çağıran hangisini
+   * istediğini bilmeli; varsayılan `false` okuma yolunu (zaten çalışan) değiştirmez.
    */
-  async call(endpoint, body = {}, { now = new Date(), timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  async call(endpoint, body = {}, { now = new Date(), timeoutMs = DEFAULT_TIMEOUT_MS, nestInMikro = false } = {}) {
     if (!this.configured()) throw new PlanningError('MikroAPI yapılandırılmadı (ortam değişkenleri eksik).', 409, 'mikro-not-configured');
     const url = `http://${this.host}:${this.port}/Api/apiMethods/${endpoint}`;
-    const payload = {
-      Mikro: {
-        ApiKey: this.apiKey, CalismaYili: this.calismaYili, FirmaKodu: this.firmaKodu,
-        KullaniciKodu: this.kullaniciKodu, Sifre: this.sifreHash(now),
-      },
-      ...body,
+    const auth = {
+      ApiKey: this.apiKey, CalismaYili: this.calismaYili, FirmaKodu: this.firmaKodu, FirmaNo: this.firmaNo, SubeNo: this.subeNo,
+      KullaniciKodu: this.kullaniciKodu, Sifre: this.sifreHash(now),
     };
+    const payload = nestInMikro ? { Mikro: { ...auth, ...body } } : { Mikro: auth, ...body };
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res;

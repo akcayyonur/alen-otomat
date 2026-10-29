@@ -14,7 +14,7 @@ function kur({ writeEnabled = () => false, sqlQuery = async () => [], call = asy
   const client = {
     configured: () => true,
     sqlQuery: async (sql) => { calls.push(sql); return sqlQuery(sql); },
-    call: async (endpoint, body) => { calls.push({ endpoint, body }); return call(endpoint, body); },
+    call: async (endpoint, body, opts) => { calls.push({ endpoint, body, opts }); return call(endpoint, body); },
   };
   return { s: new MikroStock({ client, writeEnabled }), calls };
 }
@@ -48,12 +48,24 @@ test('previewTransfer: dogrulama (depo, kilo, stok kodu)', () => {
   assert.throws(() => s.previewTransfer({ fromDepotNo: 1, toDepotNo: 2, stockCode: '', kg: 1 }), (e) => e.code === 'bad-stock-code');
 });
 
-test('previewVirman: tek depo, cikis = giris; tip=1 (Cikis, resmi Mikro listesine gore 0=Giris/1=Cikis)', () => {
+test('previewVirman: tek depo, cikis = giris; varsayilan yon "cikan" -> tip=1 (resmi Mikro listesine gore 0=Giris/1=Cikis)', () => {
   const { s } = kur();
   const p = s.previewVirman({ depotNo: 4, stockCode: 'HM614.AA24.00', kg: 3.9, note: 'is emri 2026001199 sarfiyati' }, { now: Date.now() });
   const satir = p.body.evraklar[0].satirlar[0];
   assert.deepEqual([satir.sth_cikis_depo_no, satir.sth_giris_depo_no, satir.sth_evraktip, satir.sth_tip, satir.sth_cins], [4, 4, 6, 1, 3]);
-  assert.equal(p.kind, 'virman');
+  assert.deepEqual([p.kind, p.direction], ['virman', 'cikan']);
+});
+
+test('previewVirman: yon secilebilir - "giren" -> tip=0', () => {
+  const { s } = kur();
+  const p = s.previewVirman({ depotNo: 4, stockCode: 'HM614.AA24.00', kg: 1, direction: 'giren' });
+  assert.equal(p.body.evraklar[0].satirlar[0].sth_tip, 0);
+  assert.equal(p.direction, 'giren');
+});
+
+test('previewVirman: gecersiz yon reddedilir', () => {
+  const { s } = kur();
+  assert.throws(() => s.previewVirman({ depotNo: 4, stockCode: 'HM1', kg: 1, direction: 'yana' }), (e) => e.code === 'bad-direction');
 });
 
 test('send: yazma KAPALIYKEN client.call ASLA cagrilmaz, 409 mikro-write-disabled firlar', async () => {
@@ -71,6 +83,7 @@ test('send: yazma ACIKKEN client.call dogru endpoint + govde ile cagrilir, sonuc
   assert.equal(calls.length, 1);
   assert.equal(calls[0].endpoint, 'DahiliStokHareketKaydetV2');
   assert.deepEqual(calls[0].body, p.body);
+  assert.deepEqual(calls[0].opts, { nestInMikro: true }, 'evraklar Mikro ICINDE gonderilmeli (gercek Mikroya karsi 2026-10-29da dogrulandi)');
 });
 
 test('listDepots: SQL iptal/gizli depoyu dislar, satirlari {depotNo, name} seklinde doner', async () => {

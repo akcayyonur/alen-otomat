@@ -55,9 +55,37 @@ test('call: basarili istek - URL, govde (ApiKey/Sifre/...) ve ekstra alanlar dog
   };
   const r = await c.call('SqlVeriOkuV2', { SQLSorgu: 'SELECT 1' }, { now: new Date(2026, 9, 28) });
   assert.equal(gorulenUrl, 'http://192.168.1.112:8094/Api/apiMethods/SqlVeriOkuV2');
-  assert.deepEqual(gorulenGovde.Mikro, { ApiKey: 'ANAHTAR', CalismaYili: '2026', FirmaKodu: '1', KullaniciKodu: 'admin', Sifre: c.sifreHash(new Date(2026, 9, 28)) });
+  assert.deepEqual(gorulenGovde.Mikro, { ApiKey: 'ANAHTAR', CalismaYili: '2026', FirmaKodu: '1', FirmaNo: 0, SubeNo: 0, KullaniciKodu: 'admin', Sifre: c.sifreHash(new Date(2026, 9, 28)) });
   assert.equal(gorulenGovde.SQLSorgu, 'SELECT 1');
   assert.deepEqual(r.Data[0].SQLResult1, [{ sto_kod: 'HM1' }]);
+});
+
+test('call: FirmaNo/SubeNo varsayilan 0 (gercek STOK_HAREKETLERI kayitlarindaki deger, 2026-10-29), istenirse ayarlanabilir', async () => {
+  let govde;
+  const c1 = dolu();
+  c1.fetchImpl = async (url, opts) => { govde = JSON.parse(opts.body); return okResponse({ IsError: false }); };
+  await c1.call('DahiliStokHareketKaydetV2', {});
+  assert.deepEqual([govde.Mikro.FirmaNo, govde.Mikro.SubeNo], [0, 0]);
+
+  const c2 = new MikroClient({ host: 'x', firmaKodu: '1', kullaniciKodu: 'a', sifre: 's', apiKey: 'k', firmaNo: 2, subeNo: 3 });
+  c2.fetchImpl = async (url, opts) => { govde = JSON.parse(opts.body); return okResponse({ IsError: false }); };
+  await c2.call('X', {});
+  assert.deepEqual([govde.Mikro.FirmaNo, govde.Mikro.SubeNo], [2, 3]);
+});
+
+test('call: nestInMikro - Mikro uclari TUTARSIZ, DahiliStokHareketKaydetV2 "evraklar"i Mikro ICINDE, SqlVeriOkuV2 "SQLSorgu"yu DISINDA bekliyor (gercek Mikro\'ya karsi olculdu, 2026-10-29)', async () => {
+  const c = dolu();
+  let govde;
+  c.fetchImpl = async (url, opts) => { govde = JSON.parse(opts.body); return okResponse({ IsError: false }); };
+
+  // varsayilan (nestInMikro yok/false): SqlVeriOkuV2'nin calisan davranisi - DEGISMEDI
+  await c.call('SqlVeriOkuV2', { SQLSorgu: 'SELECT 1' });
+  assert.deepEqual([govde.SQLSorgu, govde.Mikro.SQLSorgu], ['SELECT 1', undefined]);
+
+  // nestInMikro:true - DahiliStokHareketKaydetV2'nin GERCEKTEN basarili olan govdesi
+  await c.call('DahiliStokHareketKaydetV2', { evraklar: [{ satirlar: [] }] }, { nestInMikro: true });
+  assert.deepEqual([govde.evraklar, govde.Mikro.evraklar], [undefined, [{ satirlar: [] }]]);
+  assert.equal(govde.Mikro.ApiKey, 'ANAHTAR', 'kimlik alanlari evraklarla AYNI nesnede duruyor');
 });
 
 test('call: HTTP hatasi (ör. 500) mikro-http-error olur', async () => {

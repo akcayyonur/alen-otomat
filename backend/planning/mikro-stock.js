@@ -1,15 +1,24 @@
 /**
  * Depolar arası sevkiyat (transfer) ve sarfiyat (virman) fişi — MikroAPI YAZMA (DahiliStokHareketKaydetV2).
  *
- * KULLANICI KARARI (2026-10-29): gerçek Mikro yazması şu an KAPALI. `MIKRO_WRITE_ENABLED=1` verilmeden `send()`
- * hiçbir ağ isteği yapmaz (409 `mikro-write-disabled`) — bu modül önce arayüzü ve "gönderilecek tam içeriği"
- * hazırlamak için var; yönetici ile birlikte denenip onaylanınca anahtar açılır (bkz. CLAUDE.md "G aşaması").
+ * GERÇEK YAZMA DOĞRULANDI (2026-10-29): 8 başarısız denemeden sonra (hep aynı boş `StatusCode:400` hatası,
+ * hiçbiri hiçbir şey yazmadı) kök neden bulundu — `evraklar` `Mikro` bloğunun DIŞINDA değil, İÇİNDE
+ * gönderilmeli (`MikroClient.call(..., {nestInMikro:true})`; `SqlVeriOkuV2`'nin tam tersi, bkz. mikro-client.js).
+ * Düzeltilince İLK denemede gerçek bir kayıt oluştu (evrak CNCT-1, 1 kg, MERKEZ DEPO→GEÇİCİ DEPO, salt okuma ile
+ * doğrulandı). `sth_evraktip=2/tip=2/cins=6` (transfer) ve `sth_tutar=0` ikisi de GERÇEKTEN kabul edildi.
+ * Sarfiyat (virman, `evraktip=6/tip=1/cins=3`) tarafı henüz gerçek bir yazmayla denenmedi ama aynı düzeltme
+ * (nestInMikro) geçerli olmalı.
+ *
+ * KULLANICI KARARI (2026-10-29): bu başarıdan SONRA bile, `MIKRO_WRITE_ENABLED=1` verilmeden `send()` hiçbir
+ * ağ isteği yapmaz (409 `mikro-write-disabled`) — gerçek kurulumda varsayılan hâlâ KAPALI; yukarıdaki başarılı
+ * deneme tek seferlik bir betikle, `writeEnabled` yalnız o betik için enjekte edilerek yapıldı, sunucu config'i
+ * hiç değişmedi (bkz. CLAUDE.md "G aşaması").
  *
  * Depo listesi ve hammadde arama CANLI Mikro okumasıdır (SqlVeriOkuV2, salt okuma, risksiz — zaten doğrulanmış
- * yöntem, bkz. mikro.js). Yazılacak fişin alan DEĞERLERİ (sth_evraktip/sth_tip/sth_cins, evrak serisi) ise
- * gerçek geçmiş STOK_HAREKETLERI kayıtlarından GÖZLENEN bir örüntüye dayanıyor (CLAUDE.md "API alan adları +
- * gerçek örüntü DOĞRULANDI", 2026-10-29) — o gözlem ÜRÜN hareketleri içindi, hammaddeye özel DOĞRULANMADI.
- * Bu yüzden `assumed` alanıyla ayrıca işaretlenir; önizleme ekranında uyarı olarak gösterilmeli.
+ * yöntem, bkz. mikro.js). Yazılacak fişin alan DEĞERLERİ (sth_evraktip/sth_tip/sth_cins, evrak serisi) gerçek
+ * geçmiş STOK_HAREKETLERI kayıtlarından GÖZLENEN bir örüntüye dayanıyor VE artık en azından transfer için
+ * gerçek bir yazmayla da doğrulandı; `assumed` alanı hâlâ `sth_tutar`'ı işaretliyor (maliyet muhasebesi etkisi
+ * netleşmedi, 0 kabul edildi ama doğru değer bu mu bilmiyoruz).
  */
 import { PlanningError } from './errors.js';
 
@@ -109,20 +118,21 @@ export class MikroStock {
   }
 
   /**
-   * Sarfiyat (stok virman) fişinin gönderilecek tam gövdesini hazırlar — GÖNDERMEZ. Tek depoda ÇIKIŞ hareketi
-   * (çıkış depo = giriş depo = `depotNo`; Mikro'nun "Stok Virman Fişi" ekranı da tek depo alanı + Giren/Çıkan
-   * sütunu kullanıyor, bkz. CLAUDE.md "Mikro arayüz pencereleri görüldü").
-   * RESMİ DOĞRULANDI (Mikro "Tablo Alan Yapıları", 2026-10-29): evraktip=6 "Stok Virman Fişi", tip=1 "Çıkış"
-   * (0 değil — 0=Giriş, 1=Çıkış), cins=3 "Stok Virman". Ayrıca gerçek STOK_HAREKETLERI'nde 570 hammadde satırı
-   * (HM/HAMMADDE/ÜRT serisi) BİREBİR bu üçlüyle kayıtlı — kanıtlı, çalıştığı bilinen desen. `cins=5` ("Sarf")
-   * adı daha "doğru" görünse de gerçek veride hiç kullanılmamış ve hangi evrak tipiyle eşleştiği belgede yok;
-   * bu yüzden tercih edilmedi. `sth_tutar` (maliyet) HÂLÂ doğrulanmadı — gönderilmeden önce ayrıca bakılmalı.
+   * Sarfiyat (stok virman) fişinin gönderilecek tam gövdesini hazırlar — GÖNDERMEZ. Tek depoda GİREN ya da ÇIKAN
+   * hareket (çıkış depo = giriş depo = `depotNo`; Mikro'nun "Stok Virman Fişi" ekranı da tek depo alanı + satır
+   * başına "Giren Çıkan" seçimi kullanıyor, bkz. CLAUDE.md "Mikro arayüz pencereleri görüldü") — `direction`
+   * kullanıcı seçimi, varsayılan `'cikan'` (asıl kullanım alanı sarfiyat) ama `'giren'` de seçilebilmeli.
+   * RESMİ DOĞRULANDI (Mikro "Tablo Alan Yapıları", 2026-10-29): evraktip=6 "Stok Virman Fişi", tip 0=Giriş/1=Çıkış,
+   * cins=3 "Stok Virman". ÇIKAN (tip=1) GERÇEK bir yazmayla da doğrulandı (2026-10-29, bkz. yukarıdaki not) —
+   * GİREN (tip=0) henüz gerçek yazmayla denenmedi, yalnız resmi alan listesinden ve 570 hammadde satırından 1
+   * tanesinin bu değeri taşımasından biliniyor. `sth_tutar` (maliyet) HÂLÂ doğrulanmadı.
    */
-  previewVirman({ depotNo, stockCode, kg, note } = {}, { now = Date.now() } = {}) {
+  previewVirman({ depotNo, stockCode, kg, note, direction = 'cikan' } = {}, { now = Date.now() } = {}) {
     const dep = positiveInt(depotNo, 'Depo');
-    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), kg: kgAmount(kg), cikisDepoNo: dep, girisDepoNo: dep, now }), sth_evraktip: 6, sth_tip: 1, sth_cins: 3 };
+    if (direction !== 'cikan' && direction !== 'giren') throw new PlanningError('Yön "çıkan" ya da "giren" olmalı.', 400, 'bad-direction');
+    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), kg: kgAmount(kg), cikisDepoNo: dep, girisDepoNo: dep, now }), sth_evraktip: 6, sth_tip: direction === 'cikan' ? 1 : 0, sth_cins: 3 };
     const body = wrapEvrak(satir, noteOf(note));
-    return { kind: 'virman', endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
+    return { kind: 'virman', direction, endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
   }
 
   /** Önceden kurulmuş bir önizlemeyi GERÇEKTEN Mikro'ya yazar — yalnız `MIKRO_WRITE_ENABLED=1` iken (anlık kontrol, önizleme anındaki değil). */
@@ -134,6 +144,6 @@ export class MikroStock {
         'mikro-write-disabled',
       );
     }
-    return this.client.call(preview.endpoint, preview.body);
+    return this.client.call(preview.endpoint, preview.body, { nestInMikro: true });
   }
 }

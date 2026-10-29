@@ -36,7 +36,6 @@ const LABEL = Object.freeze({ cizim: 'Teknik resim', etiket: 'Etiket' });
 const MAX_DEPTH = 4;
 const MAX_ENTRIES = 20_000;
 const MAX_DOCX_SCANS = 2_000; // kod adinda yoksa icerigine bakilan Word dosyasi sayisi
-const LIST_CAP = 60;
 
 const MIN_CUSTOMER_KEY = 5; // musteri kodu anahtari en az bu uzunlukta ve bir rakamli olmali ("N", "2", "ETIKET" kod sayilmaz)
 const LETTER = 'A-Za-zÇĞİÖŞÜçğıöşü';
@@ -218,7 +217,7 @@ export class DocFolder {
       const unmatched = [];
       let unmatchedTotal = 0;
       let docScans = 0;
-      const addUnmatched = (rel, reason) => { unmatchedTotal += 1; if (unmatched.length < LIST_CAP) unmatched.push({ name: rel, reason }); };
+      const addUnmatched = (rel, reason) => { unmatchedTotal += 1; unmatched.push({ name: rel, reason }); };
 
       const custIndex = this.#customerIndex();
       for (const f of files) {
@@ -265,7 +264,7 @@ export class DocFolder {
         attached: [], products: 0, alreadyHad: 0, updated: 0, unchanged: 0, orders: 0,
         unmatched, unmatchedTotal, rejected: [],
       };
-      const reject = (rel, error) => { if (result.rejected.length < LIST_CAP) result.rejected.push({ name: rel, error }); };
+      const reject = (rel, error) => { result.rejected.push({ name: rel, error }); };
 
       const attach = (key, list, slots) => {
         const names = [];
@@ -307,11 +306,11 @@ export class DocFolder {
         if (updated) result.updated += 1;
         const orders = kind === 'cizim' ? this.#quality.applyProductDrawingsToOpenOrders(key, { by, now }) : 0;
         result.orders += orders;
-        if (result.attached.length < LIST_CAP) result.attached.push({ stockCode: entry.product.stockCode, files: names, updated, orders, via: [...entry.via] });
+        result.attached.push({ stockCode: entry.product.stockCode, files: names, updated, orders, via: [...entry.via] });
       }
 
       const miss = this.#missing();
-      result.missing = { products: miss.total, total: miss.none.length, sample: miss.none.slice(0, LIST_CAP) };
+      result.missing = { products: miss.total, total: miss.none.length, sample: miss.none };
       this.#db.setSetting(this.settingLast, JSON.stringify({ at: now, by, update, matched: result.products, missing: miss.none.length }));
       return result;
     } finally {

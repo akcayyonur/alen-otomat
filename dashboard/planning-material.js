@@ -7,7 +7,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { cellText, fmtNum, fmtDec, dateText, dateTimeText, openModal, chip, sectionClosed, truncCell, RANGE_PRESETS as PRESETS } from './planning-common.js';
+import { cellText, fmtNum, fmtDec, dateText, dateTimeText, openModal, chip, sectionClosed, truncCell, debounce, parseInput, RANGE_PRESETS as PRESETS } from './planning-common.js';
 
 const kg = (v) => (v == null ? '<span class="is-null">—</span>' : `${fmtDec(v, 3)}`);
 
@@ -62,6 +62,7 @@ export async function renderMaterial(host) {
   host.innerHTML =
     '<div class="seg pl-tabs" role="group" aria-label="Hammadde bölümleri" data-role="views">' +
     '<button type="button" data-view="sarfiyat">Sarfiyat ve fiş</button><button type="button" data-view="ihtiyac">İhtiyaç</button><button type="button" data-view="stok">Depo stoğu</button></div>' +
+    '<div class="pl-bar"><button type="button" class="icon-btn" data-act="transfer-dialog">Depolar arası sevkiyat (Mikro)…</button></div>' +
     '<div data-role="body"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
@@ -111,7 +112,8 @@ export async function renderMaterial(host) {
             `<td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}${materialFlag(r)}</td><td class="num">${fmtNum(r.produced)}</td>` +
             `<td class="num"><b>${kg(r.kg)}</b></td><td class="num">${r.bars == null ? cellText(null) : fmtDec(r.bars, 2)}</td><td class="num">${kg(r.scrapKg)}</td>` +
             `<td>${done ? `${chip('ok', '✓', 'girildi')} ${r.fis.docNo ? `<span class="mono">${escapeHtml(r.fis.docNo)}</span>` : ''}<br><small class="hint">${kg(r.fis.kg)} kg</small>` : chip('none', '◔', 'bekliyor')}</td>` +
-            `<td class="nowrap">${done ? '<button type="button" class="icon-btn icon-btn-sm" data-act="undo">Geri al</button>' : '<button type="button" class="icon-btn icon-btn-sm" data-act="mark-one">Girildi…</button>'}</td></tr>`;
+            `<td class="nowrap">${done ? '<button type="button" class="icon-btn icon-btn-sm" data-act="undo">Geri al</button>' : '<button type="button" class="icon-btn icon-btn-sm" data-act="mark-one">Girildi…</button>'}` +
+            `${r.kg != null ? ` <button type="button" class="icon-btn icon-btn-sm" data-act="virman-dialog" data-material="${escapeHtml(r.material ?? '')}" data-kg="${r.kg}">Virman fişi kes (Mikro)…</button>` : ''}</td></tr>`;
         }).join('') + '</tbody></table></div>') +
       (d.inProgress.length === 0 ? '' :
         '<h4 class="sub">Üretimdeki iş emirleri (henüz fiş yok)</h4><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Tezgah</th><th>Ürün</th><th>Hammadde</th><th class="num">Şimdiye kadar adet</th><th class="num">Sarfiyat (kg)</th></tr></thead><tbody>' +
@@ -232,6 +234,147 @@ export async function renderMaterial(host) {
     });
   }
 
+  /* ------------------------------------- depolar arasi sevkiyat / sarfiyat (virman) fisi: Mikro YAZMA (G asamasi) */
+
+  /**
+   * Depolar arası sevkiyat ya da sarfiyat (virman) fişi penceresi: depo(lar) + hammadde (Mikro'dan canlı arama) +
+   * kilo seçilir, "Önizle" ile gönderilecek tam içerik gösterilir (gerçek Mikro yazması `MIKRO_WRITE_ENABLED`
+   * olmadan KAPALI — "Gönder" o zaman devre dışı kalır, sunucu da 409 ile reddeder).
+   * @param {'transfer'|'virman'} kind
+   * @param {{fromDepotNo?: number, toDepotNo?: number, depotNo?: number, stockQuery?: string, kg?: number, note?: string}} [initial]
+   */
+  function openStockMoveDialog(kind, initial = {}) {
+    const isTransfer = kind === 'transfer';
+    const m = openModal({ title: isTransfer ? 'Depolar arası sevkiyat (Mikro)' : 'Sarfiyat (virman) fişi kes (Mikro)', wide: true });
+    const dst = { depots: null, material: null };
+
+    function fieldsHtml() {
+      const depotOpt = (v) => dst.depots.map((d) => `<option value="${d.depotNo}"${String(d.depotNo) === String(v) ? ' selected' : ''}>${escapeHtml(d.name)} (${d.depotNo})</option>`).join('');
+      return (
+        '<form autocomplete="off"><div class="fld-grid">' +
+        (isTransfer
+          ? `<label class="fld"><span>Kaynak depo</span><select data-role="from"><option value="">Seçin…</option>${depotOpt(initial.fromDepotNo)}</select></label>` +
+            `<label class="fld"><span>Hedef depo</span><select data-role="to"><option value="">Seçin…</option>${depotOpt(initial.toDepotNo)}</select></label>`
+          : `<label class="fld"><span>Depo</span><select data-role="depot"><option value="">Seçin…</option>${depotOpt(initial.depotNo)}</select></label>`) +
+        '<label class="fld pl-wide"><span>Hammadde (Mikro stok kodu)</span>' +
+        `<input data-role="matQ" placeholder="Kod ya da ad ara…" value="${escapeHtml(initial.stockQuery ?? '')}" autocomplete="off"></label>` +
+        '<div class="pl-pick-result" data-role="matResult" hidden></div><div data-role="matList"></div>' +
+        `<label class="fld"><span>Kilo</span><input data-role="kg" inputmode="decimal" value="${initial.kg != null ? escapeHtml(String(initial.kg)) : ''}"></label>` +
+        `<label class="fld pl-wide"><span>Not (isteğe bağlı)</span><input data-role="note" maxlength="200" value="${escapeHtml(initial.note ?? '')}"></label>` +
+        '</div><p class="notice notice-sim" data-role="err" hidden></p>' +
+        '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="preview">Önizle</button></div>' +
+        '<div data-role="preview"></div></form>'
+      );
+    }
+
+    function selectMaterial(mat) {
+      dst.material = mat;
+      const res = m.body.querySelector('[data-role="matResult"]');
+      res.hidden = false;
+      res.innerHTML = `${chip('ok', '✓', 'seçildi')} <span class="mono">${escapeHtml(mat.stockCode)}</span> · ${escapeHtml(mat.name)} <button type="button" class="icon-btn icon-btn-sm" data-act="mat-clear">Değiştir</button>`;
+      m.body.querySelector('[data-role="matList"]').innerHTML = '';
+      m.body.querySelector('[data-role="matQ"]').value = '';
+    }
+
+    const searchMaterials = debounce(async (q) => {
+      const list = m.body.querySelector('[data-role="matList"]');
+      if (!list) return;
+      if (q.trim() === '') { list.innerHTML = ''; return; }
+      list.innerHTML = '<p class="empty">Aranıyor…</p>';
+      try {
+        const r = await api(`/api/planning/material/mikro/materials?${new URLSearchParams({ q, limit: 20 })}`);
+        if (!m.body.contains(list)) return;
+        if (r.items.length === 0) { list.innerHTML = '<p class="empty">Eşleşen hammadde yok.</p>'; return; }
+        list.dataset.cache = JSON.stringify(r.items);
+        list.innerHTML = '<div class="table-wrap"><table class="tbl tbl-pl"><tbody>' +
+          r.items.map((x) => `<tr class="pl-row" data-act="mat-pick" data-code="${escapeHtml(x.stockCode)}" tabindex="0"><td class="mono">${escapeHtml(x.stockCode)}</td><td class="trunc"${truncCell(x.name)}>${cellText(x.name)}</td><td class="num">${cellText(x.unit)}</td></tr>`).join('') +
+          '</tbody></table></div>';
+      } catch (err) {
+        list.innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;
+      }
+    }, 300);
+
+    function currentInput() {
+      const kgVal = parseInput(m.body.querySelector('[data-role="kg"]').value);
+      const note = m.body.querySelector('[data-role="note"]').value;
+      const stockCode = dst.material?.stockCode;
+      return isTransfer
+        ? { fromDepotNo: m.body.querySelector('[data-role="from"]').value, toDepotNo: m.body.querySelector('[data-role="to"]').value, stockCode, kg: kgVal, note }
+        : { depotNo: m.body.querySelector('[data-role="depot"]').value, stockCode, kg: kgVal, note };
+    }
+
+    function previewHtml(p) {
+      return (
+        (p.writeEnabled
+          ? '<p class="notice">Mikro\'ya gerçek yazma AÇIK: "Gönder" gerçekten fiş oluşturur.</p>'
+          : '<p class="notice notice-sim">Mikro\'ya gerçek yazma şu an KAPALI (inceleme/onay aşaması): bu yalnız önizlemedir, hiçbir şey gönderilmiyor.</p>') +
+        '<p class="hint">Bazı alanlar (evrak tipi/tip/cins, seri, tutar) gerçek Mikro verisinden gözlenen bir örüntüye dayanıyor; göndermeden önce yönetici ile kontrol edin.</p>' +
+        `<pre class="code-view">${escapeHtml(JSON.stringify(p.body, null, 2))}</pre>` +
+        (kind === 'virman' ? '<p class="hint">Not: bu gönderim, "Sarfiyat ve fiş" sekmesindeki eski "elle girildi" işaretini DEĞİŞTİRMEZ; istenirse orayı da ayrıca işaretleyin.</p>' : '') +
+        `<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="send"${p.writeEnabled ? '' : ' disabled title="Mikro yazma kapalı"'}>Gönder</button></div>`
+      );
+    }
+
+    async function loadDepots() {
+      try {
+        const r = await api('/api/planning/material/mikro/depots');
+        dst.depots = r.items;
+        m.body.innerHTML = fieldsHtml();
+        if (!isTransfer && !initial.depotNo) {
+          const guess = dst.depots.find((d) => /rezerv|üretim/i.test(d.name));
+          if (guess) m.body.querySelector('[data-role="depot"]').value = String(guess.depotNo);
+        }
+      } catch (err) {
+        m.body.innerHTML = `<p class="notice notice-sim">Depo listesi alınamadı: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    m.body.innerHTML = '<p class="empty">Depo listesi yükleniyor…</p>';
+    m.body.addEventListener('input', (ev) => { if (ev.target.dataset.role === 'matQ') searchMaterials(ev.target.value); });
+    m.body.addEventListener('click', async (ev) => {
+      if (ev.target.closest('[data-act="mat-pick"]')) {
+        const row = ev.target.closest('[data-act="mat-pick"]');
+        const items = JSON.parse(m.body.querySelector('[data-role="matList"]').dataset.cache ?? '[]');
+        const found = items.find((x) => x.stockCode === row.dataset.code);
+        if (found) selectMaterial(found);
+        return;
+      }
+      if (ev.target.closest('[data-act="mat-clear"]')) {
+        dst.material = null;
+        const res = m.body.querySelector('[data-role="matResult"]');
+        res.hidden = true;
+        res.innerHTML = '';
+        return;
+      }
+      const err = m.body.querySelector('[data-role="err"]');
+      if (ev.target.closest('[data-act="preview"]')) {
+        err.hidden = true;
+        if (!dst.material) { err.textContent = 'Önce hammadde seçin (arama sonuçlarından tıklayın).'; err.hidden = false; return; }
+        try {
+          const url = isTransfer ? '/api/planning/material/mikro/transfer-preview' : '/api/planning/material/mikro/virman-preview';
+          const p = await post(url, currentInput());
+          m.body.querySelector('[data-role="preview"]').innerHTML = previewHtml(p);
+        } catch (e) { err.textContent = e.message; err.hidden = false; }
+        return;
+      }
+      const sendBtn = ev.target.closest('[data-act="send"]');
+      if (sendBtn) {
+        err.hidden = true;
+        sendBtn.disabled = true;
+        try {
+          const url = isTransfer ? '/api/planning/material/mikro/transfer-send' : '/api/planning/material/mikro/virman-send';
+          await post(url, currentInput());
+          m.body.querySelector('[data-role="preview"]').innerHTML = '<p class="notice">Gönderildi.</p>';
+        } catch (e) {
+          err.textContent = e.message;
+          err.hidden = false;
+          sendBtn.disabled = false;
+        }
+      }
+    });
+    loadDepots();
+  }
+
   /* -------------------------------------------------------------- olaylar */
   async function show(view) {
     st.view = view;
@@ -256,7 +399,11 @@ export async function renderMaterial(host) {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     const no = ev.target.closest('tr[data-no]')?.dataset.no;
-    if (act === 'mark-one') openMarkDialog([no]);
+    if (act === 'transfer-dialog') openStockMoveDialog('transfer', {});
+    else if (act === 'virman-dialog') {
+      const btn = ev.target.closest('[data-act="virman-dialog"]');
+      openStockMoveDialog('virman', { stockQuery: btn.dataset.material, kg: Number(btn.dataset.kg) || undefined, note: no ? `İş emri ${no} sarfiyatı` : '' });
+    } else if (act === 'mark-one') openMarkDialog([no]);
     else if (act === 'mark') openMarkDialog([...st.selected]);
     else if (act === 'select-pending') { st.selected = new Set(st.data.rows.filter((r) => r.fis.status !== 'girildi').map((r) => r.no)); $('body').innerHTML = consumptionHtml(); }
     else if (act === 'select-none') { st.selected.clear(); $('body').innerHTML = consumptionHtml(); }

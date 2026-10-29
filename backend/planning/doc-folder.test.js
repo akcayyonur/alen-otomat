@@ -102,6 +102,16 @@ test('TEKNIK RESIM klasoru: koda gore eslenir (alt klasor, tireli ad, ayni urune
   } finally { k.bitir(); }
 });
 
+test('eslesmeyen dosya listesi KISITLANMAZ: 70 dosya varsa hepsi doner (eskiden ilk 60 dosyada kesiliyordu, "N tane daha" gorunmeyen dosyalarla sonuclaniyordu)', () => {
+  const k = kur();
+  try {
+    for (let i = 1; i <= 70; i += 1) k.yaz(k.resim, `belge-${String(i).padStart(3, '0')}.pdf`, pdf(`X${i}`));
+    const r = k.p.drawingFolder.match({ now: NOW });
+    assert.deepEqual([r.unmatched.length, r.unmatchedTotal], [70, 70], 'hepsi listede, hicbiri gizlenmedi');
+    assert.deepEqual(r.unmatched.map((u) => u.name).sort(), Array.from({ length: 70 }, (_, i) => `belge-${String(i + 1).padStart(3, '0')}.pdf`).sort());
+  } finally { k.bitir(); }
+});
+
 test('yeni is emri urunun resimlerini KENDISI alir; bitmemis resimsiz is emirlerine de baglanir; elle yuklenmis eski resmi olan urun atlanir', () => {
   const k = kur();
   try {

@@ -7,7 +7,54 @@
  *
  * Bağımlılıksız: PDF elle yazılır. Yazı tipi standart Helvetica (gömülü değil); Türkçe harflerden Ç ç Ö ö Ü ü WinAnsi'de zaten vardır,
  * Ğ ğ Ş ş İ ı için yazı tipi kodlamasına Differences eklenir (iText "Cp1254" ile aynı yöntem).
+ *
+ * Logo (sol üst, Alen Otomat): `assets/alen-logo.png` düz RGB/8 bit/interlacesiz PNG olarak depoda durur
+ * (`backend/planning/assets/alen-logo.png`). PDF'in PNG öngörücüsü (Predictor 15) PNG'nin kendi satır-öngörücü
+ * baytlarıyla birebir aynı olduğundan, PNG'nin IDAT'ı hiç açılıp yeniden sıkıştırılmadan Image XObject akışı
+ * olarak doğrudan kullanılır — ikinci bir bağımlılık (görüntü kütüphanesi) gerekmez.
  */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** `assets/alen-logo.png`'yi ayrıştırır: genişlik/yükseklik + ham (zlib sıkıştırılmış) IDAT baytları. */
+function loadLogo() {
+  try {
+    const buf = readFileSync(join(__dirname, 'assets', 'alen-logo.png'));
+    if (buf.toString('latin1', 0, 8) !== '\x89PNG\r\n\x1a\n') throw new Error('PNG imzası yok');
+    const idat = [];
+    let width = 0;
+    let height = 0;
+    let off = 8;
+    while (off < buf.length) {
+      const len = buf.readUInt32BE(off);
+      const type = buf.toString('ascii', off + 4, off + 8);
+      const start = off + 8;
+      if (type === 'IHDR') {
+        width = buf.readUInt32BE(start);
+        height = buf.readUInt32BE(start + 4);
+        const bitDepth = buf.readUInt8(start + 8);
+        const colorType = buf.readUInt8(start + 9);
+        const interlace = buf.readUInt8(start + 12);
+        if (bitDepth !== 8 || colorType !== 2 || interlace !== 0) throw new Error('beklenmeyen PNG biçimi (düz 8 bit RGB, interlace yok olmalı)');
+      } else if (type === 'IDAT') {
+        idat.push(buf.subarray(start, start + len));
+      }
+      off = start + len + 4;
+    }
+    if (!width || !idat.length) throw new Error('IHDR/IDAT bulunamadı');
+    return { width, height, data: Buffer.concat(idat) };
+  } catch (err) {
+    console.error(`[wo-form-pdf] logo yüklenemedi, form logosuz basılacak: ${err.message}`);
+    return null;
+  }
+}
+
+const LOGO = loadLogo();
+const LOGO_W = 90; // punto; yükseklik orana göre hesaplanır
 
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
@@ -106,6 +153,11 @@ class Canvas {
   box(x, top, w, h, width = 0.75) {
     this.ops.push(`${f2(width)} w 0 G ${f2(x)} ${f2(PAGE_H - top - h)} ${f2(w)} ${f2(h)} re S`);
   }
+
+  /** Görüntüyü (üst-sol köşe, genişlik, yükseklik) çizer; `name` kaynaklar sözlüğündeki XObject adıdır (ör. "Im1"). */
+  image(x, top, w, h, name) {
+    this.ops.push(`q ${f2(w)} 0 0 ${f2(h)} ${f2(x)} ${f2(PAGE_H - top - h)} cm /${name} Do Q`);
+  }
 }
 
 /* ===================================================================== form */
@@ -162,18 +214,21 @@ function layoutCell(field, width) {
 function drawForm(c, w, now) {
   let top = MARGIN;
 
-  // başlık
-  c.text(MARGIN, top + 17, 'İŞ EMRİ', { size: 17, bold: true, spacing: 2.4 });
+  // başlık: logo (varsa) solda, "İŞ EMRİ" yanında; sağda iş emri no / tarih
+  const right = MARGIN + CONTENT_W;
+  const logoH = LOGO ? (LOGO_W * LOGO.height) / LOGO.width : 0;
+  if (LOGO) c.image(MARGIN, top, LOGO_W, logoH, 'Im1');
+  const titleX = LOGO ? MARGIN + LOGO_W + 12 : MARGIN;
+  c.text(titleX, top + Math.max(17, logoH / 2 + 6), 'İŞ EMRİ', { size: 17, bold: true, spacing: 2.4 });
   const noLabel = 'İŞ EMRİ NO:';
   const dateLabel = 'TARİH:';
-  const right = MARGIN + CONTENT_W;
   const no = String(w.no);
   const dt = date(w.createdAt);
   c.textRight(right, top + 8, no, { size: 10, bold: true });
   c.textRight(right - textWidth(no, 10, true) - 4, top + 8, noLabel, LABEL);
   c.textRight(right, top + 21, dt, { size: 10, bold: true });
   c.textRight(right - textWidth(dt, 10, true) - 4, top + 21, dateLabel, LABEL);
-  top += 27;
+  top += Math.max(27, logoH + 4);
   c.line(MARGIN, top, right, top, 1.5);
   top += 5;
 
@@ -244,15 +299,23 @@ export function buildWorkOrderFormPdf(w, { now = Date.now() } = {}) {
   const c = new Canvas();
   drawForm(c, w, now);
   const stream = c.ops.join('\n');
+  const xobjectRes = LOGO ? ' /XObject << /Im1 8 0 R >>' : '';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >>${xobjectRes} >> /Contents 4 0 R >>`,
     `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding 7 0 R >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding 7 0 R >>',
     '<< /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [128 /Gbreve /gbreve /Scedilla /scedilla /Idotaccent /dotlessi] >>',
   ];
+  if (LOGO) {
+    objects.push(
+      `<< /Type /XObject /Subtype /Image /Width ${LOGO.width} /Height ${LOGO.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 ` +
+        `/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns ${LOGO.width} >> /Length ${LOGO.data.length} >>\n` +
+        `stream\n${LOGO.data.toString('latin1')}\nendstream`,
+    );
+  }
   const parts = [Buffer.from('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n', 'latin1')];
   const offsets = [];
   let length = parts[0].length;

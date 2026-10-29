@@ -39,6 +39,10 @@
  *   GET  /api/planning/material/stock                   DEPO STOGU (Kaynak klasorunden Mikro goruntusu) + ayrilan/girilmemis tuketim -> hammadde bazinda SERBEST kg
  *   GET  /api/planning/material/consumption?from=&to=&fis=   gerceklesen SARFIYAT (biten is emirleri; fis: bekleyen | girildi | tumu);  .../consumption.csv?...&view=is-emri|hammadde
  *   POST /api/planning/material/fis {orders[], docNo?, kg?, note?}   sarfiyat fisi Mikro'ya ELLE girildi isareti;  POST .../fis/undo {orders[]}  geri al
+ *   GET  /api/planning/material/mikro/depots             Mikro'daki GERCEK depo listesi (canli okuma, salt SELECT)
+ *   GET  /api/planning/material/mikro/materials?q=       hammadde (HM%) arama (canli okuma, salt SELECT)
+ *   POST /api/planning/material/mikro/transfer-preview|transfer-send {fromDepotNo, toDepotNo, stockCode, kg, note?}   DEPOLAR ARASI SEVKIYAT fisi: onizle (govde kurulur, GONDERILMEZ) / gonder (yalniz MIKRO_WRITE_ENABLED=1 ise; yoksa 409 mikro-write-disabled)
+ *   POST /api/planning/material/mikro/virman-preview|virman-send {depotNo, stockCode, kg, note?}   SARFIYAT (stok virman) fisi: ayni kurallar
  *   GET  /api/planning/efficiency?from=&to=&machine=    verimlilik raporu (is emri x vardiya; yalniz yonetici);  .../efficiency.csv?...&view=gunluk|matris|urun|tezgah
  *   GET  /api/planning/downtime-report?from=&to=&machine=    durus raporu (neden kodu dakikalari, nedeni belirsiz);  .../downtime-report.csv?...&view=durus|durus-kod-gun
  *   GET  /api/planning/programs                         tornalarda gorulen programlar + esleme durumu (operator + yonetici; esleme yazma uclari da)
@@ -455,6 +459,22 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       }
       if (method === 'POST' && path === '/api/planning/material/fis') return sendJson(res, 200, planning.markFis(await readJson(req), { by: who(req) })), true;
       if (method === 'POST' && path === '/api/planning/material/fis/undo') return sendJson(res, 200, planning.clearFis(await readJson(req), { by: who(req) })), true;
+
+      /* ---- depolar arasi sevkiyat / sarfiyat (virman) fisi: Mikro yazma, MIKRO_WRITE_ENABLED=1 olmadan KAPALI (yalniz yonetici) ---- */
+      if (method === 'GET' && path === '/api/planning/material/mikro/depots') return sendJson(res, 200, { items: await planning.mikroStock.listDepots() }), true;
+      if (method === 'GET' && path === '/api/planning/material/mikro/materials') {
+        return sendJson(res, 200, { items: await planning.mikroStock.searchMaterials(url.searchParams.get('q') ?? '', intParam(url, 'limit', 30, { min: 1, max: 50 })) }), true;
+      }
+      if (method === 'POST' && (path === '/api/planning/material/mikro/transfer-preview' || path === '/api/planning/material/mikro/transfer-send')) {
+        const preview = planning.mikroStock.previewTransfer(await readJson(req));
+        if (path.endsWith('preview')) return sendJson(res, 200, preview), true;
+        return sendJson(res, 200, { preview, result: await planning.mikroStock.send(preview) }), true;
+      }
+      if (method === 'POST' && (path === '/api/planning/material/mikro/virman-preview' || path === '/api/planning/material/mikro/virman-send')) {
+        const preview = planning.mikroStock.previewVirman(await readJson(req));
+        if (path.endsWith('preview')) return sendJson(res, 200, preview), true;
+        return sendJson(res, 200, { preview, result: await planning.mikroStock.send(preview) }), true;
+      }
 
       /* ---- program eslemesi ---- */
       if (method === 'GET' && path === '/api/planning/programs') return sendJson(res, 200, planning.listPrograms()), true;

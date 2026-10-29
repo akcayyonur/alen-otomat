@@ -17,6 +17,7 @@ import { importHistoricalWorkOrders } from './wo-import.js';
 import { Sources } from './sources.js';
 import { Mikro } from './mikro.js';
 import { MikroClient } from './mikro-client.js';
+import { MikroStock } from './mikro-stock.js';
 import { DocFolder } from './doc-folder.js';
 import { Packing } from './packing.js';
 import { Schedule } from './schedule.js';
@@ -101,6 +102,8 @@ export class Planning {
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
     /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */
     this.mikro = new Mikro({ planning: this, client: mikroClient ?? new MikroClient({}) });
+    /** Depolar arası sevkiyat / sarfiyat (virman) fişi (mikro-stock.js): yazma `MIKRO_WRITE_ENABLED=1` olmadan KAPALI, bkz. CLAUDE.md "G aşaması". */
+    this.mikroStock = new MikroStock({ client: this.mikro.client });
     /** Teknik resim (PDF) ve etiket (Word) klasorleri: dosyalar urun koduna gore urun kartlarina eslenir (doc-folder.js). Iki AYRI klasor. */
     this.drawingFolder = new DocFolder({ planning: this, kind: 'cizim', defaultDir: drawingsDir });
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });

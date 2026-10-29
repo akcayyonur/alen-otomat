@@ -378,8 +378,8 @@ test('urun karti: olusturma dogrulamasi, kopya 409, net > brut reddi, birimler',
 
 /* -------------------------------------------------------------- program eslemesi */
 
-function planlamaVeProgramlar(seen) {
-  const p = new Planning({ dbFile: ':memory:', listSeenPrograms: () => seen });
+function planlamaVeProgramlar(seen, listLibraryPrograms = () => []) {
+  const p = new Planning({ dbFile: ':memory:', listSeenPrograms: () => seen, listLibraryPrograms });
   p.importCsv(Buffer.from(ISEMRI, 'utf8'));
   return p;
 }
@@ -424,6 +424,25 @@ test('programlar: tornalarda gorulenler + esleme durumu; yazim farklari birlesir
   assert.equal(liste.programs.length, 1);
   assert.equal(liste.programs[0].seen, false);
   q.close();
+});
+
+test('programlar: kutuphanedeki (hic calismamis) programlar da listede gorunur, beklemeden eslenebilir (kullanici isteği)', () => {
+  // SR001-013 hem tornada gorulmus hem kutuphanede var: yazim ayni oldugundan BIR satir (telemetri verisi KORUNUR).
+  // NI002-001 yalniz kutuphanede var (hic calismamis): yeni satir, parts=0/machines=[]/seen=false, yine de eslenebilir.
+  const p = planlamaVeProgramlar(
+    [{ program: 'SR001-013', parts: 20, machines: ['CNC-01'], lastTs: 1 }],
+    () => ['SR001-013', 'NI002-001'],
+  );
+  const r = p.listPrograms();
+  assert.equal(r.counts.total, 2, 'ayni programin iki kaynaktan gelmesi tekrar satir acmaz');
+  const sr = r.programs.find((x) => x.program === 'SR001-013');
+  assert.deepEqual([sr.parts, sr.seen], [20, true], 'tornada da gorulen programin verisi kutuphane girisiyle silinmez');
+  const ni = r.programs.find((x) => x.program === 'NI002-001');
+  assert.deepEqual([ni.parts, ni.machines, ni.seen, ni.status], [0, [], false, 'oneri'], 'yalniz kutuphanede olan da eslenebilir durumda listelenir');
+
+  const m = p.mapProgram('NI002-001', 'Nİ002.001', { by: 'ayse' });
+  assert.equal(m.source, 'oneri-onay', 'tornada hic calismadan, kutuphaneden gelerek eslenebildi');
+  p.close();
 });
 
 test('programlar: toplu onay yalniz stok koduyla birebir tutan TEK oneriyi onaylar', () => {

@@ -92,7 +92,7 @@ export class Planning {
   constructor({
     dbFile = 'data/planlama.db', listSeenPrograms = () => [], listMachines = () => [], productionEvents = () => [], liveMachine = () => null,
     spans = () => [], downtimeConfig = { groups: [], codes: [] }, downtimeMinMs = DEFAULT_MIN_STOP_MS, sourcesDir = null, programRuns = () => [],
-    drawingsDir = null, stickersDir = null, mikroClient = null,
+    drawingsDir = null, stickersDir = null, mikroClient = null, listLibraryPrograms = () => [],
   } = {}) {
     this.db = new PlanningDb(dbFile);
     /** GKK rapor numaralari, ilk onay raporlari ve teknik resimler (ayni veritabani dosyasi). */
@@ -109,6 +109,8 @@ export class Planning {
     /** Cizelgeleme / optimizasyon (OR-Tools CP-SAT, ayri Python sureci): bekleyen is emirlerini tezgahlara ONERIR (schedule.js). ASLA otomatik uygulamaz. */
     this.schedule = new Schedule({ planning: this });
     this.listSeenPrograms = listSeenPrograms;
+    /** Program kütüphanesindeki (backend/programs/) program adları: tornada hiç çalışmamış olsa da eşleme listesinde görünsün diye (kullanıcı isteği). Kütüphane kodu import edilmez, server.js bağlar. */
+    this.listLibraryPrograms = listLibraryPrograms;
     this.listMachines = listMachines;
     this.productionEvents = productionEvents;
     this.liveMachine = liveMachine;
@@ -225,8 +227,10 @@ export class Planning {
   }
 
   /**
-   * Tornalarda parca uretmis programlar + esleme durumu. Durum: 'esli' (urune bagli), 'oneri' (kural bir urun/urunler buldu,
-   * onay bekliyor), 'yok' (oneri yok, elle secilmeli).
+   * Tornalarda parca uretmis programlar + program kutuphanesindeki (hic calismamis olsa da) programlar + esleme durumu.
+   * Durum: 'esli' (urune bagli), 'oneri' (kural bir urun/urunler buldu, onay bekliyor), 'yok' (oneri yok, elle secilmeli).
+   * Kutuphane programlari (kullanici isteği, 2026-10-29): toplu gonderilen 500 program gibi, tornada hic calismadan da
+   * burada gorunup eslenebilsin diye - "beklemeden eşleme" (parts:0, machines:[] ile; `seen:false`).
    */
   listPrograms() {
     // Ayni program farkli yazimlarla (buyuk/kucuk) gelmis olabilir: katlanmis anahtarla birlestirilir.
@@ -240,6 +244,10 @@ export class Planning {
         for (const m of s.machines ?? []) cur.machines.add(m);
         cur.lastTs = Math.max(cur.lastTs ?? 0, s.lastTs ?? 0) || null;
       }
+    }
+    for (const name of this.listLibraryPrograms()) {
+      const key = programKey(name);
+      if (!merged.has(key)) merged.set(key, { program: name, parts: 0, machines: new Set(), lastTs: null, seen: false });
     }
     const map = this.db.getProgramMap();
     for (const [key, m] of map) {

@@ -207,9 +207,9 @@ export async function renderShop(host) {
 
 /** Bekleyen (planlandı) herhangi bir iş emrini, bu tezgahta başlatmak için seç. */
 function openPicker(machineId, onDone) {
-  const m = openModal({ title: `Bu tezgahta başlatılacak iş emri · ${machineId}` });
+  const m = openModal({ title: `Bu tezgahta başlatılacak iş emri · ${machineId}`, wide: true });
   m.body.innerHTML =
-    '<input type="search" class="pl-search" data-role="q" placeholder="İş emri no, ürün ya da müşteri sipariş no…" aria-label="İş emri ara" autocomplete="off">' +
+    '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="İş emri no, ürün ya da müşteri sipariş no…" aria-label="İş emri ara" autocomplete="off"></div>' +
     '<div class="table-wrap" data-role="list"></div>';
   const list = m.body.querySelector('[data-role="list"]');
   let seq = 0;
@@ -220,8 +220,9 @@ function openPicker(machineId, onDone) {
       const r = await api(`/api/planning/work-orders?${new URLSearchParams({ status: 'planlandi', q, limit: 50 })}`);
       if (my !== seq) return;
       list.innerHTML = r.items.length === 0 ? '<p class="empty">Bekleyen iş emri yok.</p>' :
-        '<table class="tbl tbl-pl"><tbody>' + r.items.map((w) =>
-          `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td class="trunc"${truncCell(w.productName)}><span class="mono">${escapeHtml(w.stockCode)}</span> ${cellText(w.productName)}</td>` +
+        '<table class="tbl tbl-pl"><thead><tr><th>İş emri no</th><th>Ürün kodu</th><th>Ürün adı</th><th>Müşteri kodu</th><th class="num">Hedef</th><th>Tezgah</th></tr></thead><tbody>' + r.items.map((w) =>
+          `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td class="mono">${escapeHtml(w.stockCode)}</td>` +
+          `<td class="trunc"${truncCell(w.productName)}>${cellText(w.productName)}</td><td class="mono">${cellText(w.customerCode)}</td>` +
           `<td class="num">${fmtNum(w.targetQty)}</td><td class="mono">${escapeHtml(w.machineId)}</td></tr>`).join('') + '</tbody></table>';
     } catch (err) {
       list.innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;

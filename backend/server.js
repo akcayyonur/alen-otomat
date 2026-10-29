@@ -105,6 +105,7 @@ const programRoutes = createProgramRoutes({
 const planning = new Planning({
   dbFile: PLANNING_DB_FILE,
   listSeenPrograms: () => store.db.productionPrograms(),
+  listLibraryPrograms: () => library.db.listPrograms().map((p) => p.name), // kutuphanedeki programlar: tornada hic calismasa da Program eslemede gorunsun (kullanici isteği)
   listMachines: () => loadInventory(), // is emrine atanabilecek tezgahlar
   productionEvents: (machineId, fromMs, toMs) => store.db.productionEvents(machineId, fromMs, toMs), // is emrinin gerceklesen adedi
   liveMachine: (machineId) => store.liveInfo(machineId), // canli durum/program/sayac (is emri baslat-bitir)

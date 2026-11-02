@@ -23,7 +23,13 @@
  *   GET  /api/planning/work-orders/next                 siradaki is emri numarasi;  PUT .../sequence {last}: numara tabanini ayarla
  *   GET/PUT /api/planning/work-orders/:no               is emri (olaylar, siparis satiri, gerceklesen uretim) / guncelle;  POST .../:no/cancel {reason}
  *   POST .../:no/start {machineId?, startAt?, person?, fields?}   uretime baslat;  POST .../:no/finish {endAt?, person?}  bitir (sonuc dondurulur)
- *   POST .../:no/reopen                                 yanlislikla bitirileni uretime geri al
+ *   POST .../:no/reopen                                 yanlislikla bitirileni uretime geri al (elle bitirilmisse PLANLANDI'ya doner)
+ *   POST .../:no/reassign-machine {machineId} (yalniz yonetici)  yanlis tezgaha baglanmis (UretIMDE) is emrini DOGRU tezgaha tasir (eski tezgahtaki sayim kaybolur, uyari doner)
+ *   POST .../:no/finish-manual {qty, finishedAt?, note?} hic baslatilmamis eski is emrini GERIYE DONUK, ELLE bitirir (adet telemetriden SAYILMAZ, sonucta source:'elle')
+ *   GET  /api/planning/price-studies?status=            FIYAT CALISMASI listesi (urun karti acilmadan onceki on calisma; `products` ile baglanmaz)
+ *   POST /api/planning/price-studies?title=&name=       yeni calisma: govde = ham PDF (yalniz yonetici)
+ *   GET  /api/planning/price-studies/:id                 ayrinti;  GET .../drawing.pdf  teknik resim;  DELETE .../:id  (yalniz yonetici)
+ *   PUT  /api/planning/price-studies/:id/fill {material, plannedSec, note?}   usta hammadde+sure doldurur ('fiyat' ekranina yazabilen rol)
  *   GET  /api/planning/downtime-codes                   durus nedeni kodlari (D1-D46, Z1-Z4) ve gruplari
  *   GET  /api/planning/shop/overview                    fabrika PC'si ana ekrani: tezgah basina durum, uretimdeki is emri, bekleyenler, nedeni sorulmamis duruslar
  *   GET  /api/planning/shop/stops?machine=&hours=       bir tezgahin OLCULMUS duruslari ve baglanmis nedenleri
@@ -246,6 +252,27 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         if (method === 'DELETE') { planning.quality.removeProductFile(Number(m[1])); return sendJson(res, 200, { ok: true }), true; }
       }
 
+      /* ---- fiyat calismasi: urun karti acilmadan onceki teknik resim + hammadde/sure on calismasi ---- */
+      if (method === 'GET' && path === '/api/planning/price-studies') {
+        return sendJson(res, 200, planning.priceStudies.list({
+          status: url.searchParams.get('status') ?? '', limit: intParam(url, 'limit', 200, { min: 1, max: 1000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+        })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/price-studies') {
+        const data = await readBuffer(req, MAX_DRAWING_BYTES + 4096);
+        return sendJson(res, 201, planning.priceStudies.create({ title: url.searchParams.get('title'), name: url.searchParams.get('name'), data }, { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/price-studies\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, planning.priceStudies.get(Number(m[1]))), true;
+        if (method === 'DELETE') { planning.priceStudies.delete(Number(m[1])); return sendJson(res, 200, { ok: true }), true; }
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/price-studies\/(\d{1,12})\/drawing\.pdf$/.exec(path))) {
+        return sendProductFile(res, planning.priceStudies.drawingData(Number(m[1]))), true;
+      }
+      if (method === 'PUT' && (m = /^\/api\/planning\/price-studies\/(\d{1,12})\/fill$/.exec(path))) {
+        return sendJson(res, 200, planning.priceStudies.fill(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+
       /* ---- siparisler ---- */
       if (method === 'GET' && path === '/api/planning/orders') {
         return sendJson(res, 200, {
@@ -285,17 +312,28 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         const by = who(req);
         if (m[2] === 'reopen') return sendJson(res, 200, planning.reopenWorkOrder(m[1], { by })), true;
         const body = await readJson(req);
-        if (m[2] === 'start' && req.user?.role === 'operator') {
+        if (m[2] === 'start' && !req.user?.isAdmin) {
           const bad = Object.keys(body.fields ?? {}).filter((k) => !OPERATOR_START_FIELDS.has(k));
-          if (bad.length > 0) throw new PlanningError(`Operatör bu alanları değiştiremez: ${bad.join(', ')}. Yönetici gerekir.`, 403);
+          if (bad.length > 0) throw new PlanningError(`Bu alanları yalnız yönetici değiştirebilir: ${bad.join(', ')}.`, 403);
+        }
+        if (m[2] === 'finish' && body.qty !== undefined && body.qty !== null && body.qty !== '' && !req.user?.isAdmin) {
+          throw new PlanningError('Adedi elle girmek yönetici işidir.', 403);
         }
         return sendJson(res, 200, m[2] === 'start' ? planning.startWorkOrder(m[1], body, { by }) : planning.finishWorkOrder(m[1], body, { by })), true;
+      }
+      // Yanlis tezgaha baglanmis (uretimdeki) is emrini dogru tezgaha tasir; planlandiyken tezgah normal duzenlemeden degisir.
+      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/reassign-machine$/.exec(path))) {
+        return sendJson(res, 200, planning.reassignMachine(m[1], await readJson(req), { by: who(req) })), true;
+      }
+      // Hic baslatilmamis eski is emrini geriye donuk, ELLE bitirir (adet telemetriden sayilmaz).
+      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/finish-manual$/.exec(path))) {
+        return sendJson(res, 200, planning.finishWorkOrderManually(m[1], await readJson(req), { by: who(req) })), true;
       }
       /* ---- olcu kontrolu (EYS.FR.005): operator + yonetici ---- */
       if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measurements$/.exec(path))) return sendJson(res, 200, planning.getMeasurements(m[1])), true;
       if (method === 'PUT' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measure-plan$/.exec(path))) {
         const body = await readJson(req);
-        if (body.saveToProduct === true && req.user?.role === 'operator') throw new PlanningError('Ürün kartına yazmak yönetici işidir.', 403);
+        if (body.saveToProduct === true && !req.user?.isAdmin) throw new PlanningError('Ürün kartına yazmak yönetici işidir.', 403);
         return sendJson(res, 200, planning.setMeasurePlan(m[1], body.rows, { by: who(req), saveToProduct: body.saveToProduct === true })), true;
       }
       /* ---- olcu raporlari (kalite kontrol ve paketlemeye giden raporlar): okuma herkese ---- */
@@ -362,10 +400,10 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         }
         if (method === 'POST') {
           const body = await readJson(req);
-          // Operator yalniz bir is emrinden numara alabilir; alanlari kendisi yazamaz (elle kayit yoneticiye ozel)
-          if (req.user?.role === 'operator') {
+          // Admin-disi yalniz bir is emrinden numara alabilir; alanlari kendisi yazamaz (elle kayit yoneticiye ozel)
+          if (!req.user?.isAdmin) {
             const extra = Object.keys(body).filter((k) => !['woNo', 'person', 'again'].includes(k));
-            if (!body.woNo || extra.length > 0) throw new PlanningError('Operatör yalnız bir iş emrinden ilk onay numarası alabilir.', 403);
+            if (!body.woNo || extra.length > 0) throw new PlanningError('Yalnız yönetici elle kayıt girebilir: bir iş emrinden numara alıyorsanız yalnız iş emri no ve operatör gerekir.', 403);
           }
           return sendJson(res, 201, planning.quality.createApproval(body, { by: who(req) })), true;
         }

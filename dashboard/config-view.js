@@ -8,6 +8,7 @@
 import { escapeHtml, num } from './format.js';
 import { authDisabled } from './auth-view.js';
 import { renderUsers } from './users-view.js';
+import { renderRoles } from './roles-view.js';
 
 const STATUS_META = {
   supported: { label: 'Destekleniyor', cls: 'ok', icon: '✓' },
@@ -82,11 +83,15 @@ export async function renderConfig(host, onSaved) {
     `(<b>${escapeHtml(defaultDriver)}</b>) kullanır. IP\'ler kablo çekimi sırasında doldurulacak.</p>` +
     '</section>' +
 
-    // Hesaplar (yonetici / izleyici). Giris sistemi kapaliysa (gelistirme) hesap yonetimi anlamsiz.
-    (authDisabled() ? '' : '<section class="dt-block" data-role="users"></section>');
+    // Roller ve hesaplar. Giris sistemi kapaliysa (gelistirme) hesap yonetimi anlamsiz.
+    (authDisabled() ? '' : '<section class="dt-block" data-role="roles"></section><section class="dt-block" data-role="users"></section>');
 
   wire(host, onSaved);
-  if (!authDisabled()) renderUsers(host.querySelector('[data-role="users"]'));
+  if (!authDisabled()) {
+    // Rol olusturulunca/silinince Kullanicilar bolumundeki "Yeni hesap" rol secimi de tazelensin.
+    renderRoles(host.querySelector('[data-role="roles"]'), () => renderUsers(host.querySelector('[data-role="users"]')));
+    renderUsers(host.querySelector('[data-role="users"]'));
+  }
 }
 
 function driverCard(d) {

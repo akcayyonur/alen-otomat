@@ -1,6 +1,7 @@
 /**
  * Ayarlar > Kullanicilar (YALNIZ yonetici): hesap ekle/sil, sifre belirle, son giris olaylari.
- * Roller: yonetici (her sey) ve izleyici (yalniz izleme). Sifre ozetleri sunucudan zaten gelmez.
+ * Roller: "admin" sabit rol (her sey); digerleri Ayarlar > Roller'da tanimlanir (roles-view.js).
+ * Sifre ozetleri sunucudan zaten gelmez.
  */
 import { escapeHtml, dateTime } from './format.js';
 import { api, post } from './lib-common.js';
@@ -28,8 +29,9 @@ export async function renderUsers(host) {
   host.innerHTML = '<div class="dt-block-head"><h3>Kullanıcılar</h3></div><p class="empty">Yükleniyor…</p>';
   let users;
   let events;
+  let roles;
   try {
-    [{ users }, { events }] = await Promise.all([api('/api/users'), api('/api/auth/audit?limit=15')]);
+    [{ users }, { events }, { roles }] = await Promise.all([api('/api/users'), api('/api/auth/audit?limit=15'), api('/api/roles')]);
   } catch (err) {
     host.innerHTML = `<div class="dt-block-head"><h3>Kullanıcılar</h3></div><p class="notice notice-sim">Kullanıcılar alınamadı: ${escapeHtml(err.message)}</p>`;
     return;
@@ -38,23 +40,26 @@ export async function renderUsers(host) {
 
   host.innerHTML =
     '<div class="dt-block-head"><h3>Kullanıcılar</h3>' +
-    '<span class="hint" style="margin:0">Yönetici her şeyi görür. <b>İzleyici</b> yalnızca canlı izlemeyi görür: ' +
-    'program kütüphanesi, ayarlar ve tezgahlardaki "Programlar" paneli ona kapalıdır.</span></div>' +
+    '<span class="hint" style="margin:0">"admin" her şeyi görür ve yapar. Diğer hesapların erişimi, atandıkları <b>rol</b>e göre değişir ' +
+    '(Ayarlar &gt; Roller).</span></div>' +
     '<p data-role="msg" class="notice" hidden></p>' +
     '<div class="table-wrap"><table class="tbl"><thead><tr><th>Kullanıcı</th><th>Rol</th><th>Oluşturuldu</th><th>Son giriş</th><th></th></tr></thead><tbody>' +
     users.map((u) =>
       `<tr><td class="mono"><b>${escapeHtml(u.username)}</b>${u.username.toLowerCase() === me ? ' <span class="chip chip-info">siz</span>' : ''}</td>` +
-      `<td><span class="chip chip-${u.role === 'admin' ? 'warn' : 'none'}">${escapeHtml(roleLabel(u.role))}</span></td>` +
+      `<td><span class="chip chip-${u.isAdmin ? 'warn' : 'none'}">${escapeHtml(roleLabel(u))}</span></td>` +
       `<td>${escapeHtml(dateTime(u.createdAt))}</td><td>${u.lastLoginAt ? escapeHtml(dateTime(u.lastLoginAt)) : '—'}</td>` +
       `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="pw" data-id="${u.id}" data-name="${escapeHtml(u.username)}">Şifre belirle</button> ` +
       `<button type="button" class="icon-btn icon-btn-sm" data-act="del" data-id="${u.id}" data-name="${escapeHtml(u.username)}"${u.username.toLowerCase() === me ? ' disabled title="Kendi hesabınızı silemezsiniz"' : ''}>Sil</button></td></tr>`).join('') +
     '</tbody></table></div>' +
 
     '<h4 class="sub">Yeni hesap</h4>' +
+    (roles.length === 0 ? '<p class="hint">Önce yukarıdaki "Roller" bölümünden bir rol oluşturun (admin dışındaki hesaplar bir role bağlı olmalı).</p>' : '') +
     '<form class="fld-grid" data-role="new-user" autocomplete="off">' +
-    '<label class="fld"><span>Kullanıcı adı</span><input name="username" required minlength="3" maxlength="32" autocomplete="off" placeholder="ör. izleyici1"></label>' +
+    '<label class="fld"><span>Kullanıcı adı</span><input name="username" required minlength="3" maxlength="32" autocomplete="off" placeholder="ör. usta1"></label>' +
     '<label class="fld"><span>Şifre (en az 8 karakter)</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>' +
-    '<label class="fld"><span>Rol</span><select name="role"><option value="viewer">İzleyici (yalnızca izleme)</option><option value="operator">Operatör (fabrika bilgisayarı: iş emri başlat/bitir, duruş nedeni)</option><option value="admin">Yönetici (her şey)</option></select></label>' +
+    '<label class="fld"><span>Rol</span><select name="role">' +
+    roles.map((r) => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join('') +
+    '<option value="admin">Yönetici (her şey)</option></select></label>' +
     '<div class="fld" style="justify-content:flex-end"><button type="submit" class="icon-btn btn-primary">Hesap ekle</button></div></form>' +
 
     '<h4 class="sub">Son giriş olayları</h4>' +

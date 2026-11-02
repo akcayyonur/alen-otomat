@@ -3,37 +3,42 @@
  * Iki uygulama birbirinden ayridir (menu, ust cubuk, adresler ayri):
  *   - CNC Telemetri: canli tezgah izleme, uretim raporu, program kutuphanesi, ayarlar
  *   - Planlama: is emri, siparis, urun karti, program esleme (sonra hammadde ve verimlilik)
- * Hangi rolun hangi uygulamayi gorecegi BURADA yalniz kolaylik icindir; yetkiyi sunucu verir (backend/auth/policy.js).
- * Birden cok uygulamasi olmayan kullanici (operator: yalniz Planlama) secim ekranini hic gormez; izleyici artik ikisini de gorur (Planlama'da yalniz okur),
- * dogrudan kendi uygulamasina girer.
- * Bu dosya baska dashboard modullerini import etmez (dongu olmasin).
+ * Hangi kullanicinin hangi uygulamayi gorecegi (shared/screens.js'teki ekranlarin `app` alanina gore,
+ * dashboard/screens.js kopyasindan okunur) BURADA yalniz kolaylik icindir; yetkiyi sunucu verir
+ * (backend/auth/policy.js). Admin HER ZAMAN ikisini de gorur. Tek uygulamasi olan kullanici (ör. yalniz
+ * Planlama grants'i olan bir rol) secim ekranini hic gormez, dogrudan kendi uygulamasina girer.
+ * Bu dosya baska dashboard modullerini import etmez (dongu olmasin; screens.js haric, o da bagimsizdir).
  */
 import { escapeHtml } from './format.js';
+import { SCREENS } from './screens.js';
 
-/** @type {ReadonlyArray<{key: string, title: string, desc: string, entry: string, roles: string[], icon: string}>} */
+/** @type {ReadonlyArray<{key: string, title: string, desc: string, entry: string, icon: string}>} */
 export const APPS = Object.freeze([
   {
     key: 'telemetri',
     title: 'CNC Telemetri',
     desc: 'Tezgahları canlı izleyin: durum, mil, parça sayacı, duruşlar. Üretim raporu, program kütüphanesi ve ayarlar.',
     entry: '#/filo',
-    roles: ['admin', 'viewer'],
     icon: '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="19" fill="none" stroke="currentColor" stroke-width="3"/>' +
       '<path d="M10 28h7l4-10 6 16 4-10h7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   },
   {
     key: 'planlama',
     title: 'Planlama',
-    desc: 'İş emri, sipariş ve ürün kartı; tezgah başı: iş emri başlat/bitir ve duruş nedenleri; GKK rapor numaraları, ilk onay raporu, ölçü raporları, hammadde ve verimlilik. İzleyici hesap: tezgah başı, iş emirleri, GKK, ilk onay ve ölçü raporlarını yalnız okur.',
+    desc: 'İş emri, sipariş ve ürün kartı; tezgah başı: iş emri başlat/bitir ve duruş nedenleri; GKK rapor numaraları, ilk onay raporu, ölçü raporları, hammadde, verimlilik ve fiyat çalışması. Yalnız okuma yetkisi olan ekranlar değiştirilemez.',
     entry: '#/planlama',
-    roles: ['admin', 'operator', 'viewer'],
     icon: '<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="9" y="7" width="30" height="35" rx="4" fill="none" stroke="currentColor" stroke-width="3"/>' +
       '<path d="M17 7V5h14v2M16 19l3 3 5-6M16 31l3 3 5-6M28 20h6M28 32h6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   },
 ]);
 
-/** Rolun acabilecegi uygulamalar (secim ekraninda gorunenler). */
-export const appsFor = (role) => APPS.filter((a) => a.roles.includes(role));
+/** Kullanicinin acabilecegi uygulamalar (secim ekraninda gorunenler). Admin hepsini; digerleri grants'inda o app'e ait en az bir ekrani olanlari. */
+export const appsFor = (user) => {
+  if (!user) return [];
+  if (user.isAdmin) return [...APPS];
+  const grants = user.grants ?? {};
+  return APPS.filter((a) => SCREENS.some((s) => s.app === a.key && grants[s.id]));
+};
 
 /** @param {HTMLElement} host @param {typeof APPS[number][]} apps @param {{username: string}|undefined} user */
 export function renderApps(host, apps, user) {

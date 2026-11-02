@@ -4,7 +4,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, del, cellText, fmtNum, gramText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip, sizeText, isAdminRole, truncCell } from './planning-common.js';
+import { put, del, cellText, fmtNum, gramText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip, sizeText, isAdminRole, canWrite, truncCell } from './planning-common.js';
 import { openMeasurePlanDialog } from './planning-measure.js';
 
 const PAGE = 100;
@@ -21,9 +21,10 @@ const planSummary = (plan) => (plan?.length
 /** @param {HTMLElement} host */
 export function renderProducts(host) {
   const st = { q: '', items: [], total: 0, seq: 0 };
+  const yazabilir = canWrite('urunler');
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="Stok kodu, ürün adı ya da müşteri kodu ara…" aria-label="Ürün ara">' +
-    '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni ürün</button></div>' +
+    (yazabilir ? '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni ürün</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>' +
     '<p class="pl-more" data-role="more" hidden><button type="button" class="icon-btn" data-act="more">Daha fazla göster</button></p>';
@@ -121,13 +122,13 @@ export async function openProductDialog(code, onSaved = () => {}) {
     (p ? `<p class="hint">Kaynak: ${escapeHtml(SOURCE[p.source] ?? p.source)} · son güncelleme ${escapeHtml(dateTimeText(p.updatedAt))}${p.updatedBy ? ` · ${escapeHtml(p.updatedBy)}` : ''}</p>` : '') +
     (p ? '<h4 class="sub">Ölçü satırları (ölçü kontrol föyü)</h4>' +
       `<p class="hint" data-role="plan-summary">${planSummary(p.measurePlan)}</p>` +
-      '<button type="button" class="icon-btn" data-act="measure-plan">Ölçü satırlarını tanımla / düzenle…</button>' : '') +
+      (canWrite('urunler') ? '<button type="button" class="icon-btn" data-act="measure-plan">Ölçü satırlarını tanımla / düzenle…</button>' : '') : '') +
     (p ? '<h4 class="sub">Dosyalar: teknik resim ve etiket</h4><div data-role="files"></div>' : '') +
     (p ? `<h4 class="sub">Bu ürünü üreten programlar</h4>${p.programs.length === 0
       ? '<p class="empty">Hiçbir program bu ürüne eşlenmemiş (Program eşleme sekmesinden bağlanır).</p>'
       : `<p>${p.programs.map((x) => `<span class="chip chip-none mono">${escapeHtml(x.name)}</span>`).join(' ')}</p>`}` : '') +
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
-    `<div class="dt-actions"><button type="submit" class="icon-btn btn-primary">${isNew ? 'Ürünü ekle' : 'Kaydet'}</button></div></form>`;
+    (canWrite('urunler') ? `<div class="dt-actions"><button type="submit" class="icon-btn btn-primary">${isNew ? 'Ürünü ekle' : 'Kaydet'}</button></div>` : '') + '</form>';
 
   const form = m.body.querySelector('form');
   /** Ürün kartına bağlı dosyalar (klasörden eşlenen ya da elle eklenen); yönetici kaldırabilir. */

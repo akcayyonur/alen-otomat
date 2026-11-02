@@ -322,7 +322,7 @@ test('ölçü raporları: ölçüm girilmiş iş emirleri, tolerans dışı / ka
 test('HTTP: GKK, ilk onay (operatör sınırı), çizim yükle / birleşik PDF indir / sil, ölçü raporları, ürün planı', async () => {
   const { p, st } = kur();
   const routes = createPlanningRoutes({ planning: p });
-  let user = { role: 'admin', username: 'ali' };
+  let user = { isAdmin: true, username: 'ali' };
   const srv = http.createServer(async (req, res) => {
     req.user = user;
     if (!(await routes(req, res, new URL(req.url, 'http://x')))) res.writeHead(404).end();
@@ -349,14 +349,14 @@ test('HTTP: GKK, ilk onay (operatör sınırı), çizim yükle / birleşik PDF i
     st.live.set('CNC-01', canli(100));
     const w = (await j('/api/planning/work-orders', 'POST', { stockCode: 'ST001.013', targetQty: 20, machineId: 'CNC-01' })).json;
     await j(`/api/planning/work-orders/${w.no}/start`, 'POST', {});
-    user = { role: 'operator', username: 'fabrika' };
+    user = { isAdmin: false, username: 'fabrika' };
     assert.equal((await j('/api/planning/first-approvals', 'POST', { stockCode: 'ST001.013' })).status, 403, 'operator elle kayıt açamaz');
     assert.equal((await j('/api/planning/first-approvals', 'POST', { woNo: w.no, stockCode: 'BASKA' })).status, 403, 'operator alan yazamaz');
     const fa = await j('/api/planning/first-approvals', 'POST', { woNo: w.no, person: 'Ayşe' });
     assert.deepEqual([fa.status, fa.json.code, fa.json.createdBy, fa.json.operator], [201, 'İ26-001', 'fabrika', 'Ayşe']);
     assert.equal((await j('/api/planning/first-approvals', 'POST', { woNo: w.no })).json.code, 'exists');
     assert.equal((await j('/api/planning/first-approvals', 'POST', { woNo: w.no, again: true })).status, 201);
-    user = { role: 'admin', username: 'ali' };
+    user = { isAdmin: true, username: 'ali' };
     assert.equal((await j('/api/planning/first-approvals', 'POST', { stockCode: 'ST002.001', person: 'Veli' })).json.stockCode, 'ST002.001', 'yönetici elle açabilir');
     assert.equal((await j(`/api/planning/first-approvals/${fa.json.id}`, 'PUT', { note: 'x' })).json.note, 'x');
     const fl = await j('/api/planning/first-approvals?q=ayşe&year=2026');
@@ -389,7 +389,7 @@ test('HTTP: GKK, ilk onay (operatör sınırı), çizim yükle / birleşik PDF i
 
     // ölçü planı ürün kartına + ölçü raporları
     assert.equal((await j('/api/planning/products/ST001.013/measure-plan', 'PUT', { rows: [{ label: 'Ø34,2', nominal: 34.2, lower: -0.1, upper: 0 }] })).json.measurePlan.length, 1);
-    user = { role: 'operator', username: 'fabrika' };
+    user = { isAdmin: false, username: 'fabrika' };
     assert.equal((await j(`/api/planning/work-orders/${w.no}/measure-plan`, 'PUT', { rows: [{ label: 'Ø1' }], saveToProduct: true })).status, 403, 'operator ürün kartına yazamaz');
     assert.equal((await j(`/api/planning/work-orders/${w.no}/measure-plan`, 'PUT', { rows: [{ label: 'Ø1' }] })).status, 200);
     await j(`/api/planning/work-orders/${w.no}/measurements`, 'POST', { values: { 1: '1,0' } });

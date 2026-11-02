@@ -1,24 +1,24 @@
 /**
- * Kimlik dogrulama servisi: hesaplar, giris, oturum, kilitleme. HTTP'den bagimsiz (saf mantik);
+ * Kimlik dogrulama servisi: hesaplar, roller, giris, oturum, kilitleme. HTTP'den bagimsiz (saf mantik);
  * cerez/baslik isleri http.js'te.
  *
- * Roller:
- *   admin   herseyi gorur ve yapar (kutuphane, editor, gonderme, ayarlar, kullanicilar)
- *   viewer  yalniz izleme (filo, tezgah detayi, raporlar); program kutuphanesi, ayarlar ve
- *           tezgahlardaki "Programlar" paneli YOK (sunucu da bu uclari reddeder, bkz. policy.js)
- *   operator fabrika PC'sinin ORTAK hesabi (planlama T asamasi): izleme okuma + is emri baslat/bitir + durus nedeni girisi;
- *           planlama ayarlari, siparis/urun duzenleme, program kutuphanesi, ayarlar YOK (bkz. policy.js)
+ * Roller (2026-10-30, esnek rol sistemi):
+ *   admin   TEK sabit rol: her seyi gorur ve yapar (kutuphane, editor, gonderme, ayarlar, kullanicilar/roller)
+ *   (diger herkes)  admin'in Ayarlar > Roller'dan tanimladigi bir role baglidir (shared/screens.js'teki her
+ *           ekran icin Kapali / Gorebilir / Yazabilir); eski sabit "viewer"/"operator" roller GOCTE esdeger
+ *           rollere tasindi (bkz. auth-db.js), davranislari degismedi - artik admin bunlari DUZENLEYEBILIR.
  *
  * Guvenlik kararlari:
  *   - Sifreler scrypt ile; belirtec rastgele 32 bayt, veritabaninda yalniz SHA-256 ozeti.
- *   - Oturum bosta kalma suresi role gore: admin 12 saat, viewer ve operator 30 gun (mutlak ust sinir 7 / 90 / 90 gun;
- *     operator: fabrika PC'si surekli acik kalir, ortak hesap yetkisi dardir).
+ *   - Oturum bosta kalma suresi: admin 12 saat (mutlak 7 gun), admin-disi HERKES 30 gun (mutlak 90 gun;
+ *     fabrika PC'si surekli acik kalir, ortak hesap yetkisi dardir).
  *   - Basarisiz giris: (adres, kullanici) basina 15 dakikada 5, adres basina 20 deneme; sonra kilit.
  *   - Kullanici bulunamasa da sifre dogrulamasi kadar sure harcanir (kullanici adi sizdirilmasin).
  *   - Son yonetici silinemez; kimse kendi hesabini silemez. Sifre degisince diger oturumlar kapanir.
  */
 import { randomBytes, createHash } from 'node:crypto';
 import { hashPassword, verifyPassword, validatePassword } from './password.js';
+import { validateGrants } from '../../shared/screens.js';
 
 export class AuthError extends Error {
   /** @param {string} message @param {number} [status] @param {object} [extra] */
@@ -30,9 +30,10 @@ export class AuthError extends Error {
   }
 }
 
-export const ROLES = Object.freeze(['admin', 'viewer', 'operator']);
-export const IDLE_MS = Object.freeze({ admin: 12 * 3_600_000, viewer: 30 * 86_400_000, operator: 30 * 86_400_000 });
-export const ABSOLUTE_MS = Object.freeze({ admin: 7 * 86_400_000, viewer: 90 * 86_400_000, operator: 90 * 86_400_000 });
+export const IDLE_MS_ADMIN = 12 * 3_600_000;
+export const ABSOLUTE_MS_ADMIN = 7 * 86_400_000;
+export const IDLE_MS_OTHER = 30 * 86_400_000;
+export const ABSOLUTE_MS_OTHER = 90 * 86_400_000;
 
 const USERNAME_RE = /^[A-Za-z0-9._-]{3,32}$/;
 const TOUCH_EVERY_MS = 60_000;
@@ -41,6 +42,16 @@ const MAX_FAILS_PER_USER = 5;
 const MAX_FAILS_PER_IP = 20;
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+
+/** Rol adi gecerli mi (yeni rol / rol duzenleme); sorun yoksa null. "admin" sabit rol oldugu icin YASAK. */
+function validateRoleName(name) {
+  const t = String(name ?? '').trim();
+  if (t.length < 2 || t.length > 40) return 'Rol adı 2-40 karakter olmalı.';
+  if (t.toLowerCase() === 'admin') return '"admin" sabit bir roldür: bu adla yeni rol oluşturulamaz.';
+  return null;
+}
+
+const publicRole = (r) => (r ? { id: r.id, name: r.name, grants: r.grants } : null);
 
 export class Auth {
   /** @param {{db: import('./auth-db.js').AuthDb, now?: () => number}} deps */
@@ -97,21 +108,78 @@ export class Auth {
     }
   }
 
+  /* -------------------------------------------------------------------- roller */
+
+  listRoles() {
+    return this.db.listRoles().map(publicRole);
+  }
+
+  /** @param {{name: string, grants: object}} input @returns {object} */
+  createRole({ name, grants }, { actor = null, ip = null } = {}) {
+    const nameErr = validateRoleName(name);
+    if (nameErr) throw new AuthError(nameErr, 400);
+    const gErr = validateGrants(grants ?? {});
+    if (gErr) throw new AuthError(gErr, 400);
+    try {
+      const role = this.db.createRole({ name: String(name).trim(), grants: grants ?? {}, now: this.now(), by: actor?.username ?? null });
+      this.#audit('role_created', actor?.username ?? null, ip, role.name);
+      return publicRole(role);
+    } catch (err) {
+      if (/UNIQUE/i.test(String(err.message))) throw new AuthError('Bu rol adı zaten var.', 409);
+      throw err;
+    }
+  }
+
+  updateRole(id, { name, grants }, { actor = null, ip = null } = {}) {
+    const cur = this.db.getRole(id);
+    if (!cur) throw new AuthError('Rol bulunamadı.', 404);
+    const nameErr = validateRoleName(name);
+    if (nameErr) throw new AuthError(nameErr, 400);
+    const gErr = validateGrants(grants ?? {});
+    if (gErr) throw new AuthError(gErr, 400);
+    try {
+      this.db.updateRole(id, { name: String(name).trim(), grants: grants ?? {} });
+    } catch (err) {
+      if (/UNIQUE/i.test(String(err.message))) throw new AuthError('Bu rol adı zaten var.', 409);
+      throw err;
+    }
+    this.#audit('role_updated', actor?.username ?? null, ip, cur.name);
+    return publicRole(this.db.getRole(id));
+  }
+
+  deleteRole(id, { actor = null, ip = null } = {}) {
+    const cur = this.db.getRole(id);
+    if (!cur) throw new AuthError('Rol bulunamadı.', 404);
+    const n = this.db.countUsersWithRole(id);
+    if (n > 0) throw new AuthError(`Bu role atanmış ${n} hesap var; önce onları silin ya da başka role taşıyın.`, 409);
+    this.db.deleteRole(id);
+    this.#audit('role_deleted', actor?.username ?? null, ip, cur.name);
+  }
+
   /* -------------------------------------------------------------------- hesaplar */
+
+  /** @returns {{isAdmin: boolean, roleId: number|null}} */
+  #resolveRole(role) {
+    if (role === 'admin') return { isAdmin: true, roleId: null };
+    const r = this.db.findRoleByName(String(role ?? ''));
+    if (!r) throw new AuthError(`Rol bulunamadı: "${role}" (önce Ayarlar > Roller'dan oluşturun).`, 400);
+    return { isAdmin: false, roleId: r.id };
+  }
 
   async #validateNew({ username, password, role }) {
     if (!USERNAME_RE.test(String(username ?? ''))) {
       throw new AuthError('Kullanıcı adı 3-32 karakter olmalı (harf, rakam, ".", "_", "-").', 400);
     }
-    if (!ROLES.includes(role)) throw new AuthError(`Rol geçersiz: "${role}" (admin, viewer ya da operator).`, 400);
+    const resolved = this.#resolveRole(role);
     const bad = validatePassword(password);
     if (bad) throw new AuthError(bad, 400);
+    return resolved;
   }
 
-  async #insert({ username, password, role }) {
+  async #insert({ username, password, isAdmin, roleId }) {
     const passwordHash = await hashPassword(password);
     try {
-      return this.db.createUser({ username, role, passwordHash, now: this.now() });
+      return this.db.createUser({ username, isAdmin, roleId, passwordHash, now: this.now() });
     } catch (err) {
       if (/UNIQUE/i.test(String(err.message))) throw new AuthError('Bu kullanıcı adı zaten var.', 409);
       throw err;
@@ -121,32 +189,34 @@ export class Auth {
   /** Ilk yonetici (hesap yokken). Cagiran, istegin sunucu bilgisayarindan geldigini zaten denetlemis olmali. */
   async setup({ username, password }, { ip = null } = {}) {
     if (!this.setupRequired) throw new AuthError('Kurulum zaten yapılmış.', 409);
-    await this.#validateNew({ username, password, role: 'admin' });
-    const user = await this.#insert({ username, password, role: 'admin' });
+    const resolved = await this.#validateNew({ username, password, role: 'admin' });
+    const user = await this.#insert({ username, password, ...resolved });
     this.#audit('setup', user.username, ip, 'ilk yönetici hesabı');
     return user;
   }
 
+  /** @param {{role: 'admin'|string}} input role: 'admin' sabit roldur, aksi halde bir rol ADI (roles tablosunda var olmali) */
   async createUser({ username, password, role }, { actor = null, ip = null } = {}) {
-    await this.#validateNew({ username, password, role });
-    const user = await this.#insert({ username, password, role });
-    this.#audit('user_created', actor?.username ?? null, ip, `${user.username} (${user.role})`);
-    return user;
+    const resolved = await this.#validateNew({ username, password, role });
+    const user = await this.#insert({ username, password, ...resolved });
+    this.#audit('user_created', actor?.username ?? null, ip, `${user.username} (${role})`);
+    return { ...user, roleName: user.roleId ? this.db.getRole(user.roleId)?.name ?? null : null };
   }
 
   listUsers() {
-    return this.db.listUsers();
+    const roleNames = new Map(this.db.listRoles().map((r) => [r.id, r.name])); // N+1 sorgu yerine tek harita
+    return this.db.listUsers().map((u) => ({ ...u, roleName: u.roleId ? roleNames.get(u.roleId) ?? null : null }));
   }
 
   deleteUser(userId, { actor = null, ip = null } = {}) {
     const target = this.db.getUser(userId);
     if (!target) throw new AuthError('Kullanıcı bulunamadı.', 404);
     if (actor && actor.id === target.id) throw new AuthError('Kendi hesabınızı silemezsiniz.', 400);
-    if (target.role === 'admin' && this.db.countAdmins() <= 1) {
+    if (target.isAdmin && this.db.countAdmins() <= 1) {
       throw new AuthError('Son yönetici hesabı silinemez.', 400);
     }
     this.db.deleteUser(target.id);
-    this.#audit('user_deleted', actor?.username ?? null, ip, `${target.username} (${target.role})`);
+    this.#audit('user_deleted', actor?.username ?? null, ip, target.username);
   }
 
   /** Yonetici baska bir kullanicinin sifresini belirler; o kullanicinin tum oturumlari kapanir. */
@@ -198,7 +268,14 @@ export class Auth {
     this.db.touchLogin(record.id, now);
     this.#audit('login_ok', record.username, ip);
     const { passwordHash, ...user } = record; // eslint-disable-line no-unused-vars
-    return { token, user, maxAgeSec: Math.floor(IDLE_MS[record.role] / 1000) };
+    return { token, user: this.#withRole(user), maxAgeSec: Math.floor((user.isAdmin ? IDLE_MS_ADMIN : IDLE_MS_OTHER) / 1000) };
+  }
+
+  /** Kullaniciya rol adi + yetkileri (grants) ekler (admin icin grants=null: her seye zaten erisir). */
+  #withRole(user) {
+    if (user.isAdmin || !user.roleId) return { ...user, roleName: null, grants: user.isAdmin ? null : {} };
+    const r = this.db.getRole(user.roleId);
+    return { ...user, roleName: r?.name ?? null, grants: r?.grants ?? {} };
   }
 
   /** Belirteci dogrular, bosta kalma suresini kaydirir. @returns {{user: object, tokenHash: string}|null} */
@@ -218,8 +295,9 @@ export class Auth {
 
   #expired(s) {
     const now = this.now();
-    const role = s.user.role;
-    return now - s.lastSeenAt > IDLE_MS[role] || now - s.createdAt > ABSOLUTE_MS[role];
+    const idle = s.user.isAdmin ? IDLE_MS_ADMIN : IDLE_MS_OTHER;
+    const abs = s.user.isAdmin ? ABSOLUTE_MS_ADMIN : ABSOLUTE_MS_OTHER;
+    return now - s.lastSeenAt > idle || now - s.createdAt > abs;
   }
 
   #lookup(token) {
@@ -248,13 +326,10 @@ export class Auth {
       for (const key of [...map.keys()]) this.#recent(map, key); // eskileri atar, bos kalani siler
     }
     const now = this.now();
-    const idleCutoffByRole = {};
-    const absoluteCutoffByRole = {};
-    for (const role of ROLES) {
-      idleCutoffByRole[role] = now - IDLE_MS[role];
-      absoluteCutoffByRole[role] = now - ABSOLUTE_MS[role];
-    }
-    return this.db.purgeSessions({ idleCutoffByRole, absoluteCutoffByRole });
+    return this.db.purgeSessions({
+      idleCutoffAdmin: now - IDLE_MS_ADMIN, absoluteCutoffAdmin: now - ABSOLUTE_MS_ADMIN,
+      idleCutoffOther: now - IDLE_MS_OTHER, absoluteCutoffOther: now - ABSOLUTE_MS_OTHER,
+    });
   }
 
   recentAudit(limit = 50) {

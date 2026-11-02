@@ -8,7 +8,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, chip, openListPrint, truncCell } from './planning-common.js';
+import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, canWrite, chip, openListPrint, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
 
 const plainDate = (ms) => (ms ? new Date(ms).toLocaleDateString('tr-TR') : '');
@@ -22,18 +22,21 @@ const matchChip = (kind) => (MATCH[kind] ? chip(...MATCH[kind]) : '');
 /** @param {HTMLElement} host */
 export function renderGkk(host) {
   const admin = isAdminRole();
+  const yazabilir = canWrite('gkk');
   const st = { q: '', items: [], total: 0, count: 0, next: null, seq: 0 };
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search pl-search-big" data-role="q" placeholder="Hammadde cinsi (ör. AA24 X 13) ya da rapor no ara…" aria-label="GKK kaydı ara" autocomplete="off">' +
     '<button type="button" class="icon-btn" data-act="print">Listeyi yazdır</button>' +
-    (admin ? '<button type="button" class="icon-btn" data-act="seq">Numara tabanı…</button><button type="button" class="icon-btn btn-primary" data-act="new">Yeni GK numarası…</button>' : '') + '</div>' +
+    (admin ? '<button type="button" class="icon-btn" data-act="seq">Numara tabanı…</button>' : '') +
+    (yazabilir ? '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni GK numarası…</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
   function draw() {
+    const nasil = [admin && 'sağ üstteki "Excel içeri al…" ile EYS.FR.011 formunu yükleyebilir', yazabilir && '"Yeni GK numarası…" ile ekleyebilirsiniz'].filter(Boolean);
     $('count').innerHTML = st.total === 0
-      ? (st.q ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${admin ? ' Sağ üstteki "Excel içeri al…" ile EYS.FR.011 formunu yükleyebilir ya da "Yeni GK numarası…" ile ekleyebilirsiniz.' : ''}`)
+      ? (st.q ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${nasil.length ? ` ${nasil.join(' ya da ')}.` : ''}`)
       : `${fmtNum(st.total)}${st.total !== st.count ? ` / ${fmtNum(st.count)}` : ''} kayıt · sıradaki numara <b class="mono">${escapeHtml(st.next?.no ?? '—')}</b>`;
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th class="num">Sıra</th><th>Hammadde cinsi</th><th>Rapor no</th><th>Üretici rapor tarihi</th><th>Açıklama</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +

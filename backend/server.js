@@ -181,6 +181,9 @@ const STATIC_FILES = {
   '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],
   '/planning-reports.js': ['../dashboard/planning-reports.js', 'text/javascript; charset=utf-8'],
   '/planning-tabs.js': ['../dashboard/planning-tabs.js', 'text/javascript; charset=utf-8'],
+  '/planning-price.js': ['../dashboard/planning-price.js', 'text/javascript; charset=utf-8'],
+  '/roles-view.js': ['../dashboard/roles-view.js', 'text/javascript; charset=utf-8'],
+  '/screens.js': ['../dashboard/screens.js', 'text/javascript; charset=utf-8'],
   '/format.js': ['../dashboard/format.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['../dashboard/styles.css', 'text/css; charset=utf-8'],
 };
@@ -287,8 +290,8 @@ async function handleIngest(req, res) {
 }
 
 function handleStream(req, res) {
-  // Akisin sahibi: kare icerigi role gore suzulur (viewer tezgah IP'lerini gormez), oturum duzenli denetlenir.
-  res.cncRole = req.user?.role ?? 'viewer';
+  // Akisin sahibi: kare icerigi admin mi degil mi'ye gore suzulur (admin-disi tezgah IP'lerini gormez), oturum duzenli denetlenir.
+  res.cncIsAdmin = !!req.user?.isAdmin;
   res.cncToken = req.session?.tokenHash ?? null;
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -297,15 +300,15 @@ function handleStream(req, res) {
     'x-accel-buffering': 'no',
   });
   res.write('retry: 2000\n\n');
-  res.write(`event: snapshot\ndata: ${JSON.stringify(snapshotFor(res.cncRole))}\n\n`);
+  res.write(`event: snapshot\ndata: ${JSON.stringify(snapshotFor(res.cncIsAdmin))}\n\n`);
 
   clients.add(res);
   req.on('close', () => clients.delete(res));
 }
 
-/** Rolune gore anlik goruntu: admin her seyi, viewer IP/port gibi ic ag ayrintilari OLMADAN gorur. */
-function snapshotFor(role, snapshot = store.snapshot()) {
-  return role === 'admin' ? snapshot : redactSnapshot(snapshot);
+/** Admin mi degil mi'ye gore anlik goruntu: admin her seyi, digerleri tezgah IP/port gibi ic ag ayrintilari OLMADAN gorur. */
+function snapshotFor(isAdmin, snapshot = store.snapshot()) {
+  return isAdmin ? snapshot : redactSnapshot(snapshot);
 }
 
 let tick = 0;
@@ -318,9 +321,9 @@ function broadcast() {
   tick += 1;
   const snapshot = store.snapshot();
   const frames = new Map();
-  const frameFor = (role) => {
-    if (!frames.has(role)) frames.set(role, `event: snapshot\ndata: ${JSON.stringify(snapshotFor(role, snapshot))}\n\n`);
-    return frames.get(role);
+  const frameFor = (isAdmin) => {
+    if (!frames.has(isAdmin)) frames.set(isAdmin, `event: snapshot\ndata: ${JSON.stringify(snapshotFor(isAdmin, snapshot))}\n\n`);
+    return frames.get(isAdmin);
   };
   const recheck = !AUTH_DISABLED && tick % SESSION_RECHECK_TICKS === 0;
   for (const res of clients) {
@@ -331,7 +334,7 @@ function broadcast() {
       continue;
     }
     // Yavas istemci baglantiyi tikamasin diye yazma hatasi sessizce dusurulur.
-    res.write(frameFor(res.cncRole), (err) => {
+    res.write(frameFor(res.cncIsAdmin), (err) => {
       if (err) clients.delete(res);
     });
   }
@@ -448,7 +451,7 @@ async function handleConfigWrite(req, res) {
 
 const MACHINE_ROUTE = /^\/api\/machines\/([^/]+)(?:\/([a-z.]+))?$/;
 
-function handleMachineRoute(url, res, idRaw, action, role = 'viewer') {
+function handleMachineRoute(url, res, idRaw, action, isAdmin = false) {
   const machineId = decodeURIComponent(idRaw);
   if (!store.has(machineId)) {
     return sendJson(res, 404, { error: `tezgah bulunamadi: ${machineId}` });
@@ -470,7 +473,7 @@ function handleMachineRoute(url, res, idRaw, action, role = 'viewer') {
         spans: store.db.spans(machineId, fromMs, toMs),
         downtimes: store.db.downtimes(machineId, fromMs, toMs),
       };
-      return sendJson(res, 200, role === 'admin' ? detail : redactDetail(detail));
+      return sendJson(res, 200, isAdmin ? detail : redactDetail(detail));
     }
     case 'history': {
       const maxPoints = Math.min(
@@ -535,7 +538,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/ingest') return await handleIngest(req, res);
     if (req.method === 'GET' && pathname === '/api/stream') return handleStream(req, res);
     if (req.method === 'GET' && pathname === '/api/machines') {
-      return sendJson(res, 200, snapshotFor(req.user?.role));
+      return sendJson(res, 200, snapshotFor(!!req.user?.isAdmin));
     }
     if (req.method === 'GET' && pathname === '/api/drivers') {
       return sendJson(res, 200, { drivers: loadDrivers() });
@@ -570,7 +573,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && pathname === '/api/health') {
       // Giris yapmamis (ve yonetici olmayan) istemci yalniz "ayakta" bilgisini gorur.
-      if (req.user?.role !== 'admin') return sendJson(res, 200, { ok: true });
+      if (!req.user?.isAdmin) return sendJson(res, 200, { ok: true });
       return sendJson(res, 200, {
         ok: true,
         clients: clients.size,
@@ -590,7 +593,7 @@ const server = http.createServer(async (req, res) => {
 
     const machineMatch = pathname.match(MACHINE_ROUTE);
     if (req.method === 'GET' && machineMatch) {
-      return handleMachineRoute(url, res, machineMatch[1], machineMatch[2], req.user?.role);
+      return handleMachineRoute(url, res, machineMatch[1], machineMatch[2], !!req.user?.isAdmin);
     }
 
     if (req.method === 'GET' && (await serveStatic(pathname, res))) return;

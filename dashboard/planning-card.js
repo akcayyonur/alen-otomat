@@ -3,7 +3,8 @@
  *
  * AKIŞ (tek adım): makine üretti, ürün kasaya doldu; usta o üretimin iş emrine girer ve BİR kart bastırır, kartı kasaya atıp kasayı
  * paketlemeye yollar. Kartı SİSTEM basar (kendi numarasıyla, düz kâğıda) ve iş emrine bağlıdır. Kart bir TABLO'dur:
- *   ALEN ÜRÜN KODU · MÜŞTERİ ÜRÜN KODU · TARİH · MAKİNA NO · İŞ EMRİ NO · GKK RAPOR NO   (+ küçük KART NO: paketleme kartı bununla bulur)
+ *   ALEN ÜRÜN KODU · MÜŞTERİ ÜRÜN KODU · TARİH · MAKİNA NO · İŞ EMRİ NO · GKK RAPOR NO · İLK ONAY NO   (+ küçük KART NO: paketleme kartı bununla bulur)
+ * İLK ONAY NO iş emrinin "ilk onay rapor no" alanından gelir (İlk onay numarası al akışıyla yazılır); burada yalnız gösterilir, bu pencereden değişmez.
  * Her basış bir KASA kaydıdır: o kasaya girdiğini tahmin ettiğimiz adet (önceki karttan bu yana tezgahın saydığı) ve tezgah sayacı arka planda
  * tutulur; kartta MİKTAR YOK. Kesin adet paketlemede girilir (Paketleme bölümü). Ret/hurda sistemde tutulmaz.
  * İŞLEM İŞARETLERİ: kartta YIKAMA / KURUTMA / TAVLAMA satırları vardır, her birinde iki kutu ("gidecek" ve "yapıldı"); kartı basarken usta tikler,
@@ -61,9 +62,9 @@ function rejectRow(on) {
 }
 
 /**
- * Kart: 6 alanlı tablo + 3 işlem satırı (yıkama, kurutma, tavlama) + ÜRÜN RET kutusu. `cardNo` yoksa (önizleme) "basılınca verilir" yazılır.
+ * Kart: 7 alanlı tablo + 3 işlem satırı (yıkama, kurutma, tavlama) + ÜRÜN RET kutusu. `cardNo` yoksa (önizleme) "basılınca verilir" yazılır.
  * @param {{cardNo?: string|null, stockCode?: string|null, customerCode?: string|null, machineId?: string|null, woNo?: string|null,
- *          gkkReportNo?: string|null, issuedAt?: number|null, closedAt?: number|null, state?: string}} c
+ *          gkkReportNo?: string|null, firstApprovalNo?: string|null, issuedAt?: number|null, closedAt?: number|null, state?: string}} c
  */
 export function cardHtml(c) {
   const machineNo = (/(\d+)\s*$/.exec(c.machineId ?? '') ?? [])[1];
@@ -79,6 +80,7 @@ export function cardHtml(c) {
     row('MAKİNA NO', machineNo ? String(Number(machineNo)) : plain(c.machineId)) +
     row('İŞ EMRİ NO', plain(c.woNo)) +
     row('GKK RAPOR NO', plain(c.gkkReportNo), 'pl-c-gkk') +
+    row('İLK ONAY NO', plain(c.firstApprovalNo)) +
     stepRows(c.steps ?? emptySteps()) +
     rejectRow(!!c.reject) +
     '</tbody></table>' +
@@ -117,7 +119,7 @@ export async function openIssueCard(woNo, onDone = null) {
     return;
   }
   const st = { card: null, gkk: w.gkkReportNo ?? '', busy: false, error: null, steps: emptySteps(), reject: false };
-  const preview = () => ({ cardNo: null, stockCode: w.stockCode, customerCode: w.customerCode, machineId: w.machineId, woNo: w.no, gkkReportNo: st.gkk, steps: st.steps, reject: st.reject });
+  const preview = () => ({ cardNo: null, stockCode: w.stockCode, customerCode: w.customerCode, machineId: w.machineId, woNo: w.no, gkkReportNo: st.gkk, firstApprovalNo: w.firstApprovalNo, steps: st.steps, reject: st.reject });
 
   /** İşlem kutuları (kartı basarken tiklenir): her işlem için "gidecek" ve "yapıldı". */
   const stepsBox = () =>

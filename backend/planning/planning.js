@@ -21,6 +21,7 @@ import { MikroStock } from './mikro-stock.js';
 import { DocFolder } from './doc-folder.js';
 import { Packing } from './packing.js';
 import { Schedule } from './schedule.js';
+import { PriceStudies } from './price-studies.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -32,28 +33,12 @@ import { freeStockByMaterial, reservedKgOf } from './material-reservations.js';
 import { csvDocument } from '../csv.js';
 import { orderSegments, summarize, matrixRows, productRows, dayRows, splitByShift } from './efficiency.js';
 import { slotOf, slotPosition, parseValue, normalizePlan, evaluate, limits, CHECK_KINDS, CHECK_LABEL, SLOT_MIN } from './measure.js';
+import { text, number } from './fields.js';
 
 export { PlanningError };
 
 const fmtTime = (ms) => new Date(ms).toLocaleString('tr-TR', { hour12: false });
 const STOCK_CODE = /^[^\s/\\;,]{1,40}$/;
-
-/** Bos metin -> null, ayrica uzunluk siniri. */
-function text(value, label, max) {
-  if (value === undefined || value === null) return null;
-  const t = String(value).trim();
-  if (t === '') return null;
-  if (t.length > max) throw new PlanningError(`${label} en fazla ${max} karakter olabilir.`);
-  return t;
-}
-
-/** Bos -> null; sayi degilse ya da aralik disindaysa hata. */
-function number(value, label, { max }) {
-  if (value === undefined || value === null || value === '') return null;
-  const n = typeof value === 'number' ? value : Number(String(value).replace(',', '.'));
-  if (!Number.isFinite(n) || n <= 0 || n > max) throw new PlanningError(`${label} 0 ile ${max} arasında bir sayı olmalı.`);
-  return n;
-}
 
 /** API alanlari -> dogrulanmis urun alanlari. Verilmeyen alan sonuca girmez (guncellemede dokunulmaz). */
 function productFields(input) {
@@ -98,6 +83,8 @@ export class Planning {
     this.db = new PlanningDb(dbFile);
     /** GKK rapor numaralari, ilk onay raporlari ve teknik resimler (ayni veritabani dosyasi). */
     this.quality = new Quality({ planning: this, db: this.db.db });
+    /** Fiyat çalışması: ürün kartı açılmadan önceki teknik resim + hammadde/süre ön çalışması (price-studies.js). `products` ile BAĞLANMAZ. */
+    this.priceStudies = new PriceStudies({ planning: this });
     /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
     /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */
@@ -666,6 +653,97 @@ export class Planning {
     return { ...this.getWorkOrder(cur.no, { now }), warnings };
   }
 
+  /**
+   * Yanlislikla yanlis tezgaha baslatilmis/baglanmis is emrini DOGRU tezgaha tasir. Yalniz UretIMDE durumundaki
+   * is emri icin: planlandi durumundaki is emrinde tezgah zaten normal duzenlemeden (updateWorkOrder) degisir.
+   * Eski tezgahtaki sayim bu ana kadar olan adet BU IS EMRINE YAZILMAZ (yanlis tezgaha bagliyken sayilanlar
+   * gecersiz); yeni tezgahta sayim SIMDIDEN yeniden baslar. Fiziken yanlis tezgahta uretim olmussa bu is emrine
+   * yansimaz; uyari olarak bildirilir. @param {{machineId: string}} input
+   */
+  reassignMachine(no, input = {}, { by = null, now = Date.now() } = {}) {
+    const cur = this.#get(no);
+    if (cur.status !== 'uretimde') {
+      throw new PlanningError(
+        cur.status === 'planlandi' ? 'Bu iş emri henüz başlatılmadı: tezgahı "Düzenle" penceresinden değiştirin.'
+          : cur.status === 'bitti' ? 'Bitmiş iş emrinde tezgah düzeltilemez: önce "Üretime geri al" kullanın.'
+            : 'İptal edilmiş iş emride tezgah düzeltilemez.',
+        409, 'bad-status',
+      );
+    }
+    const machineId = this.#machine(input.machineId);
+    if (machineId === cur.machineId) throw new PlanningError('Bu zaten iş emrinin tezgahı.', 400);
+    for (const o of this.db.machineWindows(machineId, cur.no)) {
+      if (o.status === 'uretimde') throw new PlanningError(`${machineId} tezgahında ${o.no} numaralı iş emri üretimde. Önce onu bitirin.`, 409, 'machine-busy');
+      if (o.finishedAt > now) throw new PlanningError(`${machineId} tezgahında ${o.no} numaralı iş emri bu aralıkta çalışmış: tezgah düzeltilemez.`, 409, 'overlap');
+    }
+
+    const warnings = [];
+    const soFar = this.#frozenResult(cur, cur.startedAt, now, now);
+    if (soFar.produced > 0) {
+      warnings.push(`${cur.machineId} tezgahında bu iş emrine az önce ${soFar.produced} adet sayılmıştı; tezgah düzeltilince bu adet KAYBOLUR (yeni tezgahta sayım sıfırdan başlar).`);
+    }
+    const openCrate = this.db.openCrateOfWo(cur.no);
+    if (openCrate) {
+      this.#closeCrateRow(openCrate, { by, person: null, to: now, now, auto: true });
+      warnings.push('Açık kasa, tezgah düzeltilirken eski tezgahın sayacıyla otomatik kapatıldı; yeni tezgahta "Yeni kasa aç" ile devam edin.');
+    }
+
+    const live = this.liveMachine(machineId);
+    const startTotal = live?.connected && Number.isInteger(live.partTotal) ? live.partTotal : null;
+    if (live == null) warnings.push(`${machineId} için telemetri verisi yok: adet sayılamaz.`);
+    else if (!live.connected) warnings.push(`${machineId} tezgahından şu an veri gelmiyor: sayım, veri gelince tamamlanır.`);
+
+    this.db.tx(() => {
+      this.db.updateWorkOrder(cur.no, { machine_id: machineId, started_at: now, start_total: startTotal }, { by, now });
+      this.db.addWorkOrderEvent(cur.no, 'tezgah-duzeltildi', `${cur.machineId} → ${machineId} (yanlış tezgaha bağlıydı; sayım ${machineId}'te şimdiden yeniden başladı)`, { by, now });
+    });
+    return { ...this.getWorkOrder(cur.no, { now }), warnings };
+  }
+
+  /**
+   * Hic baslatilmamis (ya da sistemden once tamamlanmis) eski bir is emrini GERIYE DONUK, ELLE bitirir: adet
+   * elle girilir, telemetriden SAYILMAZ. Yalniz `planlandi` durumunda (zaten uretimdeyse normal "Bitir" kullanilir).
+   * Sonuc `source:'elle'` ile isaretlenir (ekranda rozet; gercek telemetri sonucuyla karistirilmasin).
+   * @param {{qty: number, finishedAt?: number|string, note?: string}} input
+   */
+  finishWorkOrderManually(no, input = {}, { by = null, now = Date.now() } = {}) {
+    const cur = this.#get(no);
+    if (cur.status !== 'planlandi') {
+      throw new PlanningError(
+        cur.status === 'uretimde' ? 'Bu iş emri üretimde: normal "Bitir" kullanın.'
+          : cur.status === 'bitti' ? 'Bu iş emri zaten bitmiş.' : 'İptal edilmiş iş emri bitirilemez.',
+        409, 'bad-status',
+      );
+    }
+    const qty = Number(input.qty);
+    if (!Number.isInteger(qty) || qty < 0 || qty > 10_000_000) throw new PlanningError('Adet 0 ile 10.000.000 arasında bir tam sayı olmalı.');
+    const finishedAt = this.#instant(input.finishedAt, now, 'Bitiş tarihi', 20 * 365 * 86_400_000) ?? now;
+    const note = text(input.note, 'Not', 500);
+    // Dondurulmus sonuc: gercek telemetri YOK (elle), bu yuzden computeProgress() CAGRILMAZ - dogrudan kurulur
+    // (wo-import.js'teki eski-sistem gecisiyle AYNI sekil: vardiya/program kirilimi bilinmiyor, bos).
+    const result = {
+      from: finishedAt, to: finishedAt, open: false, produced: qty, approxQty: 0, suspectEvents: 0, suspectQty: 0,
+      firstTs: null, lastTs: null, shifts: [], cycle: { plannedSec: cur.plannedSec ?? null, measuredAvgSec: null, measuredN: 0, intervalSec: null },
+      sample: null, programs: [], warnings: [], source: 'elle', note,
+    };
+
+    const warnings = [];
+    if (qty === 0) warnings.push('0 adet girildi.');
+    else if (qty < cur.targetQty) warnings.push(`Hedefin altında: ${qty} / ${cur.targetQty} adet.`);
+    else if (qty > cur.targetQty) warnings.push(`Hedefin üzerinde: ${qty} / ${cur.targetQty} adet.`);
+
+    this.db.tx(() => {
+      this.db.updateWorkOrder(cur.no, {
+        status: 'bitti', started_at: finishedAt, started_by: by, started_person: null, start_total: null,
+        finished_at: finishedAt, finished_by: by, finished_person: null, finish_total: null, result_json: JSON.stringify(result),
+      }, { by, now });
+      const parts = [`${qty} adet · hedef ${cur.targetQty}`, 'elle girildi'];
+      if (note) parts.push(note);
+      this.db.addWorkOrderEvent(cur.no, 'elle-bitirildi', parts.join(' · '), { by, now });
+    });
+    return { ...this.getWorkOrder(cur.no, { now }), warnings };
+  }
+
   /** Bitir: gerceklesen uretim [baslangic, bitis] araligindan hesaplanip DONDURULUR. @param {{endAt?: number|string, person?: string}} [input] */
   finishWorkOrder(no, input = {}, { by = null, now = Date.now() } = {}) {
     const cur = this.#get(no);
@@ -676,6 +754,15 @@ export class Planning {
     if (endAt < cur.startedAt) throw new PlanningError(`Bitiş zamanı başlangıçtan (${fmtTime(cur.startedAt)}) önce olamaz.`);
     const person = text(input.person, 'Yapan kişi', 60);
     const result = this.#frozenResult(cur, cur.startedAt, endAt, now);
+    // Elle adet (istege bagli): telemetri adedi yerine girilen adet dondurulur; sayilan adet `telemetryProduced`ta korunur.
+    let manualQty = null;
+    if (input.qty !== undefined && input.qty !== null && input.qty !== '') {
+      manualQty = Number(input.qty);
+      if (!Number.isInteger(manualQty) || manualQty < 0 || manualQty > 10_000_000) throw new PlanningError('Adet 0 ile 10.000.000 arasında bir tam sayı olmalı.');
+      result.telemetryProduced = result.produced;
+      result.produced = manualQty;
+      result.source = 'elle-adet';
+    }
     const live = Math.abs(now - endAt) <= 120_000 ? this.liveMachine(cur.machineId) : null;
     const finishTotal = live?.connected && Number.isInteger(live.partTotal) ? live.partTotal : null;
 
@@ -695,6 +782,7 @@ export class Planning {
       if (person) parts.push(person);
       if (endAt !== now) parts.push(`bitiş ${fmtTime(endAt)}`);
       if (finishTotal != null) parts.push(`sayaç ${finishTotal}`);
+      if (manualQty !== null) parts.push(`adet elle girildi (tezgah ${result.telemetryProduced} saymıştı)`);
       this.db.addWorkOrderEvent(cur.no, 'bitirildi', parts.join(' · '), { by, now });
 
       // Hammadde rezervasyonu (F): is emri bitince GERCEK tuketim belirlenir (paketlemeden varsa, yoksa teorik sayactan).
@@ -708,17 +796,32 @@ export class Planning {
     return { ...this.getWorkOrder(cur.no, { now }), warnings };
   }
 
-  /** Yanlislikla bitirilen is emrini uretime geri alir (donmus sonuc silinir; aralik yeniden acik). Sonraki bir is emriyle cakisiyorsa 409. */
+  /**
+   * Yanlislikla bitirilen is emrini uretime geri alir (donmus sonuc silinir; aralik yeniden acik). Sonraki bir
+   * is emriyle cakisiyorsa 409. ELLE bitirilmis (hic baslatilmamis) is emri PLANLANDI'ya doner, UretIMDE'ye
+   * degil - baslangici sahteydi (bitis aniyla ayni), gercek bir uretim penceresi hic olmadi.
+   */
   reopenWorkOrder(no, { by = null, now = Date.now() } = {}) {
     const cur = this.#get(no);
     if (cur.status !== 'bitti') throw new PlanningError('Yalnız biten iş emri üretime geri alınabilir.', 409, 'bad-status');
-    for (const o of this.db.machineWindows(cur.machineId, cur.no)) {
-      if (o.status === 'uretimde') throw new PlanningError(`${cur.machineId} tezgahında ${o.no} numaralı iş emri üretimde: önce onu bitirin.`, 409, 'machine-busy');
-      if (o.startedAt >= cur.startedAt) throw new PlanningError(`${cur.machineId} tezgahında bundan sonra ${o.no} numaralı iş emri çalışmış: geri alınamaz.`, 409, 'overlap');
+    const manual = cur.result?.source === 'elle';
+    if (!manual) {
+      for (const o of this.db.machineWindows(cur.machineId, cur.no)) {
+        if (o.status === 'uretimde') throw new PlanningError(`${cur.machineId} tezgahında ${o.no} numaralı iş emri üretimde: önce onu bitirin.`, 409, 'machine-busy');
+        if (o.startedAt >= cur.startedAt) throw new PlanningError(`${cur.machineId} tezgahında bundan sonra ${o.no} numaralı iş emri çalışmış: geri alınamaz.`, 409, 'overlap');
+      }
     }
     this.db.tx(() => {
-      this.db.updateWorkOrder(cur.no, { status: 'uretimde', finished_at: null, finished_by: null, finished_person: null, finish_total: null, result_json: null }, { by, now });
-      this.db.addWorkOrderEvent(cur.no, 'yeniden-acildi', `bitiş (${fmtTime(cur.finishedAt)}) geri alındı`, { by, now });
+      if (manual) {
+        this.db.updateWorkOrder(cur.no, {
+          status: 'planlandi', started_at: null, started_by: null, started_person: null, start_total: null,
+          finished_at: null, finished_by: null, finished_person: null, finish_total: null, result_json: null,
+        }, { by, now });
+        this.db.addWorkOrderEvent(cur.no, 'yeniden-acildi', `elle bitirme (${fmtTime(cur.finishedAt)}) geri alındı; planlandı durumuna döndü`, { by, now });
+      } else {
+        this.db.updateWorkOrder(cur.no, { status: 'uretimde', finished_at: null, finished_by: null, finished_person: null, finish_total: null, result_json: null }, { by, now });
+        this.db.addWorkOrderEvent(cur.no, 'yeniden-acildi', `bitiş (${fmtTime(cur.finishedAt)}) geri alındı`, { by, now });
+      }
 
       // Hammadde rezervasyonu (F): tuketim geri alinir, yeniden "ayrildi" sayilir (reserved_kg degismez).
       if (this.db.getReservation(cur.no)?.status === 'tuketildi') {

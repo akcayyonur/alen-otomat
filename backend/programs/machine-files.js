@@ -25,6 +25,10 @@
  *      klasor yoksa engel). Klasor acma da gonderme ile ayni kapilardan gecer (ozellik acik mi,
  *      kontrolcu modelinde yazma acik mi, tezgah kimligiyle onay, denetim kaydi). Klasor SILME
  *      (RMD) hicbir yerde yoktur; var olan klasor/dosya adiyla acilmaz.
+ *  10. Kutuphanede program adi degisince `renameAcrossMachines` tornadaki dosyayi da RNFR/RNTO ile
+ *      yeniden adlandirir (ICERIK DEGISMEZ, yukleme/dogrulama gerekmez). Ayni kapilardan gecer
+ *      (ozellik acik mi, model kapisi, calisan/secili program korunur, hedefte ayni ad varsa
+ *      UZERINE YAZILMAZ); onay metni 1 tezgahta kimlik, >1 tezgahta SAYI (silmedeki desen).
  */
 import { setTimeout as sleep } from 'node:timers/promises';
 import { getDriver, resolveModel } from '../../shared/drivers.js';
@@ -622,6 +626,125 @@ export class MachineFiles {
       db.finishTransfer(transferId, { status, error, steps });
       return db.getTransfer(transferId);
     });
+  }
+
+  /* ------------------------------------------------------ tornada yeniden adlandirma */
+
+  /**
+   * Kutuphanede yeniden adlandirilan bir programin TORNALARDAKI dosyasini da yeniden adlandirir (FTP RNFR/RNTO;
+   * icerik hic degismez, yalniz ad). `machineIds`: cagiranin (dashboard) GOSTERDIGI, "bu programin kopyasi olan"
+   * tezgah listesi - sunucu kendi envanterinden YENIDEN HESAPLAMAZ, onay metni ekranda gosterilenle birebir
+   * ortussun diye. Onay: 1 tezgah -> tezgah kimligi, >1 tezgah -> tezgah SAYISI (kutuphaneden toplu silmedeki
+   * "yanlis secimi onler" deseniyle ayni). 0 tezgah -> hicbir FTP cagrisi yapilmaz.
+   * Her tezgah BAGIMSIZ degerlendirilir (biri basarisiz olursa digerleri etkilenmez): model kapisi kapaliysa,
+   * tezgah baska bir islemle mesgulse, hedefte dosya yoksa (envanter guncellenir), calisan/secili programsa ya
+   * da hedefte zaten ayni adli bir dosya varsa (UZERINE YAZILMAZ) o tezgah icin atlanir/reddedilir. Her deneme
+   * (basarisiz dahil) `transfers` tablosuna kind='yeniden-adlandirma' ile yazilir.
+   * @param {{customer: string, oldName: string, newName: string, machineIds: string[], confirm: string, by?: string|null, clientIp?: string|null}} p
+   */
+  async renameAcrossMachines({ customer, oldName, newName, machineIds, confirm, by = null, clientIp = null }) {
+    if (!this.transferEnabled) throw new DisabledError('Tezgaha yazma kapalı (TRANSFER_DISABLED=1).');
+    if (!Array.isArray(machineIds) || machineIds.some((x) => typeof x !== 'string')) {
+      throw new ValidationError('machineIds bir metin listesi olmalı.');
+    }
+    const unique = [...new Set(machineIds)];
+    if (unique.length === 0) return { machines: 0, results: [] };
+    const expected = unique.length === 1 ? unique[0] : String(unique.length);
+    if (String(confirm ?? '') !== expected) {
+      throw new ValidationError(unique.length === 1
+        ? `Onay için tezgah kimliğini yazın: "${expected}".`
+        : `Onay için tezgah sayısını yazın: ${expected}.`);
+    }
+    const cleanCustomer = validateCustomer(customer);
+    const cleanNew = validateProgramName(newName);
+    const cleanOld = String(oldName ?? '').trim();
+    if (!cleanOld) throw new ValidationError('Eski ad geçersiz.');
+    const results = [];
+    for (const machineId of unique) {
+      results.push(await this.#renameOnMachine({ machineId, customer: cleanCustomer, oldName: cleanOld, newName: cleanNew, by, clientIp }));
+    }
+    return { machines: unique.length, results };
+  }
+
+  /** Bir tezgahta TEK dosyanin FTP RNFR/RNTO ile yeniden adlandirilmasi (bkz. renameAcrossMachines). */
+  async #renameOnMachine({ machineId, customer, oldName, newName, by, clientIp }) {
+    let machine;
+    try { machine = this.#machine(machineId); } catch (err) { return { machineId, outcome: 'hata', detail: err.message }; }
+    const policy = sendPolicy(machine);
+    if (!policy.allowed) return { machineId, outcome: 'atlandi', detail: `${policy.model}: ${policy.reason}` };
+    try {
+      return await this.#lock(machineId, 'yeniden adlandırma', () => this.#doRenameOnMachine(machine, { customer, oldName, newName, by, clientIp }));
+    } catch (err) {
+      if (err instanceof BusyError) return { machineId, outcome: 'atlandi', detail: err.message };
+      throw err;
+    }
+  }
+
+  async #doRenameOnMachine(machine, { customer, oldName, newName, by, clientIp }) {
+    const db = this.library.db;
+    const transferId = db.startTransfer({ kind: 'yeniden-adlandirma', machineId: machine.id, customer, name: newName, requestedBy: by, clientIp });
+    const steps = [];
+    const timed = stepRecorder(steps);
+    let status = 'basarisiz';
+    let outcome = 'hata';
+    let error = null;
+    let notFound = false;
+
+    // Canli veri yoksa (ajan baglanmamis/tezgah kapali): hangi programin calistigi bilinmiyor, riske atilmaz.
+    // Gonderme'deki "unknown-state" onayinin aksine burada ek bir ack ISTENMEZ: bu tezgah icin yalnizca atlanir.
+    const live = this.liveInfo(machine.id);
+    if (!live?.connected) {
+      error = 'tezgahtan canlı veri gelmiyor: çalışan program bilinmediği için adı değiştirilmedi';
+      db.finishTransfer(transferId, { status: 'reddedildi', error, steps });
+      return { machineId: machine.id, outcome: 'atlandi', detail: error, transferId };
+    }
+
+    const ftp = this.ftpOptionsFor(machine);
+    try {
+      await withFtp(ftp, async (c) => {
+        if (customer !== '') {
+          const root = parseList(await c.listRaw()).entries;
+          const dir = root.find((e) => e.isDir && e.name.toLowerCase() === customer.toLowerCase());
+          if (!dir) { const e = new Error(`tezgahta "${customer}" klasörü yok`); e.notFound = true; throw e; }
+          await c.cwd(dir.name);
+        }
+        let found;
+        await timed('on-kontrol', async () => {
+          const running = [live.program, live.mainProgram].filter(Boolean).map(baseName);
+          if (running.includes(oldName.toLowerCase())) {
+            const e = new Error('torna şu an bu programı çalıştırıyor/seçili (adı değiştirilmedi)');
+            e.rejected = true;
+            throw e;
+          }
+          const entries = parseList(await c.listRaw()).entries;
+          found = entries.find((e) => e.name.toLowerCase() === oldName.toLowerCase());
+          if (!found) { const e = new Error('tezgahta bu adla dosya yok (başka biri silmiş/değiştirmiş olabilir)'); e.notFound = true; throw e; }
+          if (found.isDir) { const e = new Error(`"${oldName}" adıyla bir klasör var, dosya değil`); e.rejected = true; throw e; }
+          const clash = entries.find((e) => e.name.toLowerCase() === newName.toLowerCase());
+          if (clash) { const e = new Error(`hedefte zaten "${clash.name}" adlı bir dosya/klasör var; üzerine yazılmaz`); e.rejected = true; throw e; }
+          return `${found.name} bulundu (${found.size ?? '—'} bayt)`;
+        });
+        await timed('yeniden-adlandir', async () => { await c.rename(found.name, newName); return `${found.name} → ${newName}`; });
+        await timed('dogrula', async () => {
+          const entries = parseList(await c.listRaw()).entries;
+          if (!entries.some((e) => e.name.toLowerCase() === newName.toLowerCase())) throw new Error('yeni ad listede görünmüyor');
+          if (entries.some((e) => e.name.toLowerCase() === oldName.toLowerCase())) throw new Error('eski ad hâlâ duruyor');
+          return 'doğrulandı';
+        });
+        db.renameInventoryEntry(machine.id, customer, found.name, newName);
+      });
+      status = 'basarili';
+      outcome = 'degisti';
+    } catch (err) {
+      error = err.message;
+      notFound = !!err.notFound;
+      if (notFound) { status = 'reddedildi'; outcome = 'bulunamadi'; db.removeInventory(machine.id, customer, oldName); }
+      else if (err.rejected) { status = 'reddedildi'; outcome = 'atlandi'; }
+      else { status = steps.some((s) => s.step === 'yeniden-adlandir' && s.ok) ? 'dogrulanamadi' : 'basarisiz'; outcome = 'hata'; }
+    }
+
+    db.finishTransfer(transferId, { status, error, steps });
+    return { machineId: machine.id, outcome, detail: error, transferId };
   }
 
   /* ------------------------------------------- toplu iceri alma (plan + uygula) */

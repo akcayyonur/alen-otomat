@@ -123,7 +123,7 @@ test('plan: klasor secimi yalniz o klasorleri okur (kok ve digerleri hayir), env
   } finally { await t.kapat(); }
 });
 
-test('plan: TRANSFER_DISABLED ve 22TB (yazma kapali model) OKUMAYI engellemez', async () => {
+test('plan: TRANSFER_DISABLED ve farkli kontrolcu modeli (22TB) OKUMAYI engellemez (plan yalniz okur, yazma kapisina hic bakmaz)', async () => {
   const t = await kur({ disabled: true, seed: tohum });
   try {
     t.machines.push({ id: 'CNC-22', name: 'Torna 22', ip: '127.0.0.1', driverId: 'syntec-remoteapi', controllerModel: '22TB' });

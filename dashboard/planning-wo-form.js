@@ -40,10 +40,13 @@ export async function openWorkOrderForm(no, { onEdit = null } = {}) {
       ? `İş emri formu + ${drawings.length} teknik resim PDF'i (${pages} sayfa) tek dosyada: <b>Yazdır</b> hepsini birlikte basar (form ön, resimler arka sayfalar).`
       : 'İş emri formu. Bu iş emrinde teknik resim yok; yönetici iş emrini düzenlerken PDF yükleyebilir.') +
     '</p>' +
-    // toolbar=0: Chrome'un gomulu PDF goruntuleyicisi bu parametreyi yok sayiyor (bilinen sinirlama, kod
-    // tarafindan duzeltilemez - kritikte "cift kontrol" diye gecen budur), ama bazi diger goruntuleyicilerde
-    // (ör. Firefox'un PDF.js'i) kendi arac cubugunu gizliyor; zararsiz oldugu icin yine de ekleniyor.
-    `<iframe class="pl-f-pdf" title="İş emri formu ve teknik resimler (PDF)" src="${url}#view=FitH&pagemode=none&toolbar=0&navpanes=0"></iframe>`;
+    // toolbar/navpanes GIZLENMEZ (2026-10-30, tablet hatasi duzeltmesi): daha once toolbar=0&navpanes=0
+    // veriliyordu. Chrome bunu yok sayiyordu (zararsizdi) ama tablette kullanilan goruntuleyici (Fully
+    // Kiosk gibi WebView tabanli tarayicilar PDF.js kullanabilir) bunu UYGULUYOR ve sayfa gezinme/kaydirma
+    // denetimlerini (sonraki sayfa oku, sayfa numarasi) de birlikte gizliyordu; kullanici dokunmatikte
+    // ikinci sayfaya (teknik resimlere) hic gecemiyordu. Goruntuleyicinin kendi denetimleri HER ZAMAN
+    // gorunur kalsin diye bu parametreler kaldirildi.
+    `<iframe class="pl-f-pdf" title="İş emri formu ve teknik resimler (PDF)" src="${url}#view=FitH"></iframe>`;
   const frame = m.body.querySelector('iframe');
   m.body.querySelector('[data-act="print"]').addEventListener('click', () => {
     // PDF görüntüleyicisinin kendi yazdırma penceresi: form + resimler tek iş. Tarayıcı izin vermezse PDF yeni sekmede açılır (oradan yazdırılır).

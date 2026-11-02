@@ -7,30 +7,57 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, planningRole, rememberedPerson, rememberPerson, openListPrint, woStatusChip, truncCell } from './planning-common.js';
+import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, canWrite, rememberedPerson, rememberPerson, openListPrint, printModal, woStatusChip, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
 import { openGkkPicker } from './planning-gkk.js';
 
 const plainDate = (ms) => (ms ? new Date(ms).toLocaleDateString('tr-TR') : '');
 
+/**
+ * NUMUNE KARTI: ilk onay numarası alınan numuneye takılan kâğıt kart (A5 dikey, ürün tanıtım kartıyla aynı düzen/tablo).
+ * Kod İLK BASKI/NUMUNE NO olarak basılır (ayrıca bir kart sırası YOK, numarayı ilk onay kodu verir).
+ * @param {{code: string, stockCode?: string|null, woNo?: string|null, gkCode?: string|null, operator?: string|null, cncNo?: number|null, approvedOn?: number|null}} a
+ * @param {string|null} customerCode
+ */
+function numuneCardHtml(a, customerCode) {
+  const plain = (v) => (v === null || v === undefined || v === '' ? '&nbsp;' : escapeHtml(v));
+  const row = (label, value) => `<tr><th scope="row">${label}</th><td>${plain(value)}</td></tr>`;
+  return (
+    '<div class="pl-card">' +
+    '<div class="pl-c-head"><div class="pl-c-title">NUMUNE KARTI</div></div>' +
+    '<table class="pl-c-table"><tbody>' +
+    row('TARİH', plainDate(a.approvedOn)) +
+    row('İLK BASKI/NUMUNE NO', a.code) +
+    row('ALEN ÜRÜN KODU', a.stockCode) +
+    row('MÜŞTERİ ÜRÜN KODU', customerCode) +
+    row('İŞ EMRİ NO', a.woNo) +
+    row('GKK RAPOR NO', a.gkCode) +
+    row('OPERATÖR İSMİ', a.operator) +
+    row('CNC NO', a.cncNo == null ? null : String(a.cncNo)) +
+    '</tbody></table>' +
+    `<p class="pl-c-foot">Sistemden basıldı ${escapeHtml(new Date().toLocaleString('tr-TR', { hour12: false }))}</p>` +
+    '</div>'
+  );
+}
+
 /** @param {HTMLElement} host */
 export function renderApprovals(host) {
-  const role = planningRole();
-  const admin = role === 'admin';
+  const admin = isAdminRole();
+  const yazabilir = canWrite('ilkonay');
   const st = { q: '', year: '', items: [], total: 0, next: null, years: [], seq: 0 };
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search pl-search-big" data-role="q" placeholder="Kod, ürün kodu, GK kodu, iş emri no ya da operatör ara…" aria-label="İlk onay ara" autocomplete="off">' +
     '<label class="fld-inline">Yıl <select data-role="year"><option value="">Tümü</option></select></label>' +
     '<button type="button" class="icon-btn" data-act="print">Listeyi yazdır</button>' +
     (admin ? '<button type="button" class="icon-btn" data-act="seq">Numara tabanı…</button><button type="button" class="icon-btn" data-act="manual">Elle kayıt…</button>' : '') +
-    (role !== 'viewer' ? '<button type="button" class="icon-btn btn-primary" data-act="from-wo">İş emrinden numara al…</button>' : '') + '</div>' +
+    (yazabilir ? '<button type="button" class="icon-btn btn-primary" data-act="from-wo">İş emrinden numara al…</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
   function draw() {
     $('count').innerHTML = st.total === 0
-      ? (st.q || st.year ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${role !== 'viewer' ? ' İlk parça ölçülünce "İş emrinden numara al…" ile ilk numarayı alın.' : ''}`)
+      ? (st.q || st.year ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${yazabilir ? ' İlk parça ölçülünce "İş emrinden numara al…" ile ilk numarayı alın.' : ''}`)
       : `${fmtNum(st.total)} kayıt · sıradaki kod <b class="mono">${escapeHtml(st.next?.code ?? '—')}</b>`;
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>İlk baskı onay kodu</th><th>Ürün kodu</th><th>GK- kodu</th><th>İş emri no</th><th>Tarih</th><th>Operatör</th><th class="num">CNC no</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +
@@ -93,10 +120,11 @@ export function renderApprovals(host) {
 
 /**
  * Bir iş emri için ilk onay numarası alır (usta tezgah başında; yönetici de). Daha önce numara verilmişse uyarır ve onay ister.
+ * Numara alınınca pencere kapanmaz: numune kartı önizlemesi gösterilir, "Numune kartı çıktısı al" ile basılır (ürün tanıtım kartı bas'a benzer).
  * @param {string} woNo @param {(a: object) => void} [onDone]
  */
 export async function createFirstApproval(woNo, onDone = () => {}) {
-  const m = openModal({ title: `İlk onay numarası al · ${woNo}` });
+  const m = openModal({ title: `İlk onay numarası al · ${woNo}`, wide: true });
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
   let w;
   try { w = await api(`/api/planning/work-orders/${encodeURIComponent(woNo)}`); } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`; return; }
@@ -123,12 +151,15 @@ export async function createFirstApproval(woNo, onDone = () => {}) {
     rememberPerson(form.elements.person.value);
     try {
       const a = await post('/api/planning/first-approvals', { woNo, person: form.elements.person.value, ...(have.length ? { again: true } : {}) });
+      m.dlg.classList.add('pl-form-dlg'); // kartı yazdırabilmek için (bkz. planning-card.js openIssueCard)
       m.body.innerHTML =
+        '<div class="pl-form-actions">' +
         '<div class="notice"><b>İlk onay numarası alındı</b></div>' +
-        `<p class="pl-bigcode">${escapeHtml(a.code)}</p>` +
-        `<p class="hint">Ürün <span class="mono">${escapeHtml(a.stockCode ?? '')}</span> · GK <span class="mono">${escapeHtml(a.gkCode ?? '—')}</span> · iş emri <span class="mono">${escapeHtml(a.woNo ?? '')}</span> · CNC ${a.cncNo ?? '—'} · ${escapeHtml(plainDate(a.approvedOn))}${a.operator ? ` · ${escapeHtml(a.operator)}` : ''}. ` +
-        'İş emrinin "ilk onay rapor no" alanına yazıldı; ölçüm raporuna/numuneye bu kodu yazın.</p>' +
-        '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="close">Tamam</button></div>';
+        `<p class="hint">İş emrinin "ilk onay rapor no" alanına yazıldı. Numuneye takmak için kartı basın, ölçüm raporuna da bu kodu yazın.</p>` +
+        '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Numune kartı çıktısı al</button>' +
+        '<button type="button" class="icon-btn" data-act="close">Kapat</button></div></div>' +
+        `<div data-role="card">${numuneCardHtml(a, w.customerCode)}</div>`;
+      m.body.querySelector('[data-act="print"]').addEventListener('click', printModal);
       onDone(a);
     } catch (e2) {
       err.textContent = e2.message;

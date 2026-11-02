@@ -41,7 +41,7 @@ const HISTORY_REFRESH_MS = 10_000;
 const state = {
   /** @type {object|null} */ snapshot: null,
   /** @type {'fleet'|'machine'|'config'|'library'|'production'|'planning'|'apps'} */ view: 'fleet',
-  /** @type {'tezgahbasi'|'paketleme'|'isemirleri'|'gkk'|'ilkonay'|'olcuraporlari'|'verimlilik'|'cizelgeleme'|'hammadde'|'urunler'|'siparisler'|'programlar'} planlama ekraninda secili sekme */ planningTab: 'isemirleri',
+  /** @type {'tezgahbasi'|'paketleme'|'isemirleri'|'gkk'|'ilkonay'|'olcuraporlari'|'verimlilik'|'cizelgeleme'|'hammadde'|'urunler'|'siparisler'|'programlar'|'fiyat'} planlama ekraninda secili sekme */ planningTab: 'isemirleri',
   /** @type {string|null} */ selected: null,
   /** @type {number|null} kutuphane ekraninda secili program */ programId: null,
   window: '30m',
@@ -55,20 +55,20 @@ const refs = {};
 
 /* ------------------------------------------------------------------ yonlendirme */
 
-/** Rolun giris adresi: birden cok uygulamasi varsa secim ekrani, tek uygulamasi varsa dogrudan o (izleyici: filo, operator: tezgah basi). */
-function homeHash(role) {
-  const apps = appsFor(role);
+/** Kullanicinin giris adresi: birden cok uygulamasi varsa secim ekrani, tek uygulamasi varsa dogrudan o. */
+function homeHash(user) {
+  const apps = appsFor(user);
   if (apps.length >= 2) return '#/uygulamalar';
-  if (apps.length === 1) return apps[0].key === 'planlama' ? `#/planlama/${defaultPlanningTab(role)}` : apps[0].entry;
+  if (apps.length === 1) return apps[0].key === 'planlama' ? `#/planlama/${defaultPlanningTab(user)}` : apps[0].entry;
   return '#/filo';
 }
 
 function readRoute(depth = 0) {
   const hash = location.hash.replace(/^#/, '');
-  const role = getSession()?.user?.role;
+  const user = getSession()?.user;
   const m = /^\/tezgah\/(.+)$/.exec(hash);
   const lm = /^\/programlar(?:\/(\d+))?$/.exec(hash);
-  const pm = /^\/planlama(?:\/(tezgahbasi|paketleme|isemirleri|gkk|ilkonay|olcuraporlari|verimlilik|cizelgeleme|hammadde|urunler|siparisler|programlar))?$/.exec(hash);
+  const pm = /^\/planlama(?:\/(tezgahbasi|paketleme|isemirleri|gkk|ilkonay|olcuraporlari|verimlilik|cizelgeleme|hammadde|urunler|siparisler|programlar|fiyat))?$/.exec(hash);
   if (m) {
     state.view = 'machine';
     state.selected = decodeURIComponent(m[1]);
@@ -85,7 +85,7 @@ function readRoute(depth = 0) {
   } else if (pm) {
     state.view = 'planning';
     state.selected = null;
-    state.planningTab = pm[1] ?? defaultPlanningTab(role);
+    state.planningTab = pm[1] ?? defaultPlanningTab(user);
   } else if (hash === '/uygulamalar' || hash === '' || hash === '/') {
     state.view = 'apps';
     state.selected = null;
@@ -96,18 +96,18 @@ function readRoute(depth = 0) {
 
   // Yetkisiz ekrana (adres cubuguna yazilsa bile) girilmez: kendi giris adresine doner. Sunucu bu uclari zaten reddeder;
   // burasi yalniz bos/hatali bir ekran gostermemek icindir.
-  const allowed = new Set(appsFor(role).map((a) => a.key));
+  const allowed = new Set(appsFor(user).map((a) => a.key));
   const appKey = state.view === 'planning' ? 'planlama' : state.view === 'apps' ? 'apps' : 'telemetri';
-  const adminOnlyTelemetry = state.view === 'library' || state.view === 'config'; // viewer'a kapali telemetri ekranlari
-  const denied = appKey === 'apps' ? allowed.size < 2 : !allowed.has(appKey) || (adminOnlyTelemetry && role !== 'admin');
+  const adminOnlyTelemetry = state.view === 'library' || state.view === 'config'; // admin-disina kapali telemetri ekranlari
+  const denied = appKey === 'apps' ? allowed.size < 2 : !allowed.has(appKey) || (adminOnlyTelemetry && !user?.isAdmin);
   if (denied) {
-    const home = homeHash(role);
+    const home = homeHash(user);
     if (location.hash !== home) history.replaceState(null, '', home);
-    if (depth < 2 && hash !== home.replace(/^#/, '')) return readRoute(depth + 1); // en cok iki kez: yetkisiz rolde sonsuz dongu olmasin
+    if (depth < 2 && hash !== home.replace(/^#/, '')) return readRoute(depth + 1); // en cok iki kez: yetkisiz kullanicida sonsuz dongu olmasin
   }
-  // planlama bolumu rolun gorebildigi bolumlerden degilse (operator: yalniz tezgah basi) varsayilana doner
-  if (state.view === 'planning' && !planningTabsFor(role).includes(state.planningTab)) {
-    state.planningTab = defaultPlanningTab(role);
+  // planlama bolumu kullanicinin gorebildigi bolumlerden degilse varsayilana doner
+  if (state.view === 'planning' && !planningTabsFor(user).includes(state.planningTab)) {
+    state.planningTab = defaultPlanningTab(user);
     history.replaceState(null, '', `#/planlama/${state.planningTab}`);
   }
   if (state.view === 'apps' && hash !== '/uygulamalar') history.replaceState(null, '', '#/uygulamalar');
@@ -542,7 +542,7 @@ function syncChrome(view) {
   refs.app.dataset.app = app;
   refs.sidebar.hidden = !tele;
   // tek bolumlu kullanicida (operator: yalniz tezgah basi) yan menu gereksiz
-  refs.planNav.hidden = app !== 'planlama' || (planningTabsFor(getSession()?.user?.role).length < 2 && !isAdmin());
+  refs.planNav.hidden = app !== 'planlama' || (planningTabsFor(getSession()?.user).length < 2 && !isAdmin());
   refs.conn.hidden = !tele;
   refs.footer.hidden = !tele;
   refs.appsView.hidden = app !== 'apps';
@@ -554,7 +554,7 @@ function syncChrome(view) {
   if (app === 'planlama') refs.title.textContent = 'Planlama';
   else if (app === 'apps') refs.title.textContent = 'Uygulama Seçimi';
   document.title = app === 'planlama' ? 'Planlama' : app === 'apps' ? 'CNC Telemetri Platformu' : 'CNC Filo Telemetrisi';
-  refs.appsBtn.hidden = app === 'apps' || appsFor(getSession()?.user?.role).length < 2;
+  refs.appsBtn.hidden = app === 'apps' || appsFor(getSession()?.user).length < 2;
   fitSidebars(); // hangi yan menu gorunuyorsa yuksekligi yeniden olculur
 }
 
@@ -562,7 +562,7 @@ function render() {
   syncChrome(state.view);
   // Telemetri verisine bagli olmayan iki ekran: SSE'nin ilk karesini beklemeden cizilir.
   if (state.view === 'apps') {
-    if (state.prevView !== 'apps') renderApps(refs.appsView, appsFor(getSession()?.user?.role), getSession()?.authDisabled ? undefined : getSession()?.user);
+    if (state.prevView !== 'apps') renderApps(refs.appsView, appsFor(getSession()?.user), getSession()?.authDisabled ? undefined : getSession()?.user);
     state.prevView = 'apps';
     return;
   }

@@ -270,10 +270,13 @@ fonksiyonu çalıştı, `READ_nc_current_block` **-18** (11B ile aynı); ham de�
 `Alarm/EMG=****` (11B sözlüğüyle aynı). Ajan (`--model 22TB`) + gerçek backend + dashboard uçtan uca: 38 okuma = 38
 gönderim, 0 düşen, çıkış kodu 0, kapanışta açık bağlantı 0, dashboard'da `SYNTEC 22B · 10.118.88T`, durum IDLE.
 
-(Gerçek tornada okuma + FTP okuma sonradan doğrulandı, yukarıya bakın.) **22TB'de program GÖNDERME kapalıdır**
-(`config/drivers.json` → `models[22TB].fileTransfer.sendEnabled = false`): FTP'de yazma gerçek 22TB'de denenmedi.
-Tarama (salt okunur) ve okuma açıktır. Sıradaki: tek kontrollü gönderme testi (yeni test adı, boş/yeni klasör), sonra
-`sendEnabled` true.
+(Gerçek tornada okuma + FTP okuma sonradan doğrulandı, yukarıya bakın.) **22TB'de program GÖNDERME 2026-10-30'da AÇILDI**
+(`config/drivers.json` → `models[22TB].fileTransfer.sendEnabled = true`, kullanıcı kararı — **FTP'de yazma gerçek 22TB'de
+hâlâ hiç denenmedi**; kullanıcı kendi yeni/izole bir test klasöründe, mevcut müşteri klasörlerine dokunmadan, kontrollü
+ilk denemeyi kendisi yapacak). **Silme (`deleteEnabled`) ayrıca ve hâlâ kapalı.** Bu, 22TB kapısından geçen HER yazma
+yolunu açar — tek program gönderme, yeni klasör açma (`MKD`) VE **toplu gönderme** (ezerek yazan, bkz. aşağıdaki "Toplu
+gönderme"); hiçbiri 22TB'de daha önce denenmedi. İlk gerçek sonuç bu bölüme ve §10'a işlenmeli; sorun çıkarsa
+`config/drivers.json`'da `sendEnabled` yeniden `false` yapılabilir. Tarama (salt okunur) ve okuma zaten açıktı.
 
 ### ✅ İkinci gerçek tezgahta doğrulandı — 2026-10-06, 192.168.88.98
 
@@ -523,9 +526,9 @@ Ayrıntı: §6 "Çizelgeleme / optimizasyon".
 - **`config/` dosyalarının hepsi kurulur (2026-10-15 düzeltmesi):** `cnc-telemetri.iss` önceden yalnız `drivers.json` ve `machines.json`'ı tek tek listeliyordu; **`downtime-codes.json` listede yoktu**,
   yani Setup ile kurulan/güncellenen PC'de sunucu açılışta duruş kodlarını okuyamayıp BAŞLAMAZDI (0.11.0'dan beri gizli hata; duman testi pakete bakıp kuruluma bakmadığı için yakalamıyordu). Artık `config/*` jokeriyle (`Excludes: machines.json`) alınır;
   `machines.json` kendi satırında (`onlyifdoesntexist`) kalır. Inno Setup'la sahte paketle derlenerek doğrulandı (jokerin `machines.json`'ı dışarıda bıraktığı ve `downtime-codes.json`/`features.json`'ı aldığı).
-- **Kurulumda kapalı Planlama bölümleri (0.18.0, 2026-10-15, kullanıcı kararı):** henüz rafine edilmeyen bölümler bir kuruluma girmeden kapatılır. `build-installer.ps1 -KapaliBolumler` (**varsayılan `paketleme, hammadde`**; `@()` = hepsi açık; geçerli: `paketleme`, `hammadde`)
+- **Kurulumda kapalı Planlama bölümleri (0.18.0, 2026-10-15; varsayılan 2026-11-02'de değişti):** bir bölüm kuruluma hiç girmeden kapatılabilir. `build-installer.ps1 -KapaliBolumler` (**varsayılan artık `@()` = hepsi açık** — kullanıcının tekrar tekrar belirttiği karar: yönetici için Planlama'da kapalı bölüm OLMAMALI; `'hammadde'`/`'paketleme'` yalnız kullanıcı açıkça isterse verilir)
   paketin `config/features.json` dosyasını yazar (depodaki dosya her şeyi AÇIK bırakır: geliştirme/demo etkilenmez). Duman testi paketlenmiş sunucuda tek kullanımlık yönetici hesabıyla (geçici veritabanı, rastgele şifre) oturumun bölüm listesini ve kapalı uçların 403 verdiğini denetler.
-  Yeniden açmak = yeni kurulum paketi (`-KapaliBolumler @()`); kurulu PC'de `C:/CNC-Telemetri/config/features.json` düzenlenip sunucu yeniden başlatılarak da olur ama arayüzde düğme YOK (bilinçli). Ayrıntı: aşağıda "Kurulumda kapalı bölümler".
+  Sonradan kapatmak = yeni kurulum paketi (`-KapaliBolumler 'hammadde'`); kurulu PC'de `C:/CNC-Telemetri/config/features.json` düzenlenip sunucu yeniden başlatılarak da olur ama arayüzde düğme YOK (bilinçli). Ayrıntı: aşağıda "Kurulumda kapalı bölümler".
 - **Denenmedi:** Setup.exe'nin yükseltilmiş (UAC) kurulumu — görevler, güvenlik
   duvarı, açılışta başlatma. Ajan SYSTEM hesabıyla gerçek tezgahta çalıştırılmadı.
   Masaüstü uygulamasının pencere ve UAC yolları da elle denenmedi (mantığı gerçek
@@ -617,15 +620,39 @@ Satır sonu (CRLF/LF) ve kodlama (UTF-8/Latin-1, BOM korunur) sunucuda uygulanı
 dokunulmayan dosya bayt bayt aynı çıkar (`preview().roundTrip`, karışık satır sonu bildirilir). Aynı (müşteri, ad) ile "yeni program"
 409; editör açılırken başka sürüm oluştuysa 409 `newer-version` (arayüz "yine de kaydet" sunar).
 
-**Kütüphanede program adını değiştirme (2026-10-26):** program ayrıntısında "Adını değiştir…" (`library-rename-view.js`); yalnız **kütüphane
-kaydının** adı değişir, aynı müşteri klasöründe (klasör taşıma yok), sürümler/içerik/gönderme geçmişi dokunulmaz. Tezgaha HİÇ YAZILMAZ: bu
-yüzden "Program gönder" gibi tezgah kimliğini yazarak onay istemez, Kaydet yeterlidir. Tezgahtaki dosya **eski adıyla kalır** (yeniden
-gönderilene kadar): rename sonrası matris/karşılaştırmada eski ad "kütüphanede yok", yeni ad o tezgahta "tezgahta yok" görünür — bu pencerede
-söylenir. Aynı (büyük/küçük harf duyarsız) ada 409; `program_backups` (toplu gönderimde ezilen tornadaki yedekler) aynı adla izlenebilsin diye
-yeni adla birlikte taşınır, ama `transfers` (gönderme geçmişi, donmuş kayıt) ve `machine_programs` (son taramadaki envanter, fiziksel gerçek)
-BİLEREK değişmez. Denetim kaydı `library_log`'a `program-yeniden-adlandirma` olarak yazılır (eski/yeni ad). Uç: `POST /api/library/programs/:id/rename`
-(`{name}`, 200/400/404/409). Testi `backend/programs/library-rename.test.js` (9). **`npm run demo:programlar` sahte tornalarıyla uçtan uca
-denendi** (ad değişti, sürümler aynı kaldı, çakışan ada 409, tezgahlardaki durumu doğru "yok" gösterdi); gerçek tornaya hiç dokunmaz.
+**Kütüphanede program adını değiştirme (2026-10-26):** program ayrıntısında "Adını değiştir…" (`library-rename-view.js`); **kütüphane
+kaydının** adı değişir, aynı müşteri klasöründe (klasör taşıma yok), sürümler/içerik/gönderme geçmişi dokunulmaz. Aynı (büyük/küçük harf
+duyarsız) ada 409; `program_backups` (toplu gönderimde ezilen tornadaki yedekler) aynı adla izlenebilsin diye yeni adla birlikte taşınır, ama
+`transfers` (gönderme geçmişi, donmuş kayıt) ve `machine_programs` (son taramadaki envanter, fiziksel gerçek) BİLEREK değişmez. Denetim kaydı
+`library_log`'a `program-yeniden-adlandirma` olarak yazılır (eski/yeni ad). Uç: `POST /api/library/programs/:id/rename` (`{name}`, 200/400/404/409).
+Testi `backend/programs/library-rename.test.js` (9).
+
+**Tornadaki dosyanın adı da değiştirilir (2026-10-30, kullanıcı isteği):** "yalnız kütüphanede değişiyor, tezgahta da değişsin" — rename
+penceresi artık bu programın **kopyası olan tezgahları** (matristen, `status` "tezgahta-yok"/"taranmadı" dışındaki her durum: güncel/eski/farklı/
+belirsiz) gösterir ve kaydedince o tezgahlardaki dosyayı da **FTP RNFR/RNTO** ile yeniden adlandırır (**içerik hiç dokunulmaz**, yalnız ad; yeniden
+yükleme/doğrulama gerekmez — toplu göndermenin aksine). Kopyası olan tezgah yoksa davranış eskisi gibi kalır (yalnız kütüphane, onay istenmez).
+- **Ayrı bir gerçek tezgah YAZMASI olduğu için ayrıca onay ister:** 1 tezgah → tezgah kimliği, >1 tezgah → tezgah **SAYISI** (kütüphaneden toplu
+  silmedeki "yanlış seçimi önler" deseniyle aynı); 0 tezgah → hiç FTP'ye gidilmez. Bu onay, kütüphane adının zaten değişmiş olmasını ENGELLEMEZ:
+  tezgah adımı reddedilir/başarısız olursa kütüphane adı yine de değişmiş kalır (geri alınmaz), sonuç ayrıca bildirilir — rename'in zaten var olan
+  "tezgahtaki dosya eski adla kalabilir" toleransının doğal uzantısı.
+- **Her tezgah BAĞIMSIZ değerlendirilir** (`MachineFiles.renameAcrossMachines` → tezgah başına `#doRenameOnMachine`, sıralı): model kapısı kapalıysa,
+  tezgah başka bir işlemle meşgulse, **canlı veri yoksa** (ajan bağlı değil: hangi programın çalıştığı bilinmiyor, riske atılmaz — gönderme'deki
+  `unknown-state` onayının aksine burada ek onay İSTENMEZ, o tezgah için sessizce **atlanır**), çalışan/seçili programsa, ya da **hedefte zaten o
+  adda dosya varsa** (ÜZERİNE YAZILMAZ) o tezgah için atlanır/reddedilir; diğerlerini etkilemez. Tezgahta dosya artık yoksa (`bulunamadı`) envanterdeki
+  artık kayıt da kaldırılır. Her deneme (reddedilenler dahil) `transfers` tablosuna **`kind='yeniden-adlandirma'`** ile yazılır (adımlar: `on-kontrol`,
+  `yeniden-adlandir`, `dogrula`); başarılı olursa `machine_programs` (envanter) satırı da yeni adla güncellenir (`LibraryDb.renameInventoryEntry`).
+- Uç: `POST /api/library/programs/:id/rename-on-machines` (`{customer, oldName, newName, machineIds, confirm}` → `{machines, results[]}`; `machineIds`
+  **dashboard'un ekranda gösterdiği** liste — sunucu kendi envanterinden yeniden hesaplamaz, onay metni ekranla birebir tutarlı kalsın diye).
+- Testi `backend/programs/library-rename-machine.test.js` (11: tek/çoklu tezgah onayı, çalışan program korunur, hedef ad çakışması, dosya yok,
+  canlı veri yok, model kapısı, `TRANSFER_DISABLED`, HTTP). **`npm run demo:programlar`'daki İKİ sahte tornaya (CNC-07, CNC-08) karşı tarayıcıda
+  uçtan uca denendi**: 2 tezgahlı bir programda onay "2" istendi, ikisi de bağımsız `RNFR`/`RNTO` ile değişti, gönderme geçmişinde "↻ yeniden
+  adlandırma" satırı olarak ✓ Başarılı görünüdü; 0 tezgahlı bir programda (kök, hiç taranmamış) onay hiç istenmedi, yalnız kütüphane ucu gitti.
+  **Yan bulgu (bu testte bulunup düzeltildi):** "Kütüphaneden silinenler" ekranı `library_log`'daki HER satırı (silme VE 2026-10-26'dan beri
+  yeniden adlandırma da buraya yazıyordu) "− silindi" diye gösteriyordu — rename kaydı yanlışlıkla silinmiş gibi görünüyordu. Ekran "Kütüphane
+  kayıt defteri" oldu, satır kendi `action`'ına göre çizilir (`library-view.js` `renderLibLog`).
+- **GERÇEK TORNADA DENENMEDİ** (yalnız sahte FTP + demo). `RNFR`/`RNTO`'nun gerçek tornadaki davranışı §3'teki "doğrulanmayanlar" listesinde zaten
+  var (toplu gönderme de aynı birincil ilkele dayanıyor); bu özellik ekstra olarak gerçek tornada hiç yük (büyük klasör, çok sayıda eşzamanlı
+  tezgah) altında denenmedi.
 
 **Tezgahta yeni müşteri klasörü (2026-10-08):** gönderme klasör AÇMAZ; klasör ayrı, onaylı bir işlemle açılır
 (`MachineFiles.createFolder`, FTP `MKD`; tek tezgah, tezgah kimliğini yazarak onay, denetim kaydı `kind='klasor'`). Ad: yalnız
@@ -646,7 +673,7 @@ Alınan sürümlerin `source=tezgah-tarama`, `created_by` = kullanıcı, `note` 
 
 **Tornadan program silme (2026-10-12, FTP `DELE`):** tezgah panelinde dosya satırında "Sil…". **Geri dönüşsüz**, bu yüzden: (a) **silme kapısı** — yazma kapısından
 (`sendPolicy`) geçer VE modelin `fileTransfer.deleteEnabled` değeri true olmalı. **11TB için 2026-10-13'te fabrika sahibi kararıyla AÇILDI** (`config/drivers.json`);
-**22TB kapalı** (önce yazma kapısı `sendEnabled` açılmalı). **`DELE` gerçek tornada hâlâ denenmedi**: ilk silme kendi gönderdiğimiz bir `ZZTEST…` dosyasıyla olmalı.
+**22TB'de yazma 2026-10-30'da açılmasına RAĞMEN silme AYRICA ve hâlâ kapalı** (`deleteEnabled:false`, bilinçli — geri dönüşsüz, önce yazma kendi başına doğrulanmalı). **`DELE` gerçek tornada hâlâ denenmedi**: ilk silme kendi gönderdiğimiz bir `ZZTEST…` dosyasıyla olmalı.
 **Acil kapatma: sunucuyu `DELETE_DISABLED=1` ile başlat** (yapılandırma açık olsa da silme kapanır; `DELETE_ENABLED=1` (eski doğrulama bayrağı, artık gerekmez) acil anahtardan zayıftır;
 `scripts/demo-programlar.js` sahte tornalar için verir); (b) onay metni = **program adı** (birebir);
 (c) ön kontrol (tornaya yalnız okuma): çalışan/seçili program silinmez, sistem dosyası (`MDIBlock`) ve klasör silinmez, kök dizin dosyası `root-target` onayı ister,
@@ -678,7 +705,7 @@ programlara DOKUNULMAZ: usta onları sonra "Tüm programları kütüphaneye al�
   Operatör dosyayı plandan sonra değiştirdiyse yedeklenen PLAN ANINDAKİ değil O ANKİ hâldir (yan ada alıp sonra okumak yarışı kapatır). Bağlantı kopması 3 yeniden bağlanmaya kadar denenir, sonra kalanlar `hata` olur; tornadaki dosyalar eski hâlinde kalır.
 - **Yedekler** (`program_backups`, `library.db`): sürüm DEĞİL (sürüm numaralarını ve "güncel sürüm" mantığını bozmaz; aynı (klasör, ad, SHA) bir kez saklanır). Program sayfasında "Tornalardan alınan yedekler": indir ve **"Yeni sürüm olarak al"** (`POST /api/library/backups/:id/restore`; kaynak `yedek`).
 - **Denetim:** her program için `transfers` tablosunda `kind='toplu'` kaydı (kim, ne zaman, SHA, adımlar `yedek`/`yedek-temizle`/`geri-al`...); atlananlar `reddedildi` olarak yazılır, "zaten aynı" olanlar yazılmaz (gürültü).
-- **Kapılar:** `TRANSFER_DISABLED`, model kapısı (`sendPolicy`: **22TB'de `sendEnabled:false`, uygulama 422**; plan çıkar), onay metni, yalnız yönetici (`policy.js` varsayılan reddet; testli). **22TB'yi açmak için** önce aşağıdaki test betiği 22TB tornada çalıştırılıp çıktısı doğrulanmalı, sonra `config/drivers.json` `models[22TB].fileTransfer.sendEnabled = true`.
+- **Kapılar:** `TRANSFER_DISABLED`, model kapısı (`sendPolicy`; plan her modelde çıkar, yalnız uygulama kapanır), onay metni, yalnız yönetici (`policy.js` varsayılan reddet; testli). **22TB'de 2026-10-30'dan beri AÇIK** (kullanıcı kararı, bkz. §3 "22B PC Simulator"): aşağıdaki test betiği henüz 22TB tornada çalıştırılıp doğrulanmadı, toplu gönderme o modelde hiç denenmedi — ilk denemede küçük ve geri alınabilir başla (tek müşteri klasörü).
 - **Uçlar:** `POST /api/machines/:id/programs/push-plan {folders?}` (202 `planId`) · `GET .../push-plan/:planId` (plan + `apply` ilerleme/sonuç) · `POST .../push-apply {planId, confirm, acks?, skipKeys?}` (202) · `POST .../push-stop {planId}` · `GET /api/library/programs/:id` artık `backups` döner · `GET /api/library/backups/:id[?download=1]` · `POST /api/library/backups/:id/restore`.
 - **Dosyalar:** `backend/programs/machine-files.js` (plan/uygulama/geri alma), `library-db.js` (`program_backups`), `library.js` (`restoreBackup`, `ROLLBACK_PREFIX`), `bulk-import.js` (plan deposu: uygulaması süren plan atılmaz, `publicPushPlan`), `routes.js`, `dashboard/bulk-push-view.js` (plan → inceleme/onay → ilerleme → sonuç), `dashboard/library-view.js`.
   **Testi:** `backend/programs/push.test.js` (18: sınıflandırma, yedekleyerek ezme, kapılar, bozuk iletim, RNTO/DELE hataları, geri alma ve geri almanın da başarısız olması, yarış (operatör düzeltmesi, çalışan program, yeni sürüm), bağlantı kopması, durdurma, yedek geri alma, HTTP); kritik davranışlar kasıtlı bozularak testlerin yakaladığı doğrulandı (mutasyon). Sahte FTP: `failRntoWhen`, `failDeleWhen`.
@@ -957,8 +984,15 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
 - **Ürün tanıtım kartı artık TEK ADIM (yukarıdaki K aşamasının "Yeni kasa aç → kapat" akışının yerine geçer):** kasa dolunca usta o üretimin iş emrinden **"Ürün tanıtım kartı bas"** der (önizleme → "Kartı oluştur ve yazdır"), kartı kasaya atıp kasayı paketlemeye yollar.
   Her basış bir **kapalı kasa kaydı**dır (`planning.js` `issueCard`): önceki kartın basıldığı andan (ilk kartta iş emri başlangıcından) şimdiye tezgahın saydığı adet (tahmin) ve sayaç zinciri tutulur; kesin adet Paketleme'de girilir. Üretimdeki **ya da bitmiş** (son kasa bitişten sonra da dolabilir) iş emrinde basılır;
   eski akıştan kalma açık kasa varsa kapanıp kart olur. Uyarılar: hiç parça sayılmadı / az önce başka kart basıldı / tezgahtan veri yok. Kartta GKK rapor no boşsa basarken yazılabilir (iş emrine işlenir). Yanlış basılan kart iptal edilir (numara yeniden verilmez).
-  **Kart tek tablo, 6 alan + 3 işlem satırı (0.17.1) + ÜRÜN RET tiki (0.17.3):** ALEN ÜRÜN KODU · MÜŞTERİ ÜRÜN KODU · TARİH · MAKİNA NO · İŞ EMRİ NO · GKK RAPOR NO · **YIKAMA / KURUTMA / TAVLAMA işaret kutuları** · **ÜRÜN RET kutusu** (+ küçük KART NO: paketleme kartı bununla bulur). Eski kâğıt kartın süreç tablosu (ek işlem, yazı yazma...) ve ret/yeniden işlem blokları kaldırıldı. A5 dikey. Tezgah başında kart bloğu: "N kart basıldı · son K0000XX", "Ürün tanıtım kartı bas", "Son kartı yeniden yazdır";
+  **Kart tek tablo, 7 alan (6 + İLK ONAY NO, 2026-11-02) + 3 işlem satırı (0.17.1) + ÜRÜN RET tiki (0.17.3):** ALEN ÜRÜN KODU · MÜŞTERİ ÜRÜN KODU · TARİH · MAKİNA NO · İŞ EMRİ NO · GKK RAPOR NO · **İLK ONAY NO** · **YIKAMA / KURUTMA / TAVLAMA işaret kutuları** · **ÜRÜN RET kutusu** (+ küçük KART NO: paketleme kartı bununla bulur). Eski kâğıt kartın süreç tablosu (ek işlem, yazı yazma...) ve ret/yeniden işlem blokları kaldırıldı. A5 dikey. Tezgah başında kart bloğu: "N kart basıldı · son K0000XX", "Ürün tanıtım kartı bas", "Son kartı yeniden yazdır";
   iş emri bitince "Son biten iş emri" (24 saat) için de basılabilir. Uç: `POST /api/planning/work-orders/:no/cards {person?, gkkReportNo?}` (operatör + yönetici). Testi `cards.test.js`.
+  **İLK ONAY NO (2026-11-02, kullanıcı isteği):** iş emrinin `firstApprovalNo` alanından **salt gösterim** olarak gelir (bu pencereden değişmez; "İlk onay numarası al" akışıyla yazılır). `planning-db.js` `#crateSelect` artık `w.first_approval_no`'yu da join eder, `#crateOut` `firstApprovalNo` döner — GKK rapor no ile aynı desen
+  (kartın alanı, kasaya özel donmuş bir değer DEĞİL; iş emrinin O ANKİ değeri, kart yeniden basılsa/görüntülense bile günceli gösterir). Testi `cards.test.js`. Tarayıcıda gerçek sunucuya karşı uçtan uca denendi (önizlemede ve gerçek `POST .../cards` yanıtında görünüyor).
+
+**Numune kartı (2026-11-02, kullanıcı isteği):** ilk onay numarası alınınca (Tezgah başı "İlk onay numarası al", iş emrini düzenle "Numara al…", ya da sekmedeki "İş emrinden numara al…") pencere artık KAPANMAZ: numuneye takılacak ayrı bir kart önizlemesi gösterilir ve **"Numune kartı çıktısı al"** ile (ürün tanıtım
+kartı bas'taki gibi) A5 yazdırılır. Kart ürün tanıtım kartıyla AYNI `.pl-card`/`.pl-c-table` görsel dilini kullanır ama farklı, sabit bir alan seti taşır (kullanıcının verdiği görsele birebir): TARİH · **İLK BASKI/NUMUNE NO** (= az önce alınan ilk onay kodu, ör. İ26-001; ayrı bir sayaç YOK) · ALEN ÜRÜN KODU ·
+MÜŞTERİ ÜRÜN KODU · İŞ EMRİ NO · GKK RAPOR NO · OPERATÖR İSMİ · CNC NO. Backend değişikliği gerekmedi: `createFirstApproval`'ın zaten döndürdüğü kayıt (`code/stockCode/gkCode/woNo/operator/cncNo/approvedOn`) + önceden çekilmiş iş emrinin `customerCode`'u yeter (`dashboard/planning-approvals.js` `numuneCardHtml`,
+yazdırma `planning-common.js`'teki paylaşılan `printModal` ile). Tarayıcıda gerçek sunucuya karşı uçtan uca denendi (numara alma → kart önizlemesi doğru alanlarla → "Numune kartı çıktısı al" `window.print()`'i doğru tetikliyor). **Gerçek yazıcıdan A5 baskı ve kâğıtla karşılaştırma henüz denenmedi.**
 - **İş emri alan değişiklikleri:** (1) oluştururken **alternatif hammadde** girilebilir (ürün kartındakini ezer). (2) **Tezgah seçmeden iş emri oluşturulabilir**; başlatırken seçilir (`machine_id` sütunu NOT NULL olduğu için atanmamış = `''`, API'de `null`; başlatırken tezgah ZORUNLU: `400 no-machine`; tezgahsız bekleyen iş emri
   Tezgah başında hiçbir tezgahın sırasında görünmez, "Başka iş emri başlat…" ile seçilir). (3) **"Hammadde GK no" kaldırıldı** (GKK rapor no ile aynı şey; eski sütun veritabanında durur, kullanılmaz). (4) İş emri formunda **BRÜT GRAMAJ tek kutu** (maliyet ve üretim brüt gramajı aynı). (5) **İlk onay rapor no olmadan da başlatılabilir** (zaten isteğe bağlıydı; başlatma penceresi bunu yazar).
   (6) **Tezgah başında "İş emrini düzenle"**: ilk parça yapılıp ölçülünce **ilk onay rapor no, ölçülen net gramaj**, GKK rapor no, kullanılan hammadde ve açıklama operatörce girilir (`POST /api/planning/work-orders/:no/fields {fields}`; yalnız bu 5 alan, planlama alanları 403; geçmişe "güncellendi" yazılır; `OPERATOR_EDIT_FIELDS`). Testi `wo-fields.test.js`.
@@ -969,6 +1003,10 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
   Uçlar (operatör + yönetici): `GET /api/planning/work-orders/:no/measurements` · `PUT .../:no/measure-plan {rows}` · `POST .../:no/measurements {slot?, values, checks, person?}` · `GET /api/planning/crates/:id/sheet`. Dosyalar: `backend/planning/measure.js` (saf: sütun yuvarlama, formdaki konum, plan doğrulama, tolerans),
   `planning.js` (`setMeasurePlan/saveMeasurements/getMeasurements/measureSheet`), tablo `measurements` (`planlama.db`), `dashboard/planning-measure.js`. Testi `measure.test.js` 13 test. **Gerçek kâğıt formla yan yana karşılaştırılmadı; yazıcıdan A4 yatay baskı denenmedi.**
   Sınırlar: (0.17.0'da ürün kartında kalıcı ölçü planı eklendi, aşağıya bakın); kontrol sıklığı hatırlatması/uyarısı yok (yalnız "son ölçü" bilgisi); ölçüm silme ekranı yok (aynı sütunu boş değerle kaydederek silinir).
+
+**Ölçüm cihazı (2026-11-02, kullanıcı isteği):** her ölçü satırı (karakteristik) artık isteğe bağlı bir **cihaz** taşır: Kumpas / Mastar / Kameralı Görüntüleme / Mihengir. "Ölçüleri tanımla/düzenle…" penceresinde satır başına seçim kutusu; ölçüm girişi tablosunda ve basılan föyde satır adının altında tolerans aralığının
+yanında gösterilir (ör. "34,1 – 34,2 · Kumpas"). `backend/planning/measure.js` `DEVICES`/`DEVICE_LABEL`, `normalizePlan` satır başına `device` doğrular (listede değilse 400; boş = belirtilmemiş, `null`). `dashboard/planning-measure.js` aynı listeyi istemci tarafında tutar (ayrı dosya, elle eşitlenir — tek kaynak backend).
+Tarayıcıda gerçek sunucuya karşı uçtan uca denendi (plan kaydı, giriş tablosunda "Kumpas"/"Mastar" etiketleri, API round-trip). Testi `measure.test.js`. **Gerçek kâğıt formla/yazıcıdan henüz denenmedi** (föydeki görünümü yalnız ekranda doğrulandı).
 
 **D aşaması — hammadde ve sarfiyat (0.13.0, 2026-10-13):** Planlama › **Hammadde** (yalnız yönetici). Kullanıcı kararları: sarfiyat **kg** olarak (Mikro'ya kg yazılır), işlenen **tüm** parça (sayaç) × brüt gramaj; ret/hurda/fire izlenmez.
 - **Hesap** (`backend/planning/material.js`, saf; testli): **kg = adet × brüt ağırlık** (adet = tezgahın işlediği TÜM parça: numune/ayar/bozuk dahil; iş emri bitince dondurulan sayaç adedi); **çubuk (BOY)** bilgi olarak `calc.js` formülüyle; **beklenen talaş = adet × (brüt − net)** (çıktıdır, sarfiyatı değiştirmez).
@@ -1165,7 +1203,9 @@ problemi (klasik paralel makine çizelgeleme), **yapay öğrenme modeli DEĞİL*
 - **Dosyalar:** `backend/planning/card-steps.js` `parseReject`, `planning-db.js` (sütun, durum, süzgeç), `planning.js` (`issueCard`, `packCrate`, toplamlar), `dashboard/planning-card.js` (`rejectRow`, kutu, rozet), `planning-packing.js` (süzgeç). Testi `card-steps.test.js` (9).
 - **Sınırlar / DENENMEDİ:** ret kararı kart BASILIRKEN verilir; kart basıldıktan sonra kasa ret çıkarsa (kalite kontrolde) bu işaretlenemez: kart iptal edilip yenisi basılır (ya da ileride "ret olarak işaretle" düğmesi eklenir; yapılmadı); ret kasanın tekrar işleme/hurda kararı, adam-saat, sağlam/hurda miktarı sistemde izlenmez (ret/hurda sistemde tutulmaz kararı); gerçek yazıcıdan A5 baskı denenmedi.
 
-**Kurulumda kapalı bölümler — Paketleme ve Hammadde (0.18.0, 2026-10-15, kullanıcı kararı):** bu iki bölüm rafine edilene kadar kurulumlarda KAPALI; **hiç kimse (yönetici ve fabrika operatörü dahil) görmez**.
+**Kurulumda kapalı bölümler — Paketleme ve Hammadde (0.18.0, 2026-10-15, kullanıcı kararı; VARSAYILAN 2026-11-02'de DEĞİŞTİ):** bu mekanizma bir bölümü kurulumda tamamen kapatabilir (hiç kimse, yönetici dahil, görmez) — ama
+**kullanıcı bunu defalarca (2026-11-02'de bir kez daha) açıkça belirtti: Planlama'da yönetici için HİÇBİR bölüm kapalı kurulmamalı.** `installer/build-installer.ps1`'in `-KapaliBolumler` parametresi artık **varsayılan olarak `@()` (hepsi açık)** — eskiden varsayılan `paketleme, hammadde` idi, bu YANLIŞTI ve değiştirildi.
+**Bir installer üretirken `-KapaliBolumler` parametresini ELLE `paketleme`/`hammadde` ile KAPATMA** — yalnız kullanıcı açıkça "şu bölümü kapat" derse (ayrı, bilinçli bir istisna olarak) kullanılır; "rafine edilmedi" gerekçesiyle kendiliğinden kapatma YAPMA.
 - **Mekanizma:** `config/features.json` → `{"closedSections": [...]}` (`shared/features.js`: `paketleme`, `hammadde` kapatılabilir; bilinmeyen bölüm ya da yanlış yazılmış anahtar sunucuyu BAŞLATMAZ: sessizce açık kalan bir "kapalı" bölüm en kötü hata). Ortam değişkeni `FEATURES_FILE` dosyayı değiştirir (test/demo).
   Sunucu açılışta `[backend] KAPALI bölümler ...` yazar. Oturum (`GET /api/session`, yalnız giriş yapmışa) `closedSections` verir; arayüz menüyü, açılış sekmesini ve yetkisiz adres korumasını (`#/planlama/paketleme` → kendi açılış sekmesi) bundan kurar (`auth-view.js` `closedSections`, `planning-tabs.js` `tabsForRole(role, closed)`, `planning-common.js` `sectionClosed`).
 - **Sunucu zorlar** (`planning/routes.js` `sectionOf`, kimlik/rol fark etmez, yönetici bile): `/api/planning/material/*` (ihtiyaç, sarfiyat, CSV, Mikro fişi + geri alma) ve `POST /api/planning/crates/:id/pack` (kesin paketleme adedi) → **403 `{code: 'section-closed', section}`**.
@@ -1173,7 +1213,7 @@ problemi (klasik paralel makine çizelgeleme), **yapay öğrenme modeli DEĞİL*
   Kimse kesin adet giremeyeceği için şu bilgiler gösterilmez: iş emri ayrıntısındaki kart tablosunda "Paketlenen" ve "Fark" sütunları, "N kasa paketleme bekliyor", durum rozeti "paketleme bekliyor" yerine "✓ kart basıldı"; Tezgah başı bilgi satırındaki "paketleme bekleyen kasa" sayacı. (Kartın gerçek hayattaki "kasayı paketlemeye gönderin" notu kalır: fiziksel iş akışı.)
 - **Hammadde kapalıyken:** Hammadde sekmesi ve uçları kapanır; iş emri ayrıntısındaki **"Hammadde · sarfiyat" bilgi paneli KALIR** (hammadde, adet, sarfiyat kg, çubuk, beklenen talaş: kullanıcı "bilgi olarak iyi" dedi) ama **"Mikro sarfiyat fişi" kutusu gösterilmez** (fiş işaretlenemeyeceği için "bekliyor" hep orada kalırdı).
 - **Dosyalar / testler:** `shared/features.js`, `config/features.json`, `backend/planning/routes.js`, `backend/auth/http.js` (`sessionExtra`), `backend/server.js`; `backend/features.test.js` (8 test: dosya doğrulama, sekmeler, uçlar, **gerçek sunucu sürecinde** oturum + 403 + kart/ret/föy akışının açık kalması, hatalı dosyada başlamama). Demo/tarayıcıda yönetici ve operatör hesabıyla denendi (menü, kapalı adreslerin yönlendirilmesi, kart tablosu).
-- **Denenmedi:** Setup.exe ile gerçek kurulum (paket derlenmedi); gerçek fabrika PC'sinde. **Yeniden açma:** yalnız yeni kurulum (`-KapaliBolumler @()` ya da yalnız biri) ya da kurulu PC'de dosyayı elle düzenleyip sunucuyu yeniden başlatmak.
+- **Denenmedi:** Setup.exe ile gerçek kurulum (paket derlenmedi); gerçek fabrika PC'sinde. **Bir bölümü sonradan kapatmak** (varsayılan artık açık): yeni kurulum (`-KapaliBolumler 'hammadde'` gibi, yalnız kullanıcı açıkça isterse) ya da kurulu PC'de dosyayı elle düzenleyip sunucuyu yeniden başlatmak.
 
 **Telemetri ekranlarından mil devri ve Ölçümler grafikleri kaldırıldı (0.19.0, 2026-10-15, kullanıcı isteği):** Tezgah detayında (1) **"Ölçümler" bölümü** (Mil devri / İlerleme / Parça sayacı grafikleri ve "Tablo" görünümü), (2) üstteki **"İş mili ve ilerleme" kartı** (mil devri, ilerleme, mil/ilerleme override) ve ana ekrandaki her tezgah kartındaki **"Mil devri"** satırı kalktı
 (kart: İlerleme · Parça · Çalışma oranı). **"CSV indir" / "Ham CSV" düğmeleri "Durum şeridi" bölümünün başlığına, zaman aralığı düğmelerinin (30 dk … 7 gün) yanına taşındı** (indirilen dosya seçili aralığı kapsar; uçlar ve CSV içeriği DEĞİŞMEDİ: mil devri CSV'de durur). Kontrolcüden gelen değerler yine toplanır ve saklanır
@@ -1214,13 +1254,63 @@ Uzaktan (şirket dışından, Tailscale ile) girenler de aynı rol modeliyle gir
   gerekir. İki adımlı doğrulama (TOTP) yok. Rol değiştirme yok (sil + yeniden aç). `auth-cli`'nin terminal (TTY) kipi elle denenmedi,
   boru kipi testli.
 
+### Esnek rol sistemi, Fiyat çalışması, iş emrini elle bitirme (2026-10-30)
+
+> **Bu bölüm yukarıdaki sabit 3 rol anlatımının (admin/viewer/operator) YERİNE geçer.** Yukarısı tarihsel bağlamdır;
+> çelişirse bu bölüm doğrudur.
+
+- **Roller admin tanımlı.** Yalnız `admin` sabittir (`users.is_admin=1`, her şeye erişir). Diğer her hesap `role_id` ile `roles` tablosundaki
+  (`auth.db`: `name`, `grants` JSON `{ekranId: 'read'|'write'}`) bir role bağlıdır. "admin" adı rol adı olarak YASAK.
+  Eski `viewer`/`operator` hesapları açılışta **bir kez** `AuthDb.#migrate` ile "İzleyici"/"Operatör" adlı özel rollere taşınır (davranış birebir aynı; artık düzenlenebilir).
+- **Ekran listesi tek kaynak:** `shared/screens.js` (`SCREENS`; istemcide `dashboard/screens.js` aynası). Her ekran Kapalı/Görebilir/Yazabilir.
+  **`isemirleri` ve `olcuraporlari` `writable:false`:** admin dışında kimse için ASLA yazabilir olmaz — Ayarlar'da seçenek sunulmaz,
+  `createRole/updateRole` `'write'`'ı reddeder ve `policy.js`'te bu ekranlar için hiç `write` route'u kayıtlı değildir (yapısal garanti).
+- **Politika:** `backend/auth/policy.js` `SCREEN_ROUTES` (method + regex → `{screen, level}`); `classify()` `public|local|admin|{screen,level}` döner.
+  Kayıtsız uç → `admin` (varsayılan reddet). `createGate` (`auth/http.js`): admin her şeyi açar; aksi halde `req.user.grants[screen]` yoksa 403 "Bu ekrana erişiminiz yok.",
+  `write` isteyen uçta yalnız `read` varsa 403 "yalnız görüntüleme". Alan düzeyi kısıtlar (operatörün `start` alanları, `saveToProduct`) artık `!req.user.isAdmin` ile.
+- **Uçlar:** `GET/POST /api/roles`, `PUT/DELETE /api/roles/:id` (yalnız admin; kullanımda olan rol silinemez). `POST/PUT /api/users` `role` alanı = rol ADI ya da `'admin'`.
+  Oturum süresi artık yalnız `isAdmin`'e göre: admin 12 saat boşta, diğerleri 30 gün (90 gün mutlak).
+- **Arayüz:** Ayarlar'da "Roller" (`dashboard/roles-view.js`) + "Kullanıcılar". Sekmeler/uygulamalar `appsFor(user)` / `tabsForUser(user)` ile `grants`'tan süzülür;
+  ekran içi dallanma `canWrite(id)` / `canSee(id)` (`planning-common.js`). Rol değiştirme yine yok (sil + yeniden aç).
+- **Fiyat çalışması** (`backend/planning/price-studies.js`, `dashboard/planning-price.js`, tablo `price_studies`): ürün kartı açılmadan ön çalışma.
+  Admin PDF yükler (`POST /api/planning/price-studies`, `drawing_files` içeriğe-adresli deposunu yeniden kullanır), `fiyat` ekranına yazabilen rol
+  (usta) hammadde + süre + not doldurur (`PUT .../:id/fill`, `bekliyor → dolduruldu`). **`products` tablosuyla HİÇ bağlantısı yok** (Mikro'da yönetici elle açar). Yükleme/silme yalnız admin.
+- **İş emrini elle bitirme** (`Planning.finishWorkOrderManually`, `POST work-orders/:no/finish-manual`, yalnız admin): yalnız `planlandı` iş emri, adet elle girilir,
+  `üretimde` atlanıp `bitti` olur; `started_at = finished_at` (sıfır süreli pencere), `result.source = 'elle'` (+`note`), olay `elle-bitirildi`. 72 saat sınırı YOK.
+  Üretim panelinde "elle girildi" rozeti çıkar. **Verimlilik raporu etkilenmez:** `efficiencyReport` sıfır uzunluklu pencereyi (`e <= s`) atlar. "Üretime geri al" `planlandı`ya döner (testli).
+- **Tezgahı düzelt** (`Planning.reassignMachine`, `POST work-orders/:no/reassign-machine`, yalnız admin): yanlış tezgahta başlatılmış (`üretimde`) iş emrini taşır;
+  eski tezgahta sayılan adet KAYBOLUR (uyarı gösterilir), açık kasa otomatik kapanır, yeni tezgahta sayım şimdiden başlar. `planlandı` iken tezgah normal "Düzenle"den değişir.
+- **Doğrulanmadı:** Fiyat çalışması doldurma formu tarayıcıda hiç denenmedi. Tablet PDF kaydırma düzeltmesi (`toolbar=0&navpanes=0` kaldırıldı, `.modal-body` taşması kapatıldı) fiziksel tablette denenmedi.
+  **"İş emrini bitir…"/"Tezgahı düzelt…" ve aşağıdaki güvenlik düzeltmesi 2026-11-02'de izole bir test ortamında (gerçek sunucuya karşı) tarayıcıda uçtan uca denendi**, bkz. hemen altındaki madde.
+
+**Güvenlik düzeltmesi — "Tezgahı düzelt" admin-only DEĞİLDİ (2026-11-02, kod incelemesinde bulundu ve düzeltildi):** yukarıdaki "yalnız admin" iddiası ilk sürümde YANLIŞTI: `backend/auth/policy.js`'teki `SCREEN_ROUTES`, `reassign-machine`'i `start`/`finish` ile aynı `tezgahbasi:'write'` grubuna koymuştu (kardeş özellik
+`finishWorkOrderManually` doğru şekilde kayıtsız bırakılıp admin'e düşerken, bu uç için o adım unutulmuştu). Sonuç: göçle gelen "Operatör" rolü (ortak fabrika hesabı) ya da `tezgahbasi: yazabilir` verilen her özel rol, üretimdeki bir iş emrini doğrudan `POST .../reassign-machine` ile başka tezgaha taşıyabiliyordu — eski
+tezgahta sayılan üretim sessizce sıfırlanıyor, açık kasa otomatik kapanıyor, yalnız bir uyarı metni dönüyordu (işlem engellenmiyordu). **Düzeltme:** `reassign-machine` `SCREEN_ROUTES`'tan çıkarıldı (artık `finish-manual` gibi kayıtsız → admin'e düşüyor); `dashboard/planning-shop.js`'teki "Tezgahı düzelt…" düğmesi de
+`isAdminRole()` ile ek olarak gizlendi (savunma derinliği; sunucu zaten reddeder). **Gerçek sunucuya karşı tarayıcıda doğrulandı:** `tezgahbasi:yazabilir` olan bir rolle (İmalat) giriş yapılıp `POST .../reassign-machine` çağrıldığında `403 "Bu işlem için yönetici yetkisi gerekir."` döndüğü ve düğmenin arayüzden kaybolduğu
+görüldü; admin girişinde her ikisi de çalışmaya devam ediyor. Testi `backend/auth/policy.test.js` (route artık `admin` sınıflanıyor).
+
+**Aynı incelemede bulunan diğer düzeltmeler (2026-11-02, kod incelemesi → düzeltme):**
+- **Rol adı Türkçe katlaması NBSP'yi atlıyordu** (`backend/auth/auth-db.js` `foldKey`): `backend/planning/normalize.js`'teki `foldTr`'nin kopyasıydı ama Excel/Word'den yapıştırılan görünmez genişletilmiş boşluğu (U+00A0) önce normal boşlukla değiştiren adımı atlıyordu — hex dump ile doğrulandı. Artık aynı adımı yapıyor;
+  testi `backend/auth/auth.test.js` ("...NBSP...").
+- **`MIGRATED_ROLE_GRANTS`** (göçten gelen İzleyici/Operatör rollerinin yetkileri) artık DONDURULMUŞ bir tarihsel kayıt olarak işaretlendi (yorum eklendi): bu değerler artık silinmiş olan eski `VIEWER_PLANNING`/`OPERATOR_PLANNING` dizilerinden o gün elle çıkarıldı, SCREEN_ROUTES ileride değişse de GÜNCELLENMEMELİ (göçün
+  anlamı o günkü davranışı dondurmak, bugünküyle eşleşmek değil).
+- **`VIEWER_READ`** (`/api/stream`, `/api/machines`, `/api/production*`, `/api/planning/summary`): giriş yapmış HERKESE açık, rolün `telemetri` ekran yetkisine BAKMAZ — bu BİLİNÇLİ (eski "viewer" davranışıyla geriye dönük uyumluluk, kod yorumunda zaten vardı) ama yeni esnek rol sisteminin "her ekran kendi kutusu, Kapalı
+  gerçekten kapalı" modeliyle çelişiyor gibi görünebilir: bir role `telemetri` hiç verilmese de (Ayarlar'da "Kapalı") o hesap `/api/machines`'i doğrudan çağırarak tam filo verisini okuyabilir (yalnız arayüzdeki Telemetri uygulama kutusu gizlenir). **Davranış DEĞİŞTİRİLMEDİ** (göçle gelen Operatör rolünün belgelenmiş
+  "izleme verisini okuyabilir" yeteneğini kırma riski vardı) — yalnız burada ve kodda netçe belgelendi. Daha sıkı bir davranış isteniyorsa (telemetri grant'ı şart koşmak) ayrıca istenmeli.
+- **Göç sonrası dar alan kısıtlarındaki metin hâlâ "Operatör" diyordu** (`routes.js`, ör. "Operatör bu alanları değiştiremez...", "Operatör yalnız bir iş emrinden ilk onay numarası alabilir"): kontrol artık `!isAdmin` (göçten gelen Operatör'e özel değil, admin-dışı HER rolü bağlıyor) ama hata metni eski rol adını
+  söylüyordu. Metinler role-nötr hale getirildi ("Bu alanları yalnız yönetici değiştirebilir...", "Yalnız yönetici elle kayıt girebilir...").
+- **`text()`/`number()` doğrulayıcıları** `price-studies.js`/`quality.js`/`planning.js`'te birebir üç kopyaydı → `backend/planning/fields.js` (yeni dosya) tek kaynağa taşındı, üçü de oradan import ediyor.
+- **`listUsers()`** (`backend/auth/auth.js`) ve `auth-cli.js listele` her kullanıcı için ayrı `getRole()` sorgusu yapıyordu (N+1) → tek seferde rol haritası kuruluyor.
+- **`shared/screens.js`'teki `sanitizeGrants`** hiç çağrılmayan ölü kod olduğu doğrulanıp (repo genelinde sıfır çağıran) silindi.
+- Hepsi `npm test` (577/577) ile doğrulandı; üçü (reassign-machine admin kapısı, ölçüm cihazı, kart İLK ONAY NO, numune kartı) ayrıca izole bir test ortamında gerçek sunucuya karşı tarayıcıda uçtan uca denendi.
+
 **Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
 `RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
 gönderme öncesi ve adlandırmadan hemen önce `LIST` ile ikinci çakışma denetimi var, yine de
 milisaniyelik yarış penceresi kalır) · `DELE` (silme) · **`MKD`** (başarı yanıt kodu 257 mi 250 mi,
 ad/uzunluk kısıtı, panelde hemen görünüyor mu; kod yalnız sahte sunucuda sınandı) · bu özelliğin **arayüzü** hiç
 gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de elle doğrulandı) ·
-çok büyük klasörlerde (>200) tarama süresi.
+çok büyük klasörlerde (>200) tarama süresi · **tornadaki dosyayı yeniden adlandırma** (`RNFR`/`RNTO`, 2026-10-30; yalnız sahte FTP'de sınandı).
 
 ---
 
@@ -1269,6 +1359,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `dashboard/bulk-import-view.js` · `delete-view.js` · `diff-render.js` | Toplu alım penceresi (plan, çakışma kararları, uygula) · tornadan silme penceresi · ortak satır farkı tablosu (editör ve çakışma ekranı kullanır). |
 | `dashboard/bulk-push-view.js` · `tools/torna-test/ezme-testi.ps1` | "Toplu gönder" penceresi (plan, inceleme/onay, ilerleme + durdur, sonuç; kütüphaneden tornaya, yedekleyerek ezer) · gerçek tornada yan ada alma/silme/ezme davranışını güvenle ölçen test betiği (yalnız `ZZTEST…` dosyaları). Bkz. §6 "Toplu gönderme". |
 | `dashboard/library-delete-view.js` | "Kütüphaneden sil" penceresi (tek/çoklu; onay = ad ya da sayı; kopyası olan tezgahları gösterir). |
+| `dashboard/library-rename-view.js` | "Adını değiştir" penceresi: kütüphane kaydı + (varsa) kopyası olan tezgahlardaki dosyanın adı (FTP RNFR/RNTO; onay = tezgah kimliği ya da sayısı). Bkz. §6 "Tornadaki dosyanın adı da değiştirilir". |
 | `dashboard/folder-view.js` · `lib-common.js` | "Yeni müşteri klasörü" penceresi · kütüphane ekranlarının ortak yardımcıları. **Yeni dashboard dosyası `backend/server.js` `STATIC_FILES` listesine eklenmeli** (`backend/static-files.test.js` unutulursa uyarır). |
 | `backend/programs/` | Program kütüphanesi + FTP ile tezgaha aktarım (yazma yolu; telemetriden ayrı). Bkz. §6. |
 | `backend/auth/` · `backend/auth-cli.js` | Kimlik doğrulama: `policy.js` (izin tablosu, varsayılan reddet), `auth.js` (hesap/oturum/kilitleme), `http.js` (kapı + uçlar), `password.js` (scrypt), `auth-db.js` (SQLite); kurtarma aracı. Testler: `backend/auth/*.test.js` (`e2e.test.js` gerçek backend sürecini başlatır). |
@@ -1322,7 +1413,8 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `GET/POST /api/library/programs` | Liste (`?customer=&q=`); yükleme: gövde = ham dosya, `?customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik). |
 | `POST /api/library/programs/text` | **Editör kaydı** (JSON: `text`, `lineEnding`, `encoding`, `bom`, `by`, `note`; yeni program için `customer`+`name`, yeni sürüm için `programId`+`baseVersionNo`, `acceptNewer`). 201 yeni sürüm, 200 aynı içerik, 409 `code: exists` / `newer-version`. |
 | `GET /api/library/programs/:id` · `/versions/:no[?download=1\|full=1]` | Sürümler · önizleme (JSON; `full=1` kesmeden tam metin + `roundTrip`) ya da ham indirme. |
-| `POST /api/library/programs/:id/rename` | **Kütüphanede yeniden adlandırma** (tezgaha yazmaz, §6): `{name}` → 200 (ayrı: `renamed:false` no-op); 400 geçersiz ad; 404; 409 aynı klasörde ad çakışması. |
+| `POST /api/library/programs/:id/rename` | **Kütüphanede yeniden adlandırma** (§6): `{name}` → 200 (ayrı: `renamed:false` no-op); 400 geçersiz ad; 404; 409 aynı klasörde ad çakışması. |
+| `POST /api/library/programs/:id/rename-on-machines` | **Kopyası olan tezgahlarda da yeniden adlandırma** (gerçek FTP RNFR/RNTO, §6): `{customer, oldName, newName, machineIds, confirm}` (onay: 1 tezgahta kimlik, >1'de sayı) → `{machines, results[]}` (tezgah başına `outcome`: `degisti`/`atlandi`/`bulunamadi`/`hata`). `machineIds` boşsa 200 `{machines:0}`, hiç FTP'ye gidilmez. |
 | `POST /api/machines/:id/programs/import-plan` · `GET .../import-plan/:planId[/diff?key=]` · `POST .../import-apply` | **Toplu alım** (admin; tornaya yalnız okuma): plan başlat (202, arka plan) · durum/ilerleme + plan · bir çakışmanın iki yüzü (fark) · uygula (`decisions: {anahtar: 'al'|'atla'}`, `skipKeys`). |
 | `POST /api/machines/:id/programs/push-plan` · `GET .../push-plan/:planId` · `POST .../push-apply` · `POST .../push-stop` · `GET /api/library/backups/:id[?download=1]` · `POST /api/library/backups/:id/restore` | **Toplu gönderme** (admin; tornaya yazar ve ezer, §6): plan (yalnız okuma, 202) · plan + uygulama ilerlemesi · uygula (`confirm` = tezgah kimliği, `acks`, `skipKeys`; 202; 22TB'de 422) · durdur · ezilen eski hâllerin yedeği (indir / yeni sürüm olarak al). |
 | `POST /api/machines/:id/programs/delete-precheck` · `/delete` | **Tornadan silme** (admin; silme kapısı kapalıysa 422): ön kontrol (yazmaz) · sil (`confirm` = program adı, `acks`). Kayıt `kind: 'silme'`. |
@@ -1344,9 +1436,10 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       Setup.exe'yi hedef PC'de çalıştırmak (görev, güvenlik duvarı, açılışta
       başlatma ve SYSTEM hesabında ajan ilk kez orada sınanır).
 - [x] ~~22TB tezgahta ilk gerçek bağlantı~~ — yapıldı (2026-10-08, CNC-08 / .97): okuma ve FTP taraması doğrulandı (§3).
-- [ ] **22TB: gönderme testi ve uzun süreli kararlılık.** Tek kontrollü gönderme (yeni test adı, yeni/boş klasör) → başarılıysa
-      `config/drivers.json`'da `models[22TB].fileTransfer.sendEnabled = true`; ajanı saatlerce açık bırakıp takılma/oturum
-      sızıntısı olmadığını doğrula (22B oturumu 5 TCP açıyor, oturum sınırı ölçülmedi).
+- [ ] **22TB: gönderme 2026-10-30'da AÇILDI (kullanıcı kararı), ilk gerçek yazma denemesi ve uzun süreli kararlılık hâlâ YAPILMADI.** Kullanıcı kendi
+      yeni/izole test klasöründe (tek program, mevcut müşteri klasörlerine dokunmadan) kontrollü ilk denemeyi kendisi yapacak; sonucu buraya ve §3'e işle.
+      Sorun çıkarsa `config/drivers.json`'da `models[22TB].fileTransfer.sendEnabled` yeniden `false` yapılabilir. Ayrıca: ajanı saatlerce açık bırakıp
+      takılma/oturum sızıntısı olmadığını doğrula (22B oturumu 5 TCP açıyor, oturum sınırı ölçülmedi); silme (`deleteEnabled`) hâlâ ayrıca kapalı.
 - [ ] **Ajan 0.5.0 (torna başına süreç) gözlenecek** (bkz. §6 "Torna başına süreç"; 2026-10-15'te fabrika PC'sinde devreye alındı, 8/8 tornadan veri akıyor): uzun süreli kararlılık ve ilk gerçek takılma / elektrik kesintisi sonrası davranış. `ajan.bekci.log`'da `isciler:` satırlarına, `ILERLEME YOK` / `ISCI CIKTI` olaylarına ve
       iş parçacığı dökümlerine bak: 16:50 olayının kök nedeni (14 Ekim) ve 04:21 / 23:54 duraklamaları için ipucu. `PARK EDİLDİ` artık tek tornaya özel süreçte (bekçi `ILERLEME YOK` ile o süreci yeniden başlatır).
 - [ ] **Kaynak klasörü (0.19.0) fabrika PC'sinde:** Mikro'nun Excel çıktısının yazıldığı yerel klasörü "Kaynak klasörü…" ile göster (ya da dosyayı `C:/CNC-Telemetri/data/kaynak`'a kopyala), ilk yenilemeyi bir iş emri/sipariş sorgusuyla karşılaştır; Mikro dosyayı yazarken yenileme (yarım dosya) ve elle düzenlenmiş kartlardaki "korunan" farklar sahada nasıl, bak.
@@ -1373,12 +1466,15 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       tornada ölçüldükten sonra, mevcut içeriği önce kütüphaneye yedekleyerek.
 - [ ] **Yeni müşteri klasörü açma (`MKD`) — gerçek tornada (11TB ve 22TB) denenecek.** Kod ve arayüz hazır, sahte FTP'de sınandı
       (2026-10-08). Plan: `ZZTEST…` adlı boş klasör aç (ürünün kendi akışıyla) → LIST/CWD doğrula → panelde göründüğüne bak →
-      `curl.exe -Q "RMD ZZTEST…"` ile sil (ürün klasör silmez). Sonra 22TB'de tek kontrollü gönderme ve `sendEnabled: true`.
+      `curl.exe -Q "RMD ZZTEST…"` ile sil (ürün klasör silmez). 22TB'de gönderme zaten açık (2026-10-30); klasör açma da aynı kapıdan geçiyor.
       Program/klasör silme üründe yok.
-- [ ] **Toplu gönderme gerçek tornada denenecek (2026-10-16):** (1) fabrika PC'sinde `tools/torna-test/ezme-testi.ps1` önce bir 11TB tornada, sonra 22TB tornada çalıştırılır (`-Klasor` var olan bir müşteri klasörü; çıktı/log gönderilir); (2) hepsi TAMAM ise 22TB için `config/drivers.json` `sendEnabled: true`;
-      (3) ilk gerçek toplu gönderim TEK müşteri klasörüyle (plan penceresinde klasör seç) küçük bir tornada denenir, ardından tüm klasörler; ezilen bir programın yedeğinin program sayfasında göründüğü ve "Yeni sürüm olarak al"ın çalıştığı doğrulanır; (4) süre ve üretime etkisi (ilerleme + tornanın FTP'si) izlenir; (5) kontrolcü belleğindeki program davranışı sorulur/denenir.
-- [ ] **Tornadan silme (`DELE`) gerçek tornada İLK KEZ denenecek** (11TB'de kapı 2026-10-13'te AÇILDI, ama `DELE` hiç denenmedi). Plan: önce kendi gönderdiğimiz `ZZTEST…` adlı bir test dosyasını (`Program gönder`) UI'dan sil →
-      tornada gerçekten kalktığını panelden ve tazeleme taramasıyla doğrula; gerçek bir müşteri programını bu doğrulamadan önce silme. Acil kapatma: `DELETE_DISABLED=1`. 22TB'de önce gönderme (`sendEnabled`) doğrulanmalı.
+- [ ] **Toplu gönderme gerçek tornada denenecek:** (1) fabrika PC'sinde `tools/torna-test/ezme-testi.ps1` önce bir 11TB tornada, sonra 22TB tornada çalıştırılır (`-Klasor` var olan bir müşteri klasörü; çıktı/log gönderilir; 22TB'de gönderme kapısı zaten açık, 2026-10-30);
+      (2) ilk gerçek toplu gönderim TEK müşteri klasörüyle (plan penceresinde klasör seç) küçük bir tornada denenir, ardından tüm klasörler; ezilen bir programın yedeğinin program sayfasında göründüğü ve "Yeni sürüm olarak al"ın çalıştığı doğrulanır; (3) süre ve üretime etkisi (ilerleme + tornanın FTP'si) izlenir; (4) kontrolcü belleğindeki program davranışı sorulur/denenir.
+- [ ] **Tornadan silme (`DELE`) gerçek tornada İLK KEZ denenecek** (11TB'de kapı 2026-10-13'te AÇILDI, ama `DELE` hiç denenmedi; 22TB'de silme hâlâ kapalı, yazmadan ayrı bir karar). Plan: önce kendi gönderdiğimiz `ZZTEST…` adlı bir test dosyasını (`Program gönder`) UI'dan sil →
+      tornada gerçekten kalktığını panelden ve tazeleme taramasıyla doğrula; gerçek bir müşteri programını bu doğrulamadan önce silme. Acil kapatma: `DELETE_DISABLED=1`.
+- [ ] **Tornadaki dosyanın adını da değiştirme (`renameAcrossMachines`, 2026-10-30) gerçek tornada denenecek:** önce kendi gönderdiğimiz bir `ZZTEST…`
+      dosyasını yeniden adlandır (RNFR/RNTO davranışı ve `transfers`/envanter kaydının doğruluğu), sonra gerçek bir programla; birden çok tezgahta aynı
+      programı yeniden adlandırma (onay = sayı) henüz hiç gerçek tornada denenmedi.
       Denenecekler: DELE yanıt kodu (250?), çalışan/açık dosyada davranış, büyük/küçük harf.
 - [ ] **Ajan: uzun backend kesintisi gerçek kurulumda denenmeli** (gece boyu kapalı bırak, geri aç): tampon (20.000 mesaj) geri gelince tek istekte gidiyor (backend artık kabul ediyor); ajan tarafında paketleri parçalamak (ör. 1.000'er mesaj) daha güvenli olurdu ama C# değişikliği ajanın yeniden derlenmesini gerektirir (yapılmadı). Kesinti sonrası geri yüklenen aralığın durum şeridinde `NO_DATA` kalması bilinen eksik (aşağıdaki `ts` maddesi).
 - [ ] **Program geçişleri ve tarih aralığı gerçek tezgahta doğrulanacak:** bir vardiyada tezgahta program değiştirilince "Program geçişleri"nde saat ve adet panel/kâğıtla uyuşuyor mu; ana program adı geçişte kısa süre boş/başka dönüyor mu (parçalı aralık çıkıyor mu); 10 dk sessizlik eşiği uygun mu.

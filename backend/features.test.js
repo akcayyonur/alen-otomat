@@ -15,9 +15,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLOSABLE_SECTIONS, loadFeatures, validateFeatures } from '../shared/features.js';
-import { tabsForRole, defaultTabFor } from '../dashboard/planning-tabs.js';
+import { tabsForUser, defaultTabFor } from '../dashboard/planning-tabs.js';
 import { Planning } from './planning/planning.js';
 import { createPlanningRoutes } from './planning/routes.js';
+
+const ADMIN_USER = Object.freeze({ isAdmin: true });
+/** Goc eslemesindeki (auth-db.js MIGRATED_ROLE_GRANTS) AYNI yetkiler. */
+const OPERATOR_USER = Object.freeze({ isAdmin: false, grants: { tezgahbasi: 'write', paketleme: 'write', isemirleri: 'read', gkk: 'read', ilkonay: 'write', olcuraporlari: 'read', programlar: 'write' } });
+const VIEWER_USER = Object.freeze({ isAdmin: false, grants: { telemetri: 'read', tezgahbasi: 'read', isemirleri: 'read', gkk: 'read', ilkonay: 'read', olcuraporlari: 'read' } });
 
 const KOK = fileURLToPath(new URL('..', import.meta.url));
 
@@ -53,15 +58,15 @@ test('features: hatali dosya sessizce kabul edilmez (bilinmeyen bolum, yanlis ya
 
 /* ---------------------------------------------------------------------- sekmeler */
 
-test('sekmeler: kapali bolum HICBIR rolde (yonetici dahil) gorunmez; digerleri ve acilis sekmesi etkilenmez', () => {
+test('sekmeler: kapali bolum HICBIR kullanicida (admin dahil) gorunmez; digerleri ve acilis sekmesi etkilenmez', () => {
   const kapali = ['paketleme', 'hammadde'];
-  assert.ok(!tabsForRole('admin', kapali).includes('paketleme') && !tabsForRole('admin', kapali).includes('hammadde'));
-  assert.deepEqual(tabsForRole('admin', kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'verimlilik', 'cizelgeleme', 'urunler', 'siparisler', 'programlar']);
-  assert.deepEqual(tabsForRole('operator', kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar'], 'operator Paketleme sekmesini de gormez');
-  assert.deepEqual(tabsForRole('viewer', kapali), tabsForRole('viewer'), 'izleyici zaten gormuyordu');
-  assert.deepEqual(tabsForRole('admin', ['hammadde']).includes('paketleme'), true, 'yalniz listedeki kapanir');
-  assert.deepEqual(tabsForRole('admin', []), tabsForRole('admin'));
-  for (const r of ['admin', 'operator', 'viewer']) assert.ok(tabsForRole(r, kapali).includes(defaultTabFor(r)), `${r} acilis sekmesini gorebilmeli`);
+  assert.ok(!tabsForUser(ADMIN_USER, kapali).includes('paketleme') && !tabsForUser(ADMIN_USER, kapali).includes('hammadde'));
+  assert.deepEqual(tabsForUser(ADMIN_USER, kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar', 'urunler', 'siparisler', 'verimlilik', 'cizelgeleme', 'fiyat']);
+  assert.deepEqual(tabsForUser(OPERATOR_USER, kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar'], 'operator Paketleme sekmesini de gormez');
+  assert.deepEqual(tabsForUser(VIEWER_USER, kapali), tabsForUser(VIEWER_USER, []), 'izleyici zaten gormuyordu');
+  assert.deepEqual(tabsForUser(ADMIN_USER, ['hammadde']).includes('paketleme'), true, 'yalniz listedeki kapanir');
+  assert.deepEqual(tabsForUser(ADMIN_USER, []), tabsForUser(ADMIN_USER));
+  for (const u of [ADMIN_USER, OPERATOR_USER, VIEWER_USER]) assert.ok(tabsForUser(u, kapali).includes(defaultTabFor(u, kapali)), 'acilis sekmesini gorebilmeli');
 });
 
 /* ------------------------------------------------------------------- sunucu uclari */
@@ -196,7 +201,7 @@ test('gercek sunucu: kapali bolumler oturumla arayuze bildirilir; yonetici dahil
     assert.ok(cerez);
 
     const oturum = await istek(port, 'GET', '/api/session', { cerez });
-    assert.deepEqual(oturum.json, { authenticated: true, user: { username: 'admin', role: 'admin' }, closedSections: ['paketleme', 'hammadde'] });
+    assert.deepEqual(oturum.json, { authenticated: true, user: { username: 'admin', isAdmin: true, roleName: null, grants: null }, closedSections: ['paketleme', 'hammadde'] });
     assert.deepEqual((await istek(port, 'GET', '/api/session')).json.closedSections, undefined, 'giris yapmayana bolum bilgisi verilmez');
 
     for (const yol of ['/api/planning/material/need', '/api/planning/material/consumption']) {

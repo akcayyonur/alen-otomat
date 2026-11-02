@@ -7,7 +7,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { cellText, fmtNum, fmtDec, dateText, dateTimeText, openModal, chip, sectionClosed, truncCell, debounce, parseInput, RANGE_PRESETS as PRESETS } from './planning-common.js';
+import { cellText, fmtNum, fmtDec, dateText, dateTimeText, openModal, chip, sectionClosed, truncCell, debounce, parseInput, canWrite, RANGE_PRESETS as PRESETS } from './planning-common.js';
 
 const kg = (v) => (v == null ? '<span class="is-null">—</span>' : `${fmtDec(v, 3)}`);
 
@@ -102,18 +102,21 @@ export async function renderMaterial(host) {
           `<td class="num">${fmtDec(g.bars, 2)}</td><td class="num">${kg(g.scrapKg)}</td><td class="num">${g.pendingKg > 0 ? `<b>${kg(g.pendingKg)}</b>` : '0'}</td></tr>`).join('') + '</tbody></table></div>') +
       '<h4 class="sub">İş emri bazında</h4>' +
       (d.rows.length === 0 ? '' :
-        `<div class="pl-bar"><button type="button" class="icon-btn btn-primary" data-act="mark"${st.selected.size === 0 ? ' disabled' : ''}>Seçilenleri Mikro'ya girildi işaretle (${st.selected.size})…</button>` +
-        '<button type="button" class="icon-btn" data-act="select-pending">Fişi bekleyenlerin hepsini seç</button><button type="button" class="icon-btn" data-act="select-none">Seçimi temizle</button></div>' +
+        (canWrite('hammadde')
+          ? `<div class="pl-bar"><button type="button" class="icon-btn btn-primary" data-act="mark"${st.selected.size === 0 ? ' disabled' : ''}>Seçilenleri Mikro'ya girildi işaretle (${st.selected.size})…</button>` +
+            '<button type="button" class="icon-btn" data-act="select-pending">Fişi bekleyenlerin hepsini seç</button><button type="button" class="icon-btn" data-act="select-none">Seçimi temizle</button></div>'
+          : '') +
         '<div class="table-wrap table-wrap-tall"><table class="tbl tbl-pl"><thead><tr><th></th><th>İş emri</th><th>Bitiş</th><th>Tezgah</th><th>Ürün</th><th>Hammadde</th><th class="num">Adet</th><th class="num">Sarfiyat (kg)</th><th class="num">Çubuk</th><th class="num">Talaş (kg)</th><th>Mikro fişi</th><th></th></tr></thead><tbody>' +
         d.rows.map((r) => {
           const done = r.fis.status === 'girildi';
-          return `<tr data-no="${escapeHtml(r.no)}"><td>${done ? '' : `<input type="checkbox" data-role="pick" aria-label="${escapeHtml(r.no)} seç"${st.selected.has(r.no) ? ' checked' : ''}>`}</td>` +
+          const yazabilir = canWrite('hammadde');
+          return `<tr data-no="${escapeHtml(r.no)}"><td>${done || !yazabilir ? '' : `<input type="checkbox" data-role="pick" aria-label="${escapeHtml(r.no)} seç"${st.selected.has(r.no) ? ' checked' : ''}>`}</td>` +
             `<td class="mono"><b>${escapeHtml(r.no)}</b></td><td>${escapeHtml(dateTimeText(r.finishedAt))}</td><td class="mono">${escapeHtml(r.machineId)}</td>` +
             `<td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}${materialFlag(r)}</td><td class="num">${fmtNum(r.produced)}</td>` +
             `<td class="num"><b>${kg(r.kg)}</b></td><td class="num">${r.bars == null ? cellText(null) : fmtDec(r.bars, 2)}</td><td class="num">${kg(r.scrapKg)}</td>` +
             `<td>${done ? `${chip('ok', '✓', 'girildi')} ${r.fis.docNo ? `<span class="mono">${escapeHtml(r.fis.docNo)}</span>` : ''}<br><small class="hint">${kg(r.fis.kg)} kg</small>` : chip('none', '◔', 'bekliyor')}</td>` +
-            `<td class="nowrap">${done ? '<button type="button" class="icon-btn icon-btn-sm" data-act="undo">Geri al</button>' : '<button type="button" class="icon-btn icon-btn-sm" data-act="mark-one">Girildi…</button>'}` +
-            `${r.kg != null ? ` <button type="button" class="icon-btn icon-btn-sm" data-act="virman-dialog" data-material="${escapeHtml(r.material ?? '')}" data-kg="${r.kg}">Virman fişi kes (Mikro)…</button>` : ''}</td></tr>`;
+            `<td class="nowrap">${!yazabilir ? '' : done ? '<button type="button" class="icon-btn icon-btn-sm" data-act="undo">Geri al</button>' : '<button type="button" class="icon-btn icon-btn-sm" data-act="mark-one">Girildi…</button>'}` +
+            `${r.kg != null && yazabilir ? ` <button type="button" class="icon-btn icon-btn-sm" data-act="virman-dialog" data-material="${escapeHtml(r.material ?? '')}" data-kg="${r.kg}">Virman fişi kes (Mikro)…</button>` : ''}</td></tr>`;
         }).join('') + '</tbody></table></div>') +
       (d.inProgress.length === 0 ? '' :
         '<h4 class="sub">Üretimdeki iş emirleri (henüz fiş yok)</h4><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Tezgah</th><th>Ürün</th><th>Hammadde</th><th class="num">Şimdiye kadar adet</th><th class="num">Sarfiyat (kg)</th></tr></thead><tbody>' +

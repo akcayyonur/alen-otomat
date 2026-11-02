@@ -10,7 +10,7 @@
  */
 import { escapeHtml, dur } from './format.js';
 import { post } from './lib-common.js';
-import { cellText, fmtNum, dateTimeText, chip, openModal } from './planning-common.js';
+import { cellText, fmtNum, dateTimeText, chip, openModal, canWrite } from './planning-common.js';
 
 /** @param {HTMLElement} host */
 export async function renderSchedule(host) {
@@ -48,8 +48,10 @@ export async function renderSchedule(host) {
     const allPicked = d.assignments.every((a) => st.selected.has(a.no));
     return (
       warn +
-      `<div class="pl-bar"><button type="button" class="icon-btn btn-primary" data-act="apply"${st.selected.size === 0 ? ' disabled' : ''}>Seçilenleri uygula (${st.selected.size})…</button>` +
-      `<button type="button" class="icon-btn" data-act="select-all">${allPicked ? 'Seçimi temizle' : 'Hepsini seç'}</button></div>` +
+      (canWrite('cizelgeleme')
+        ? `<div class="pl-bar"><button type="button" class="icon-btn btn-primary" data-act="apply"${st.selected.size === 0 ? ' disabled' : ''}>Seçilenleri uygula (${st.selected.size})…</button>` +
+          `<button type="button" class="icon-btn" data-act="select-all">${allPicked ? 'Seçimi temizle' : 'Hepsini seç'}</button></div>`
+        : '') +
       '<div class="table-wrap table-wrap-tall"><table class="tbl tbl-pl"><thead><tr><th></th><th>İş emri</th><th>Ürün</th><th class="num">Hedef</th><th>Termin</th><th>Şu an</th><th>Önerilen tezgah</th><th>Tahmini başlangıç</th><th>Tahmini bitiş</th></tr></thead><tbody>' +
       d.assignments.map((a) => (
         `<tr data-no="${escapeHtml(a.no)}"><td><input type="checkbox" data-role="pick" aria-label="${escapeHtml(a.no)} seç"${st.selected.has(a.no) ? ' checked' : ''}></td>` +

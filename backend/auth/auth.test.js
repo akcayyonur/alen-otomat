@@ -1,12 +1,12 @@
 /**
- * Kimlik dogrulama: sifre ozeti, hesap kurallari, giris/oturum/kilitleme (zaman enjekte edilir),
- * oturum suresi (admin 12 sa / viewer 30 gun), sifre degisince oturumlarin kapanmasi.
+ * Kimlik dogrulama: sifre ozeti, hesap kurallari, roller, giris/oturum/kilitleme (zaman enjekte edilir),
+ * oturum suresi (admin 12 sa / admin-disi 30 gun), sifre degisince oturumlarin kapanmasi.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hashPassword, verifyPassword, validatePassword } from './password.js';
 import { AuthDb } from './auth-db.js';
-import { Auth, AuthError, IDLE_MS, ABSOLUTE_MS, ROLES } from './auth.js';
+import { Auth, AuthError, IDLE_MS_ADMIN, IDLE_MS_OTHER, ABSOLUTE_MS_OTHER } from './auth.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,11 @@ function kur() {
   return { db, auth, clock };
 }
 const rejects = (p, status, re) => assert.rejects(p, (e) => e instanceof AuthError && e.status === status && (!re || re.test(e.message)));
+
+/** Testlerde "viewer" yerine gecen basit bir rol: yalniz okuma, izleyici'ye denk. */
+const izleyiciRol = (auth, admin) => auth.createRole({ name: 'İzleyici', grants: { telemetri: 'read', isemirleri: 'read' } }, { actor: admin }).name;
+/** Testlerde "operator" yerine gecen basit bir rol: tezgah basi yazabilir, operator'e denk. */
+const operatorRol = (auth, admin) => auth.createRole({ name: 'Operatör', grants: { tezgahbasi: 'write' } }, { actor: admin }).name;
 
 /* ------------------------------------------------------------------------ sifre */
 
@@ -51,7 +56,7 @@ test('ilk kurulum: hesap yokken yonetici olusur, sonra kapanir', async () => {
   const { auth } = kur();
   assert.equal(auth.setupRequired, true);
   const u = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  assert.equal(u.role, 'admin');
+  assert.equal(u.isAdmin, true);
   assert.equal(auth.setupRequired, false);
   await rejects(auth.setup({ username: 'baska', password: 'sifre-12345' }), 409, /zaten yapılmış/);
 });
@@ -59,13 +64,15 @@ test('ilk kurulum: hesap yokken yonetici olusur, sonra kapanir', async () => {
 test('hesap kurallari: kullanici adi, rol, sifre, tekrarlanan ad (buyuk/kucuk harf duyarsiz)', async () => {
   const { auth } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  await rejects(auth.createUser({ username: 'a', password: 'sifre-12345', role: 'viewer' }, { actor: admin }), 400, /3-32/);
-  await rejects(auth.createUser({ username: 'ali veli', password: 'sifre-12345', role: 'viewer' }, { actor: admin }), 400);
-  await rejects(auth.createUser({ username: 'ali', password: 'kisa', role: 'viewer' }, { actor: admin }), 400, /en az 8/);
-  await rejects(auth.createUser({ username: 'ali', password: 'sifre-12345', role: 'root' }, { actor: admin }), 400, /Rol geçersiz/);
-  const v = await auth.createUser({ username: 'Izleyici', password: 'sifre-12345', role: 'viewer' }, { actor: admin });
-  assert.equal(v.role, 'viewer');
-  await rejects(auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: 'viewer' }, { actor: admin }), 409, /zaten var/);
+  const izleyici = izleyiciRol(auth, admin);
+  await rejects(auth.createUser({ username: 'a', password: 'sifre-12345', role: izleyici }, { actor: admin }), 400, /3-32/);
+  await rejects(auth.createUser({ username: 'ali veli', password: 'sifre-12345', role: izleyici }, { actor: admin }), 400);
+  await rejects(auth.createUser({ username: 'ali', password: 'kisa', role: izleyici }, { actor: admin }), 400, /en az 8/);
+  await rejects(auth.createUser({ username: 'ali', password: 'sifre-12345', role: 'root' }, { actor: admin }), 400, /Rol bulunamadı/);
+  const v = await auth.createUser({ username: 'Izleyici', password: 'sifre-12345', role: izleyici }, { actor: admin });
+  assert.equal(v.isAdmin, false);
+  assert.equal(v.roleName, 'İzleyici');
+  await rejects(auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: izleyici }, { actor: admin }), 409, /zaten var/);
   assert.deepEqual(auth.listUsers().map((x) => x.username), ['admin', 'Izleyici']);
   assert.ok(!JSON.stringify(auth.listUsers()).includes('scrypt'), 'sifre ozeti listede GORUNMEZ');
 });
@@ -73,7 +80,8 @@ test('hesap kurallari: kullanici adi, rol, sifre, tekrarlanan ad (buyuk/kucuk ha
 test('silme: kendini ve son yoneticiyi silemez; silinen kullanicinin oturumlari gider', async () => {
   const { auth, db } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  const viewer = await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: 'viewer' }, { actor: admin });
+  const izleyici = izleyiciRol(auth, admin);
+  const viewer = await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: izleyici }, { actor: admin });
   const { token } = await auth.login('izleyici', 'sifre-12345', { ip: '10.0.0.5' });
   assert.ok(auth.authenticate(token));
 
@@ -101,7 +109,7 @@ test('giris: dogru sifre oturum verir, yanlis sifre ve olmayan kullanici AYNI me
   await auth.setup({ username: 'admin', password: 'sifre-12345' });
   const r = await auth.login('ADMIN', 'sifre-12345', { ip: '10.0.0.5', userAgent: 'test' });
   assert.equal(r.user.username, 'admin');
-  assert.equal(r.maxAgeSec, IDLE_MS.admin / 1000);
+  assert.equal(r.maxAgeSec, IDLE_MS_ADMIN / 1000);
   assert.ok(r.token.length >= 40);
   assert.equal(db.countSessions(), 1);
   assert.ok(!('passwordHash' in r.user), 'sifre ozeti donmez');
@@ -155,10 +163,11 @@ test('kilitleme: ayni adresten FARKLI kullanici adlariyla deneme de (20) kilitle
   assert.equal(kilit.status, 429);
 });
 
-test('oturum suresi: admin 12 saat bosta kalinca, viewer 30 gun; kullanim suresini kaydirir; mutlak ust sinir', async () => {
+test('oturum suresi: admin 12 saat bosta kalinca, admin-disi 30 gun; kullanim suresini kaydirir; mutlak ust sinir', async () => {
   const { auth, clock } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: 'viewer' }, { actor: admin });
+  const izleyici = izleyiciRol(auth, admin);
+  await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: izleyici }, { actor: admin });
   const a = await auth.login('admin', 'sifre-12345');
   const v = await auth.login('izleyici', 'sifre-12345');
 
@@ -170,59 +179,94 @@ test('oturum suresi: admin 12 saat bosta kalinca, viewer 30 gun; kullanim suresi
 
   clock.t += 13 * 3_600_000;
   assert.equal(auth.authenticate(a.token), null, 'admin 13 saat bostaydi: kapandi');
-  assert.ok(auth.authenticate(v.token), 'viewer hala acik');
+  assert.ok(auth.authenticate(v.token), 'admin-disi hala acik');
 
-  // viewer: her 20 gunde bir kullanirsa (bosta kalma 30 gunu asmaz) mutlak 90 gun sinirina kadar acik kalir
+  // admin-disi: her 20 gunde bir kullanirsa (bosta kalma 30 gunu asmaz) mutlak 90 gun sinirina kadar acik kalir
   for (let i = 0; i < 4; i += 1) { clock.t += 20 * 86_400_000; assert.ok(auth.authenticate(v.token), `${i + 1}. adim`); }
   clock.t += 20 * 86_400_000; // girisin uzerinden ~101 gun
   assert.equal(auth.authenticate(v.token), null, 'mutlak ust sinir (90 gun) asildi, bosta kalmamis olsa da');
-  assert.equal(ABSOLUTE_MS.viewer, 90 * 86_400_000);
+  assert.equal(ABSOLUTE_MS_OTHER, 90 * 86_400_000);
 });
 
-test('operator rolu: hesap acilir, oturum suresi viewer gibi uzun (30 gun / 90 gun), gecersiz rol reddedilir', async () => {
+test('esnek rol: hesap acilir, oturum suresi admin-disi gibi uzun (30 gun / 90 gun), gecersiz rol reddedilir', async () => {
   const { auth, clock } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  assert.deepEqual([...ROLES], ['admin', 'viewer', 'operator']);
-  const op = await auth.createUser({ username: 'fabrika', password: 'sifre-12345', role: 'operator' }, { actor: admin });
-  assert.equal(op.role, 'operator');
-  await rejects(auth.createUser({ username: 'baska', password: 'sifre-12345', role: 'ustayonetici' }, { actor: admin }), 400, /admin, viewer ya da operator/);
+  const operator = operatorRol(auth, admin);
+  const op = await auth.createUser({ username: 'fabrika', password: 'sifre-12345', role: operator }, { actor: admin });
+  assert.equal(op.isAdmin, false);
+  assert.equal(op.roleName, 'Operatör');
+  await rejects(auth.createUser({ username: 'baska', password: 'sifre-12345', role: 'ustayonetici' }, { actor: admin }), 400, /Rol bulunamadı/);
   const o = await auth.login('fabrika', 'sifre-12345');
   assert.equal(o.maxAgeSec, 30 * 86_400, 'fabrika PC\'si surekli acik: cerez omru 30 gun');
   clock.t += 25 * 86_400_000;
   assert.ok(auth.authenticate(o.token), 'bosta 25 gun: acik');
-  assert.equal(ABSOLUTE_MS.operator, 90 * 86_400_000);
-  assert.equal(IDLE_MS.operator, 30 * 86_400_000);
-  assert.equal(auth.listUsers().find((u) => u.username === 'fabrika').role, 'operator');
+  assert.equal(ABSOLUTE_MS_OTHER, 90 * 86_400_000);
+  assert.equal(IDLE_MS_OTHER, 30 * 86_400_000);
+  assert.equal(auth.listUsers().find((u) => u.username === 'fabrika').roleName, 'Operatör');
 });
 
-test('veritabani gecisi: "operator"den once olusmus auth.db (CHECK yalniz admin/viewer) acilinca tablo yeniden kurulur, hesap ve oturum korunur', async () => {
+test('rol: "admin" adiyla yeni rol yaratilamaz; rol silinirken atanmis hesap varsa reddedilir', async () => {
+  const { auth } = kur();
+  const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
+  assert.throws(() => auth.createRole({ name: 'Admin', grants: {} }, { actor: admin }), (e) => e.status === 400 && /sabit bir rol/.test(e.message));
+  assert.throws(() => auth.createRole({ name: 'İmalat', grants: { isemirleri: 'write' } }, { actor: admin }), (e) => e.status === 400 && /İş emirleri/.test(e.message), 'is emirleri hep salt okunur');
+  const rol = auth.createRole({ name: 'İmalat', grants: { tezgahbasi: 'write' } }, { actor: admin });
+  assert.throws(() => auth.createRole({ name: 'imalat', grants: {} }, { actor: admin }), (e) => e.status === 409, 'ad buyuk/kucuk harf duyarsiz benzersiz');
+  const u = await auth.createUser({ username: 'usta', password: 'sifre-12345', role: 'İmalat' }, { actor: admin });
+  assert.throws(() => auth.deleteRole(rol.id, { actor: admin }), (e) => e.status === 409 && /1 hesap/.test(e.message));
+  auth.deleteUser(u.id, { actor: admin });
+  auth.deleteRole(rol.id, { actor: admin }); // artik kimse kullanmiyor
+  assert.equal(auth.listRoles().length, 0);
+});
+
+test('rol adi benzersizligi: aralarinda NBSP (gorunmez genisletilmis bosluk) olan ad da ayni sayilir (Excel/Word yapistirmasi)', async () => {
+  const { auth } = kur();
+  const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
+  auth.createRole({ name: 'Kalite Şefi', grants: {} }, { actor: admin }); // NBSP iceren ad
+  assert.throws(() => auth.createRole({ name: 'Kalite Şefi', grants: {} }, { actor: admin }), (e) => e.status === 409, 'normal bosluklu ayni ad carpisir');
+});
+
+test('veritabani gecisi: eski auth.db (users.role: admin/viewer/operator) acilinca is_admin/role_id\'ye tasinir, davranis aynen korunur', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'auth-gecis-'));
   const file = join(dir, 'auth.db');
   try {
     const eski = new DatabaseSync(file);
     eski.exec(`
-      CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE, role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+      CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE, role TEXT NOT NULL CHECK (role IN ('admin', 'viewer', 'operator')),
         password_hash TEXT NOT NULL, created_at INTEGER NOT NULL, last_login_at INTEGER);
       CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, ip TEXT, user_agent TEXT);
       CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, username TEXT, event TEXT NOT NULL, ip TEXT, detail TEXT);
-      INSERT INTO users (username, role, password_hash, created_at) VALUES ('yonetici', 'admin', 'x', 1), ('izleyici', 'viewer', 'y', 2);
+      INSERT INTO users (username, role, password_hash, created_at) VALUES ('yonetici', 'admin', 'x', 1), ('izleyici', 'viewer', 'y', 2), ('fabrika', 'operator', 'z', 3);
       INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at) VALUES ('abc', 2, 5, 6);
     `);
-    assert.throws(() => eski.exec("INSERT INTO users (username, role, password_hash, created_at) VALUES ('op', 'operator', 'z', 3)"), /CHECK/, 'eski kisit operator\'u reddediyordu');
     eski.close();
 
     const db = new AuthDb(file);
-    assert.deepEqual(db.listUsers().map((u) => [u.id, u.username, u.role]), [[2, 'izleyici', 'viewer'], [1, 'yonetici', 'admin']], 'kimlikler ve roller aynen (liste kullanici adina gore)');
+    const users = db.listUsers();
+    const yonetici = users.find((u) => u.username === 'yonetici');
+    const izleyici = users.find((u) => u.username === 'izleyici');
+    const fabrika = users.find((u) => u.username === 'fabrika');
+    assert.deepEqual([yonetici.id, izleyici.id, fabrika.id], [1, 2, 3], 'kimlikler korunur');
+    assert.equal(yonetici.isAdmin, true);
+    assert.equal(izleyici.isAdmin, false);
+    assert.equal(fabrika.isAdmin, false);
+    const izleyiciRolu = db.getRole(izleyici.roleId);
+    const fabrikaRolu = db.getRole(fabrika.roleId);
+    assert.equal(izleyiciRolu.name, 'İzleyici');
+    assert.deepEqual(izleyiciRolu.grants, { telemetri: 'read', tezgahbasi: 'read', isemirleri: 'read', gkk: 'read', ilkonay: 'read', olcuraporlari: 'read' });
+    assert.equal(fabrikaRolu.name, 'Operatör');
+    assert.deepEqual(fabrikaRolu.grants, { tezgahbasi: 'write', paketleme: 'write', isemirleri: 'read', gkk: 'read', ilkonay: 'write', olcuraporlari: 'read', programlar: 'write' });
     assert.ok(db.getSession('abc'), 'oturum silinmedi (tablo yeniden kurulurken CASCADE calismadi)');
+
     const auth = new Auth({ db });
-    const op = await auth.createUser({ username: 'fabrika', password: 'sifre-12345', role: 'operator' }, { actor: { username: 'yonetici', role: 'admin' } });
-    assert.equal(op.role, 'operator');
-    assert.equal(op.id, 3, 'kimlik sirasi korunur');
+    const yeni = await auth.createUser({ username: 'usta2', password: 'sifre-12345', role: 'Operatör' }, { actor: { username: 'yonetici', isAdmin: true } });
+    assert.equal(yeni.id, 4, 'kimlik sirasi korunur');
     db.db.close();
     // ikinci acilis gecis gerektirmez ve veriyi bozmaz
     const db2 = new AuthDb(file);
-    assert.equal(db2.listUsers().length, 3);
+    assert.equal(db2.listUsers().length, 4);
+    assert.equal(db2.listRoles().length, 2, 'roller tekrar eklenmez');
     db2.db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -232,7 +276,8 @@ test('veritabani gecisi: "operator"den once olusmus auth.db (CHECK yalniz admin/
 test('acik akis denetimi: isValid sureyi UZATMAZ, cikis ve sifre sifirlama gecersiz kilar', async () => {
   const { auth, clock } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  const viewer = await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: 'viewer' }, { actor: admin });
+  const izleyici = izleyiciRol(auth, admin);
+  const viewer = await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: izleyici }, { actor: admin });
   const a = await auth.login('admin', 'sifre-12345');
   const aHash = auth.authenticate(a.token).tokenHash;
   assert.equal(auth.isValid(aHash), true);
@@ -269,12 +314,13 @@ test('kendi sifreni degistir: eskisi gerekir, DIGER oturumlar kapanir, bu kalir'
 test('denetim kaydi: giris/cikis/hesap olaylari yazilir, sifre ASLA yazilmaz', async () => {
   const { auth } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'gizli-sifre-77' }, { ip: '127.0.0.1' });
+  const izleyici = izleyiciRol(auth, admin);
   await auth.login('admin', 'yanlis-deneme-1', { ip: '10.0.0.5' }).catch(() => {});
   const { token } = await auth.login('admin', 'gizli-sifre-77', { ip: '10.0.0.5' });
-  await auth.createUser({ username: 'izleyici', password: 'baska-sifre-55', role: 'viewer' }, { actor: admin, ip: '10.0.0.5' });
+  await auth.createUser({ username: 'izleyici', password: 'baska-sifre-55', role: izleyici }, { actor: admin, ip: '10.0.0.5' });
   auth.logout(token, { ip: '10.0.0.5' });
   const olaylar = auth.recentAudit(20);
-  assert.deepEqual(olaylar.map((e) => e.event).reverse(), ['setup', 'login_fail', 'login_ok', 'user_created', 'logout']);
+  assert.deepEqual(olaylar.map((e) => e.event).reverse(), ['setup', 'role_created', 'login_fail', 'login_ok', 'user_created', 'logout']);
   const metin = JSON.stringify(olaylar);
   for (const gizli of ['gizli-sifre-77', 'yanlis-deneme-1', 'baska-sifre-55', 'scrypt$']) {
     assert.ok(!metin.includes(gizli), `${gizli} kayitta olmamali`);
@@ -284,7 +330,8 @@ test('denetim kaydi: giris/cikis/hesap olaylari yazilir, sifre ASLA yazilmaz', a
 test('purge: suresi dolan oturumlar silinir, gecerliler kalir', async () => {
   const { auth, db, clock } = kur();
   const admin = await auth.setup({ username: 'admin', password: 'sifre-12345' });
-  await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: 'viewer' }, { actor: admin });
+  const izleyici = izleyiciRol(auth, admin);
+  await auth.createUser({ username: 'izleyici', password: 'sifre-12345', role: izleyici }, { actor: admin });
   await auth.login('admin', 'sifre-12345');
   await auth.login('izleyici', 'sifre-12345');
   assert.equal(db.countSessions(), 2);

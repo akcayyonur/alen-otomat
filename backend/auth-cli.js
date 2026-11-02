@@ -4,7 +4,7 @@
  *
  *   node backend\auth-cli.js listele
  *   node backend\auth-cli.js sifre <kullanici>            yeni sifreyi sorar (yazarken gorunmez)
- *   node backend\auth-cli.js ekle <kullanici> <admin|viewer|operator>   yeni hesap, sifreyi sorar
+ *   node backend\auth-cli.js ekle <kullanici> <admin|rol-adi>   yeni hesap, sifreyi sorar (rol adi: Ayarlar > Roller'da tanimli)
  *   node backend\auth-cli.js sil <kullanici>
  *
  * Calisma dizini kurulum klasoru olmali (data\auth.db oradan okunur) ya da AUTH_DB_FILE verilmeli.
@@ -14,7 +14,7 @@
 import { createInterface } from 'node:readline';
 import './preflight.js';
 import { AuthDb } from './auth/auth-db.js';
-import { Auth, AuthError, ROLES } from './auth/auth.js';
+import { Auth, AuthError } from './auth/auth.js';
 
 const DB_FILE = process.env.AUTH_DB_FILE ?? 'data/auth.db';
 
@@ -75,21 +75,28 @@ try {
   if (komut === 'listele') {
     const users = db.listUsers();
     if (users.length === 0) console.log('Hesap yok (ilk yönetici hesabı dashboard\'dan, localhost üzerinden oluşturulur).');
-    for (const u of users) console.log(`${u.username.padEnd(20)} ${u.role.padEnd(8)} son giriş: ${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('tr-TR') : '—'}`);
+    const rolAdlari = new Map(db.listRoles().map((r) => [r.id, r.name]));
+    for (const u of users) {
+      const rolAdi = u.isAdmin ? 'admin' : (u.roleId ? rolAdlari.get(u.roleId) ?? '(rol silinmiş)' : '(rol yok)');
+      console.log(`${u.username.padEnd(20)} ${rolAdi.padEnd(16)} son giriş: ${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('tr-TR') : '—'}`);
+    }
   } else if (komut === 'sifre' && ad) {
     const u = bul(ad);
     await auth.setPassword(u.id, await sifreIste(), { actor: { username: 'auth-cli' } });
     console.log(`"${u.username}" şifresi değiştirildi; açık oturumları kapatıldı.`);
   } else if (komut === 'ekle' && ad && rol) {
-    if (!ROLES.includes(rol)) throw new AuthError(`Rol "admin", "viewer" ya da "operator" olmalı.`, 400);
+    if (rol !== 'admin' && !db.findRoleByName(rol)) {
+      const mevcut = db.listRoles().map((r) => r.name);
+      throw new AuthError(`Rol bulunamadı: "${rol}". "admin" ya da şu rollerden biri olmalı: ${mevcut.length ? mevcut.join(', ') : '(henüz hiç rol yok, Ayarlar > Roller\'dan oluşturun)'}.`, 400);
+    }
     const u = await auth.createUser({ username: ad, password: await sifreIste(), role: rol }, { actor: { username: 'auth-cli' } });
-    console.log(`"${u.username}" (${u.role}) oluşturuldu.`);
+    console.log(`"${u.username}" (${rol}) oluşturuldu.`);
   } else if (komut === 'sil' && ad) {
     const u = bul(ad);
     auth.deleteUser(u.id, { actor: { id: -1, username: 'auth-cli' } });
     console.log(`"${u.username}" silindi.`);
   } else {
-    console.log('Kullanım:\n  node backend\\auth-cli.js listele\n  node backend\\auth-cli.js sifre <kullanici>\n  node backend\\auth-cli.js ekle <kullanici> <admin|viewer|operator>\n  node backend\\auth-cli.js sil <kullanici>');
+    console.log('Kullanım:\n  node backend\\auth-cli.js listele\n  node backend\\auth-cli.js sifre <kullanici>\n  node backend\\auth-cli.js ekle <kullanici> <admin|rol-adi>\n  node backend\\auth-cli.js sil <kullanici>');
     process.exitCode = 2;
   }
 } catch (err) {

@@ -58,16 +58,20 @@ test('sifre: unutulan yonetici sifresi sifirlanir, eski sifre gecmez, acik oturu
 });
 
 test('ekle / sil: izleyici hesabi acilir ve silinir; kisa sifre ve gecersiz rol reddedilir', () => {
-  const kisa = cli(['ekle', 'izleyici', 'viewer'], 'kisa\n');
+  const db = new AuthDb(dbDosyasi);
+  db.createRole({ name: 'İzleyici', grants: { telemetri: 'read' }, now: Date.now() });
+  db.close();
+
+  const kisa = cli(['ekle', 'izleyici', 'İzleyici'], 'kisa\n');
   assert.equal(kisa.status, 1);
   assert.match(kisa.stderr, /en az 8/);
   const rol = cli(['ekle', 'izleyici', 'root'], 'uzun-sifre-123\n');
   assert.equal(rol.status, 1);
-  assert.match(rol.stderr, /admin", "viewer" ya da "operator/);
+  assert.match(rol.stderr, /Rol bulunamadı: "root"/);
 
-  const ok = cli(['ekle', 'izleyici', 'viewer'], 'uzun-sifre-123\n');
+  const ok = cli(['ekle', 'izleyici', 'İzleyici'], 'uzun-sifre-123\n');
   assert.equal(ok.status, 0, ok.stderr);
-  assert.match(cli(['listele']).stdout, /izleyici\s+viewer/);
+  assert.match(cli(['listele']).stdout, /izleyici\s+İzleyici/);
 
   assert.equal(cli(['sil', 'izleyici']).status, 0);
   assert.doesNotMatch(cli(['listele']).stdout, /izleyici/);

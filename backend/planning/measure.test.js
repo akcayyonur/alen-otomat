@@ -55,8 +55,8 @@ test('deger ayristirma: ondalik virgul/nokta, bos = null, gecersiz = NaN', () =>
 
 test('olcu plani: satir sayisi, ad zorunlu, sapma icin nominal, alt <= ust', () => {
   assert.deepEqual(normalizePlan([{ label: 'Ø34,2', nominal: '34,2', lower: '-0,1', upper: '0' }, { label: '14' }]), [
-    { label: 'Ø34,2', nominal: 34.2, lower: -0.1, upper: 0 },
-    { label: '14', nominal: null, lower: null, upper: null },
+    { label: 'Ø34,2', nominal: 34.2, lower: -0.1, upper: 0, device: null },
+    { label: '14', nominal: null, lower: null, upper: null, device: null },
   ]);
   assert.deepEqual(normalizePlan([]), []);
   assert.throws(() => normalizePlan('x'), /liste/);
@@ -66,6 +66,13 @@ test('olcu plani: satir sayisi, ad zorunlu, sapma icin nominal, alt <= ust', () 
   assert.throws(() => normalizePlan([{ label: 'a', lower: -0.1 }]), /nominal/);
   assert.throws(() => normalizePlan([{ label: 'a', nominal: 10, lower: 0.1, upper: 0 }]), /eksi işaretiyle/);
   assert.throws(() => normalizePlan([{ label: 'a', nominal: 'abc' }]), /sayı olmalı/);
+});
+
+test('olcu plani: hangi cihazla olculecegi (DEVICES tan biri, bos = belirtilmemis)', () => {
+  assert.equal(normalizePlan([{ label: 'a', device: 'kumpas' }])[0].device, 'kumpas');
+  assert.equal(normalizePlan([{ label: 'a', device: '' }])[0].device, null);
+  assert.equal(normalizePlan([{ label: 'a' }])[0].device, null);
+  assert.throws(() => normalizePlan([{ label: 'a', device: 'lazer' }]), /ölçüm cihazı geçersiz/);
 });
 
 test('tolerans: nominal + sapma araligi; yalniz nominal ya da sapmasiz satir degerlendirilmez', () => {

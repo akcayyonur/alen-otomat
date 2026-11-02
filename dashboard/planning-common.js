@@ -121,10 +121,11 @@ const WO_STATUS = Object.freeze({
 export const woStatusChip = (s) => chip(...(WO_STATUS[s] ?? ['none', '?', String(s)]));
 
 /* ---- roller: planlama ekranlari hangi dugmeleri gosterecegini buradan okur (YETKIYI sunucu verir; bu yalniz gorunum) ---- */
-/** 'admin' | 'operator' | 'viewer' (izleyici). */
-export const planningRole = () => getSession()?.user?.role ?? 'viewer';
-export const isViewer = () => planningRole() === 'viewer';
-export const isAdminRole = () => planningRole() === 'admin';
+export const isAdminRole = () => getSession()?.user?.isAdmin === true;
+/** Bir ekrani (shared/screens.js id'si) GOREBILIR mi: admin ya da grants[screenId] 'read'/'write'. */
+export const canSee = (screenId) => { const u = getSession()?.user; return !!u && (u.isAdmin || !!u.grants?.[screenId]); };
+/** Bir ekranda YAZABILIR mi: admin ya da grants[screenId] === 'write'. */
+export const canWrite = (screenId) => { const u = getSession()?.user; return !!u && (u.isAdmin || u.grants?.[screenId] === 'write'); };
 /** Bu bolum bu kurulumda KAPALI mi (sunucu uclarini da reddeder)? Ekranlar kapali bolumun bilgisini gostermez. */
 export const sectionClosed = (key) => closedSections().includes(key);
 

@@ -89,6 +89,7 @@ const R = {
   programsDelete: route(/^\/api\/library\/programs\/delete$/),
   program: route(new RegExp(`^/api/library/programs/(\\d+)$`)),
   programRename: route(new RegExp(`^/api/library/programs/(\\d+)/rename$`)),
+  programRenameMachines: route(new RegExp(`^/api/library/programs/(\\d+)/rename-on-machines$`)),
   version: route(new RegExp(`^/api/library/programs/(\\d+)/versions/(\\d+)$`)),
   machinePrograms: route(new RegExp(`^/api/machines/${ID}/programs$`)),
   machineScan: route(new RegExp(`^/api/machines/${ID}/programs/scan$`)),
@@ -200,6 +201,18 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         return sendJson(res, 200, library.renameProgram({
           id: Number(m[1]), newName: b.name, by: who(req, b.by), clientIp: req.clientIp ?? req.socket.remoteAddress ?? null,
         })), true;
+      }
+
+      // Kutuphanede DEGISEN adin, dosyasi olan tezgahlardaki ADINI da degistirir (FTP RNFR/RNTO; icerik degismez).
+      // `machineIds`: dashboard'un ekranda GOSTERDIGI "bu programın kopyası olan" tezgah listesi (onay metni
+      // ekranla sunucu arasinda tutarli olsun diye sunucu kendi envanterinden yeniden hesaplamaz).
+      if (method === 'POST' && (m = R.programRenameMachines(path))) {
+        const b = await readJson(req, 10_000);
+        const result = await files.renameAcrossMachines({
+          customer: b.customer, oldName: b.oldName, newName: b.newName, machineIds: b.machineIds, confirm: b.confirm,
+          by: who(req, b.by), clientIp: req.clientIp ?? req.socket.remoteAddress ?? null,
+        });
+        return sendJson(res, 200, result), true;
       }
 
       if (method === 'GET' && (m = R.program(path))) {

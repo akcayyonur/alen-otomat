@@ -2,23 +2,23 @@
  * Giris sistemi (arayuz): giris / ilk kurulum ekrani, oturum durumu, ust cubukta kullanici + cikis,
  * sifre degistirme ve 401 korumasi (oturum bitince sayfa giris ekranina doner).
  *
- * Roller: admin (her sey), viewer (yalniz izleme: program kutuphanesi, ayarlar ve tezgahtaki
- * "Programlar" paneli GIZLENIR; sunucu bu uclari zaten reddeder, buradaki gizleme yalniz kolaylik).
+ * Roller: yalniz "admin" sabit roldur (her sey); digerleri Ayarlar > Roller'dan admin-tanimli ROLLERE
+ * baglidir (shared/screens.js'teki her ekran icin Kapali/Gorebilir/Yazabilir). Yetkiyi sunucu verir
+ * (backend/auth/policy.js); buradaki gizlemeler yalniz kolayliktir.
  * Bu dosya baska dashboard modullerini import etmez (dongu olmasin); herkes buradan oturumu okur.
  */
 import { escapeHtml } from './format.js';
 
-const ROLE_LABEL = Object.freeze({ admin: 'yönetici', viewer: 'izleyici', operator: 'operatör' });
-
-/** @type {{authenticated: boolean, authDisabled?: boolean, user?: {username: string, role: string}}|null} */
+/** @type {{authenticated: boolean, authDisabled?: boolean, user?: {username: string, isAdmin: boolean, roleName: string|null, grants: Record<string,string>|null}}|null} */
 let session = null;
 
 export const getSession = () => session;
-export const isAdmin = () => session?.user?.role === 'admin';
+export const isAdmin = () => session?.user?.isAdmin === true;
 export const authDisabled = () => session?.authDisabled === true;
 /** Bu kurulumda KAPALI Planlama bolumleri (config/features.json; sunucu /api/session ile verir): paketleme, hammadde. */
 export const closedSections = () => session?.closedSections ?? [];
-export const roleLabel = (role) => ROLE_LABEL[role] ?? role;
+/** Kullanicinin rol adi gosterim metni (admin sabit "yönetici"; digerleri admin'in verdigi rol adi). */
+export const roleLabel = (user) => (user?.isAdmin ? 'yönetici' : (user?.roleName ?? 'rol yok'));
 
 /* ------------------------------------------------------------------------- ag */
 
@@ -224,7 +224,7 @@ function mountTopbar() {
     chip.title = 'AUTH_DISABLED=1: bu sunucuda giriş sistemi kapalı, herkes yönetici.';
     return;
   }
-  chip.textContent = `${u.username} · ${roleLabel(u.role)}`;
+  chip.textContent = `${u.username} · ${roleLabel(u)}`;
   chip.title = 'Şifremi değiştir';
   chip.addEventListener('click', openPasswordDialog);
   out.hidden = false;

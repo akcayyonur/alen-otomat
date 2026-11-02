@@ -256,6 +256,93 @@ test('geri al: yanlislikla bitirilen uretime doner; sonraki is emri varsa redded
   assert.throws(() => p.reopenWorkOrder(a.no), (e) => e.code === 'overlap', 'sonrasinda baska is emri calismis');
 });
 
+test('tezgah duzelt: UretIMDE is emrini DOGRU tezgaha tasir; eski sayim kaybolur (uyari), acik kasa kapanir, cakisan/mesgul tezgah reddedilir', () => {
+  const { p, st } = kur();
+  st.events.push(ev(day(7, 30)), ev(day(8, 0))); // CNC-01'de 2 adet sayildi
+  const a = yeni(p);
+  p.startWorkOrder(a.no, { startAt: day(7) }, { now: day(8, 5) });
+  assert.throws(() => p.reassignMachine(a.no, { machineId: 'CNC-01' }, { now: day(8, 5) }), /zaten iş emrinin tezgahı/);
+
+  const kasa = p.openCrate(a.no, { person: 'Ayşe' }, { now: day(8, 5) });
+  st.live.set('CNC-03', canli('RUNNING', { partTotal: 777 }));
+  const r = p.reassignMachine(a.no, { machineId: 'CNC-03' }, { by: 'ortak', now: day(8, 5) });
+  assert.equal(r.machineId, 'CNC-03');
+  assert.equal(r.status, 'uretimde');
+  assert.equal(r.startedAt, day(8, 5), 'sayim simdiden yeniden basladi');
+  assert.ok(r.warnings.some((w) => /KAYBOLUR/.test(w)), 'eski tezgahtaki sayimin kaybolacagi uyarilir');
+  assert.ok(r.warnings.some((w) => /otomatik kapatıldı/.test(w)), 'acik kasa otomatik kapanir');
+  assert.equal(p.getCrate(kasa.id, { now: day(8, 5) }).state, 'kapali');
+  assert.equal(r.events.find((e) => e.kind === 'tezgah-duzeltildi')?.detail, 'CNC-01 → CNC-03 (yanlış tezgaha bağlıydı; sayım CNC-03\'te şimdiden yeniden başladı)');
+
+  // planlandi durumundaki is emrinde reddedilir ("Duzenle" kullanilmali, zaten normal guncellemeden degisir)
+  const b = yeni(p, { machineId: 'CNC-03' });
+  assert.throws(() => p.reassignMachine(b.no, { machineId: 'CNC-01' }), /henüz başlatılmadı/);
+
+  // yeni tezgah mesgulse (baska is emri uretimde) reddedilir
+  const c = yeni(p, { machineId: 'CNC-01' });
+  p.startWorkOrder(c.no, { startAt: day(9) }, { now: day(9, 5) });
+  assert.throws(() => p.reassignMachine(a.no, { machineId: 'CNC-01' }, { now: day(9, 5) }), (e) => e.code === 'machine-busy');
+
+  // bitmis/iptal is emrinde reddedilir
+  p.finishWorkOrder(c.no, {}, { now: day(9, 10) });
+  assert.throws(() => p.reassignMachine(c.no, { machineId: 'CNC-03' }), /önce "Üretime geri al"/);
+});
+
+test('elle bitirme: hic baslatilmamis eski is emri GERIYE DONUK bitirilir (adet elle, telemetriden SAYILMAZ); geri alinca PLANLANDI\'ya doner, UretIMDE\'ye degil', () => {
+  const { p } = kur();
+  const a = yeni(p);
+  assert.throws(() => p.finishWorkOrderManually(a.no, { qty: -1 }), /tam sayı olmalı/);
+  const finishedAt = day(8, 30, 0, 5); // 5 gun once
+  const r = p.finishWorkOrderManually(a.no, { qty: 25, finishedAt, note: 'eski sistemden' }, { by: 'yonetici', now: NOW });
+  assert.equal(r.status, 'bitti');
+  assert.equal(r.startedAt, finishedAt, 'sahte baslangic = bitis ani');
+  assert.equal(r.finishedAt, finishedAt);
+  assert.equal(r.result.produced, 25);
+  assert.equal(r.result.source, 'elle');
+  assert.equal(r.result.note, 'eski sistemden');
+  assert.ok(r.warnings.some((w) => /üzerinde/.test(w)), 'hedefin (20) uzerinde uyarilir');
+  assert.equal(r.events.find((e) => e.kind === 'elle-bitirildi')?.detail, '25 adet · hedef 20 · elle girildi · eski sistemden');
+
+  // zaten uretimde / bitmis / iptal is emrinde reddedilir
+  const b = yeni(p);
+  p.startWorkOrder(b.no, {}, { now: NOW });
+  assert.throws(() => p.finishWorkOrderManually(b.no, { qty: 1 }), /üretimde: normal "Bitir"/);
+  assert.throws(() => p.finishWorkOrderManually(a.no, { qty: 1 }), /zaten bitmiş/);
+  const c = yeni(p);
+  p.cancelWorkOrder(c.no, { reason: 'gerek yok' }, { now: NOW });
+  assert.throws(() => p.finishWorkOrderManually(c.no, { qty: 1 }), /İptal edilmiş/);
+
+  // geri alinca PLANLANDI'ya doner (UretIMDE'ye DEGIL - gercek bir uretim penceresi hic olmadi)
+  const geri = p.reopenWorkOrder(a.no, { by: 'yonetici', now: NOW });
+  assert.equal(geri.status, 'planlandi');
+  assert.equal(geri.machineId, 'CNC-01', 'tezgah atamasi (olusturmadan) dokunulmadan kalir');
+  assert.equal(geri.result, null);
+  assert.equal(geri.events.at(-1).kind, 'yeniden-acildi');
+  assert.match(geri.events.at(-1).detail, /planlandı durumuna döndü/);
+  // artik normal akista calisir: tezgah atanir ve baslatilir
+  assert.equal(p.startWorkOrder(a.no, { machineId: 'CNC-03' }, { now: NOW }).status, 'uretimde');
+});
+
+test('bitir (uretimde): istege bagli elle adet telemetri adedinin YERINE gecer, sayilan adet korunur; gecersiz adet reddedilir', () => {
+  const { p, st } = kur();
+  const a = yeni(p);
+  p.startWorkOrder(a.no, { startAt: day(8) }, { now: day(8, 5) });
+  st.events.push(ev(day(8, 10)), ev(day(8, 20)), ev(day(8, 30)));
+  assert.throws(() => p.finishWorkOrder(a.no, { qty: 1.5 }, { now: day(9) }), /tam sayı olmalı/);
+  assert.equal(p.getWorkOrder(a.no, { now: day(9) }).status, 'uretimde', 'gecersiz adet bitirmez');
+  const r = p.finishWorkOrder(a.no, { qty: 17 }, { now: day(9) });
+  assert.equal(r.status, 'bitti');
+  assert.equal(r.result.produced, 17);
+  assert.equal(r.result.source, 'elle-adet');
+  assert.equal(r.result.telemetryProduced, 3, 'tezgahin saydigi adet kaybolmaz');
+  assert.match(r.events.find((e) => e.kind === 'bitirildi').detail, /adet elle girildi \(tezgah 3 saymıştı\)/);
+  // qty verilmezse eski davranis: telemetri adedi
+  const b = yeni(p);
+  p.startWorkOrder(b.no, { startAt: day(10) }, { now: day(10, 5) });
+  assert.equal(p.finishWorkOrder(b.no, {}, { now: day(11) }).result.source, undefined);
+});
+
+
 /* ----------------------------------------------------- iptal, guncelleme, liste */
 
 test('iptal: uretimdeki is emrinin adedi dondurulur; biten iptal edilmez; baslamis is emrinin tezgahi kilitlenir', () => {
@@ -441,6 +528,20 @@ test('HTTP: baslat / bitir / geri al uclari ve hata kodlari', async () => {
     const geri = await j(`/api/planning/work-orders/${a.no}/reopen`, 'POST');
     assert.equal(geri.json.status, 'uretimde');
     assert.equal((await j(`/api/planning/work-orders/${a.no}/reopen`, 'POST')).status, 409);
+
+    // tezgah duzelt (uretimdeki is emri): yanlis tezgaha baglanmisti, dogrusuna tasinir
+    const duzelt = await j(`/api/planning/work-orders/${a.no}/reassign-machine`, 'POST', { machineId: 'CNC-03' });
+    assert.equal(duzelt.status, 200, JSON.stringify(duzelt.json));
+    assert.equal(duzelt.json.machineId, 'CNC-03');
+    assert.equal((await j(`/api/planning/work-orders/${a.no}/reassign-machine`, 'POST', { machineId: 'YOK-99' })).status, 400);
+
+    // elle bitirme: hic baslatilmamis is emri geriye donuk, adet elle
+    const c = (await j('/api/planning/work-orders', 'POST', { stockCode: 'SR001.013', targetQty: 5, machineId: 'CNC-01' })).json;
+    const elle = await j(`/api/planning/work-orders/${c.no}/finish-manual`, 'POST', { qty: 5 });
+    assert.equal(elle.status, 200, JSON.stringify(elle.json));
+    assert.equal(elle.json.status, 'bitti');
+    assert.equal(elle.json.result.source, 'elle');
+    assert.equal((await j(`/api/planning/work-orders/${c.no}/finish-manual`, 'POST', { qty: 1 })).status, 409, 'zaten bitmis');
   } finally {
     await new Promise((r) => srv.close(r));
     p.close();

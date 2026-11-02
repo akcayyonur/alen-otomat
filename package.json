@@ -1,6 +1,6 @@
 {
   "name": "cnc-telemetri",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "CNC Telemetri Platformu - Edge Agent + backend + canli dashboard (CNC-TLM-001)",

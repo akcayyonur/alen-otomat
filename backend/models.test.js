@@ -38,7 +38,7 @@ process.env.MACHINES_FILE = dosya;
 const { loadInventory, validateMachines, agentMachines } = await import('../shared/inventory.js');
 const { getDriver, resolveModel } = await import('../shared/drivers.js');
 const { kur, ekle } = await import('./programs/test/harness.js');
-const { sendPolicy, UnsupportedError } = await import('./programs/machine-files.js');
+const { sendPolicy } = await import('./programs/machine-files.js');
 
 test.after(() => rmSync(dizin, { recursive: true, force: true }));
 
@@ -46,14 +46,15 @@ const by = (liste, id) => liste.find((m) => m.id === id);
 
 /* ------------------------------------------------------------- surucu kaydi */
 
-test('surucu kaydi: Syntec surucusunun iki modeli var, 22TB gonderme kapali', () => {
+test('surucu kaydi: Syntec surucusunun iki modeli var; 22TB gonderme 2026-10-30da acildi, silme hala kapali', () => {
   const d = getDriver('syntec-remoteapi');
   assert.deepEqual(d.models.map((m) => m.id), ['11TB', '22TB']);
   assert.equal(d.defaultModel, '11TB');
   assert.equal(by(d.models, '11TB').clientDll, 'Syntec.RemoteCNC.Win32.dll');
   assert.equal(by(d.models, '22TB').clientDll, 'Syntec.OpenCNC.dll');
-  assert.equal(by(d.models, '22TB').status, 'experimental', '22TB gercek tezgahta denenmedi: supported olamaz');
-  assert.equal(by(d.models, '22TB').fileTransfer.sendEnabled, false);
+  assert.equal(by(d.models, '22TB').status, 'experimental', '22TB gercek tezgahta uzun sureli denenmedi: supported olamaz');
+  assert.equal(by(d.models, '22TB').fileTransfer.sendEnabled, true, 'kullanici karariyla acildi (kendi izole test klasorunde deneyecek)');
+  assert.equal(by(d.models, '22TB').fileTransfer.deleteEnabled, false, 'silme (DELE) ayrica ve hala kapali');
   assert.notEqual(by(d.models, '11TB').fileTransfer.sendEnabled, false);
   assert.deepEqual(getDriver('simulator').models, [], 'modeli olmayan surucu: bos liste');
 });
@@ -141,37 +142,20 @@ test('dogrulama: bilinmeyen model ve modeli olmayan surucuye model reddedilir', 
 
 /* -------------------------------------------------------- gonderme politikasi */
 
-test('gonderme politikasi: 22TB kapali (nedeniyle), 11TB ve modelsiz tezgah acik', () => {
+test('gonderme politikasi: 22TB, 11TB ve modelsiz tezgah ACIK (model kapisinin MEKANIZMASI drivers-gate.test.js\'te sentetik surucuyle sinanir)', () => {
   const inv = loadInventory();
-  const p22 = sendPolicy(by(inv, 'CNC-C'));
-  assert.equal(p22.allowed, false);
-  assert.equal(p22.model, 'SYNTEC 22TB');
-  assert.match(p22.reason, /gerçek tezgahta henüz doğrulanmadı/);
+  assert.equal(sendPolicy(by(inv, 'CNC-C')).allowed, true, '22TB gonderme 2026-10-30da acildi');
   assert.equal(sendPolicy(by(inv, 'CNC-A')).allowed, true);
   assert.equal(sendPolicy(by(inv, 'SIM-1')).allowed, true);
-  assert.equal(sendPolicy({ id: 'X', driverId: 'syntec-remoteapi', controllerModel: '22TB' }).allowed, false);
 });
 
-test('22TB tezgah: on kontrol engeller ve FTP\'ye HIC dokunmaz; gonderme reddedilir, tornaya yazilmaz', async () => {
+test('22TB tezgah: model kapisi artik ENGELLEMEZ (2026-10-30: kullanici karariyla acildi)', async () => {
   const t = await kur();
   try {
     t.machines.push({ id: 'CNC-22', name: 'Torna 22', ip: '127.0.0.1', driverId: 'syntec-remoteapi', controllerModel: '22TB' });
     const { program } = ekle(t.library, 'AA', 'ORNEK-013');
-    const once = t.server.commands.length;
-
     const pre = await t.files.precheck({ machineId: 'CNC-22', programId: program.id, customer: 'AA' });
-    assert.equal(pre.canSend, false);
-    const engel = pre.checks.find((k) => k.level === 'block');
-    assert.equal(engel.id, 'model');
-    assert.match(engel.title, /SYNTEC 22TB.*gönderme kapalı/);
-    assert.equal(t.server.commands.length, once, 'on kontrol FTP baglantisi bile acmadi');
-
-    await assert.rejects(
-      () => t.files.send({ machineId: 'CNC-22', programId: program.id, customer: 'AA', confirm: 'CNC-22' }),
-      (e) => e instanceof UnsupportedError && /SYNTEC 22TB/.test(e.message),
-    );
-    assert.equal(t.server.commands.length, once, 'gonderme reddedildi: tornaya tek komut gitmedi');
-    assert.equal(t.library.db.listTransfers({}).length, 0, 'reddedilen model engeli aktarim kaydi acmaz');
+    assert.equal(pre.checks.some((k) => k.id === 'model'), false, 'model engeli artik yok');
   } finally {
     await t.kapat();
   }

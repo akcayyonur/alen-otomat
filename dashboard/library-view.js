@@ -70,6 +70,18 @@ function toast(host, text, ok = true) {
   el.textContent = text ?? '';
 }
 
+const RENAME_OUTCOME = Object.freeze({
+  degisti: 'değişti', atlandi: 'atlandı', bulunamadi: 'bulunamadı (zaten yok)', hata: 'hata',
+});
+
+/** Yeniden adlandirma sonrasi tezgah sonuclarini tek satira ozetler (bkz. library-rename-view.js openRenameDialog). */
+function machineResultText(r) {
+  if (r.machinesError) return ` Tezgahlarda değiştirilemedi: ${r.machinesError}`;
+  const results = r.machines?.results;
+  if (!results || results.length === 0) return '';
+  return ' Tezgahlarda: ' + results.map((m) => `${m.machineId} ${RENAME_OUTCOME[m.outcome] ?? m.outcome}${m.outcome !== 'degisti' && m.detail ? ` (${m.detail})` : ''}`).join(' · ');
+}
+
 /* ================================================================ KUTUPHANE EKRANI */
 
 const lib = {
@@ -133,7 +145,8 @@ function buildLibrarySkeleton() {
     '<button type="button" class="icon-btn" data-act="refresh-history">Yenile</button></div>' +
     '<div class="table-wrap" data-role="history"></div></section>' +
 
-    '<section class="dt-block"><div class="dt-block-head"><h3>Kütüphaneden silinenler</h3></div>' +
+    '<section class="dt-block"><div class="dt-block-head"><h3>Kütüphane kayıt defteri</h3></div>' +
+    '<p class="hint">Kütüphaneden silinen ve yeniden adlandırılan programlar.</p>' +
     '<div class="table-wrap" data-role="liblog"></div></section>';
 
   const userInput = lib.host.querySelector('[data-role="user"]');
@@ -363,14 +376,23 @@ function renderTable() {
   }).join('');
 }
 
-/** Kütüphaneden silinenlerin kaydı (kim, ne zaman). */
+/**
+ * Kütüphane kayıt defteri (silme VE yeniden adlandırma; `library_log`, `GET /api/library/log` ikisini de
+ * dönüyor). Önceden bu bölüm her satırı "silindi" sayıyordu (yeniden adlandırma 2026-10-26'da library_log'a
+ * yazılmaya başlayınca burada da yanlışlıkla "silindi" görünüyordu); satır kendi `action`'ına göre çizilir.
+ */
 function renderLibLog() {
   const el = lib.host.querySelector('[data-role="liblog"]');
   if (!el) return;
-  el.innerHTML = lib.log.length === 0 ? '<p class="empty">Kütüphaneden silinmiş program yok.</p>' :
+  el.innerHTML = lib.log.length === 0 ? '<p class="empty">Kütüphane kaydı yok.</p>' :
     '<table class="tbl"><thead><tr><th>Zaman</th><th>Program</th><th class="num">Sürüm</th><th>Kim</th></tr></thead><tbody>' +
-    lib.log.map((l) => `<tr><td>${escapeHtml(dateTime(l.at))}</td><td><span class="chip chip-bad">− silindi</span> <span class="mono">${escapeHtml(programLabel(l.customer ?? '', l.name ?? ''))}</span></td>` +
-      `<td class="num">${num(l.versions)}</td><td>${escapeHtml(l.by ?? '—')}${l.clientIp ? ` <small class="hint">${escapeHtml(l.clientIp)}</small>` : ''}</td></tr>`).join('') +
+    lib.log.map((l) => {
+      const program = l.action === 'program-yeniden-adlandirma'
+        ? `<span class="chip chip-info">↻ ad değişti</span> <span class="mono">${escapeHtml(programLabel(l.customer ?? '', l.detail?.from ?? ''))} → ${escapeHtml(l.name ?? '')}</span>`
+        : `<span class="chip chip-bad">− silindi</span> <span class="mono">${escapeHtml(programLabel(l.customer ?? '', l.name ?? ''))}</span>`;
+      return `<tr><td>${escapeHtml(dateTime(l.at))}</td><td>${program}</td>` +
+        `<td class="num">${num(l.versions)}</td><td>${escapeHtml(l.by ?? '—')}${l.clientIp ? ` <small class="hint">${escapeHtml(l.clientIp)}</small>` : ''}</td></tr>`;
+    }).join('') +
     '</tbody></table>';
 }
 
@@ -415,7 +437,7 @@ function renderDetail() {
     '<div class="dt-actions">' +
     `<button type="button" class="icon-btn btn-primary" data-act="send" data-program="${program.id}">Tezgaha gönder…</button>` +
     `<button type="button" class="icon-btn" data-act="edit" data-no="${lib.previewNo ?? versions[0].versionNo}">Düzenle… (v${lib.previewNo ?? versions[0].versionNo})</button>` +
-    `<button type="button" class="icon-btn" data-act="rename-program" title="Kütüphanedeki programın adını değiştirir (tezgahtaki dosyaya dokunulmaz)">Adını değiştir…</button>` +
+    `<button type="button" class="icon-btn" data-act="rename-program" title="Kütüphanedeki programın adını değiştirir; kopyası olan tezgahlardaki dosyanın adı da değiştirilir">Adını değiştir…</button>` +
     `<button type="button" class="icon-btn btn-danger" data-act="delete-program" data-program="${program.id}" title="Programı tüm sürümleriyle kütüphaneden siler (tezgahlardaki dosyalar silinmez)">Kütüphaneden sil…</button>` +
     '<button type="button" class="icon-btn" data-act="close-detail">Kapat</button></div></div>' +
 
@@ -468,7 +490,9 @@ function renderHistory() {
             ? `<td><span class="chip chip-info">⇄ toplu gönderme</span> <span class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</span></td>`
             : t.kind === 'silme'
             ? `<td><span class="chip chip-bad">− silindi</span> <span class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</span></td>`
-            : `<td class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</td>`) +
+            : t.kind === 'yeniden-adlandirma'
+              ? `<td><span class="chip chip-info">↻ yeniden adlandırma</span> <span class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</span></td>`
+              : `<td class="mono">${escapeHtml(programLabel(t.customer ?? '', t.name ?? ''))}</td>`) +
         `<td><span class="chip chip-${s.cls}"><span aria-hidden="true">${s.icon}</span> ${escapeHtml(s.label)}</span></td>` +
         `<td>${escapeHtml(t.requestedBy ?? '—')}${t.clientIp ? ` <small class="hint">${escapeHtml(t.clientIp)}</small>` : ''}</td>` +
         `<td>${escapeHtml(t.error ?? '')}</td></tr>`;
@@ -555,10 +579,14 @@ function wireLibrary() {
         if (!p) return;
         openRenameDialog({
           program: p,
+          holders: holdersOf(p.id),
           onDone: async (r) => {
             await reloadLists();
             await selectProgram(p.id, true);
-            if (r.renamed) toast(host, `Program "${r.oldName}" → "${r.program.name}" olarak yeniden adlandırıldı.`);
+            if (r.renamed) {
+              const ok = !r.machinesError && (r.machines?.results ?? []).every((m) => m.outcome === 'degisti');
+              toast(host, `Program "${r.oldName}" → "${r.program.name}" olarak yeniden adlandırıldı.${machineResultText(r)}`, ok || !r.machines);
+            }
             announce();
           },
         });

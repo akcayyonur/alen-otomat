@@ -42,7 +42,7 @@ const sil = (t, ad, ek = {}) => t.files.deleteProgram({ machineId: 'CNC-08', cus
 
 /* ------------------------------------------------------------------------- kapilar */
 
-test('deletePolicy: 11TB acik (yapilandirma), acil anahtar her durumda kapatir, 22TB yazmaya kapali oldugu icin kapali', () => {
+test('deletePolicy: 11TB acik (yapilandirma), acil anahtar her durumda kapatir; 22TB yazmaya 2026-10-30da acildi ama SILME varsayilan hala kapali', () => {
   const m11 = { id: 'A', driverId: 'syntec-remoteapi', controllerModel: '11TB' };
   const m22 = { id: 'B', driverId: 'syntec-remoteapi', controllerModel: '22TB' };
   assert.equal(deletePolicy(m11, {}).allowed, true, '11TB: config/drivers.json deleteEnabled=true');
@@ -50,10 +50,11 @@ test('deletePolicy: 11TB acik (yapilandirma), acil anahtar her durumda kapatir, 
   assert.equal(kapali.allowed, false);
   assert.match(kapali.reason, /DELETE_DISABLED=1/);
   assert.equal(deletePolicy(m11, { deleteDisabled: true, deleteEnabled: true }).allowed, false, 'acil anahtar bayraktan ustun');
-  const p22 = deletePolicy(m22, { deleteEnabled: true });
-  assert.equal(p22.allowed, false, 'once yazma kapisindan gecmeli: 22TB yazmaya kapali');
-  assert.match(p22.reason, /22TB|doğrulanmadı/);
-  assert.equal(deletePolicy(m22, {}).allowed, false);
+  assert.equal(deletePolicy(m22, {}).allowed, false, '22TB: yazma acik ama silme config/drivers.json\'da hala deleteEnabled:false');
+  // Eski DELETE_ENABLED=1 dogrulama bayragi artik 22TB'de de acar: oncesinde yazma kapisinin kendisi
+  // engelliyordu (bu MEKANIZMA - "silme once yazma kapisindan gecer" - drivers-gate.test.js'te sentetik
+  // surucuyle, yazmasi HALA kapali bir modelle sinaniyor), yazma acilinca bu bayrak gercekten etkili olur.
+  assert.equal(deletePolicy(m22, { deleteEnabled: true }).allowed, true);
 });
 
 test('kapali silme: on kontrol "engel" verir, deleteProgram 422; tornaya HIC baglanilmaz', async () => {
@@ -70,18 +71,22 @@ test('kapali silme: on kontrol "engel" verir, deleteProgram 422; tornaya HIC bag
   } finally { await t.kapat(); }
 });
 
-test('TRANSFER_DISABLED ve 22TB: silme acik bayragiyla bile reddedilir, tornaya baglanilmaz', async () => {
+test('TRANSFER_DISABLED: silme acik bayragiyla bile reddedilir, tornaya baglanilmaz', async () => {
   const t = await kurSil({ disabled: true });
-  const t2 = await kurSil();
   try {
     await assert.rejects(() => sil(t, 'OLD-1'), DisabledError);
     assert.equal((await t.files.deletePrecheck({ machineId: 'CNC-08', customer: 'MUSTERI_B', name: 'OLD-1' })).checks[0].id, 'ozellik');
     assert.equal(t.server.sessions, 0);
+  } finally { await t.kapat(); }
+});
 
+test('22TB: silme (deleteEnabled) yazma acik olsa da AYRI ve varsayilan hala kapali bir karar; tornaya baglanilmaz', async () => {
+  const t2 = await kur({ seed: (s) => s.put('MUSTERI_B/OLD-1', ESKI) }); // deleteEnabled dogrulama bayragi YOK (kurSil'in aksine)
+  try {
     t2.machines.push({ id: 'CNC-22', name: 'Torna 22', ip: '127.0.0.1', driverId: 'syntec-remoteapi', controllerModel: '22TB' });
     await assert.rejects(() => t2.files.deleteProgram({ machineId: 'CNC-22', customer: 'MUSTERI_B', name: 'OLD-1', confirm: 'OLD-1' }), UnsupportedError);
     assert.equal(t2.server.sessions, 0);
-  } finally { await t.kapat(); await t2.kapat(); }
+  } finally { await t2.kapat(); }
 });
 
 test('onay metni program adiyla BIREBIR ayni olmali; gecersiz ad reddedilir; tornaya baglanilmaz', async () => {

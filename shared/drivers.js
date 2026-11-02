@@ -23,7 +23,9 @@ let cache = null;
 
 export function loadDrivers() {
   if (cache) return cache;
-  const raw = readFileSync(fileURLToPath(CONFIG_URL), 'utf8');
+  // DRIVERS_FILE: testler icin (MACHINES_FILE/FEATURES_FILE deseniyle ayni) - gercek config/drivers.json'u
+  // degistirmeden, model kapisinin (sendEnabled=false) KAPALI oldugu bir senaryoyu sentetik bir dosyayla sinamaya yarar.
+  const raw = readFileSync(process.env.DRIVERS_FILE ?? fileURLToPath(CONFIG_URL), 'utf8');
   const { drivers } = JSON.parse(raw);
   cache = drivers.map((d) => ({
     ...stripNotes(d),

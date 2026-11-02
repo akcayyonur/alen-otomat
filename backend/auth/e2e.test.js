@@ -66,6 +66,17 @@ async function girisYap(kullanici, sifre) {
   return cerezDegeri(r);
 }
 
+/** Admin oturumuyla rol olusturur (ya da zaten varsa onu kullanir); id'sini doner. */
+async function rolSagla(adminCerez, name, grants) {
+  const r = await istek('POST', '/api/roles', { cerez: adminCerez, govde: { name, grants } });
+  if (r.status === 201) return r.json.role;
+  if (r.status === 409) return (await istek('GET', '/api/roles', { cerez: adminCerez })).json.roles.find((x) => x.name === name);
+  throw new Error(`rol olusturulamadi: ${r.status} ${r.text}`);
+}
+/** Goc eslemesindeki (auth-db.js MIGRATED_ROLE_GRANTS) AYNI yetkiler: eski sabit viewer/operator rolleriyle davranis birebir ayni. */
+const IZLEYICI_GRANTS = Object.freeze({ telemetri: 'read', tezgahbasi: 'read', isemirleri: 'read', gkk: 'read', ilkonay: 'read', olcuraporlari: 'read' });
+const OPERATOR_GRANTS = Object.freeze({ tezgahbasi: 'write', paketleme: 'write', isemirleri: 'read', gkk: 'read', ilkonay: 'write', olcuraporlari: 'read', programlar: 'write' });
+
 before(async () => {
   dizin = mkdtempSync(join(tmpdir(), 'cnc-auth-e2e-'));
   copyFileSync(join(KOK, 'config', 'machines.json'), join(dizin, 'machines.json'));
@@ -123,7 +134,7 @@ test('hesap yokken: veri uclari kapali, statik sayfa acik, saglik yalniz "ok", k
 test('ilk kurulum: yonetici olusur, oturum cerezi guvenli bayraklarla verilir, ikinci kurulum 409', async () => {
   const r = await istek('POST', '/api/auth/setup', { govde: { username: 'admin', password: SIFRE_ADMIN } });
   assert.equal(r.status, 201, r.text);
-  assert.deepEqual(r.json.user, { username: 'admin', role: 'admin' });
+  assert.deepEqual(r.json.user, { username: 'admin', isAdmin: true, roleName: null, grants: null });
   const cookie = (r.headers['set-cookie'] ?? [])[0] ?? '';
   assert.match(cookie, /^cnc_sid=[A-Za-z0-9_-]{40,}/);
   assert.match(cookie, /HttpOnly/);
@@ -139,27 +150,45 @@ test('ilk kurulum: yonetici olusur, oturum cerezi guvenli bayraklarla verilir, i
 
 /* ----------------------------------------------------------------------- admin */
 
-test('admin: her sey acik; viewer hesabi olusturur', async () => {
+test('admin: her sey acik; izleyici rolu ve hesabi olusturur', async () => {
   const admin = await girisYap('admin', SIFRE_ADMIN);
   const me = await istek('GET', '/api/session', { cerez: admin });
-  assert.deepEqual(me.json, { authenticated: true, user: { username: 'admin', role: 'admin' }, closedSections: [] });
+  assert.deepEqual(me.json, { authenticated: true, user: { username: 'admin', isAdmin: true, roleName: null, grants: null }, closedSections: [] });
 
   const ms = await istek('GET', '/api/machines', { cerez: admin });
   assert.equal(ms.status, 200);
   assert.ok(ms.json.machines.length >= 1);
   assert.ok(ms.json.machines.some((m) => m.ip), 'admin tezgah IP\'lerini gorur');
 
-  for (const yol of ['/api/library/config', '/api/config', '/api/drivers', '/api/library/programs', '/api/transfers', '/api/users', '/api/auth/audit']) {
+  for (const yol of ['/api/library/config', '/api/config', '/api/drivers', '/api/library/programs', '/api/transfers', '/api/users', '/api/roles', '/api/auth/audit']) {
     assert.equal((await istek('GET', yol, { cerez: admin })).status, 200, yol);
   }
   const saglik = await istek('GET', '/api/health', { cerez: admin });
   assert.ok(saglik.json.db, 'admin saglik ayrintisini gorur');
 
-  const v = await istek('POST', '/api/users', { cerez: admin, govde: { username: 'izleyici', password: SIFRE_VIEWER, role: 'viewer' } });
+  // "admin" adiyla yeni rol yaratilamaz (sabit rol); writable:false ekranda "write" verilemez
+  const kotuAd = await istek('POST', '/api/roles', { cerez: admin, govde: { name: 'Admin', grants: {} } });
+  assert.equal(kotuAd.status, 400);
+  const kotuGrant = await istek('POST', '/api/roles', { cerez: admin, govde: { name: 'Deneme', grants: { isemirleri: 'write' } } });
+  assert.equal(kotuGrant.status, 400);
+
+  // rol duzenlenebilir (ad ve yetkiler); PUT ile guncelleme (ayri, tek kullanimlik bir rolde - asagidaki İzleyici'yi etkilemesin)
+  const taslakRol = await rolSagla(admin, 'Taslak', { gkk: 'read' });
+  const guncelle = await istek('PUT', `/api/roles/${taslakRol.id}`, { cerez: admin, govde: { name: 'Taslak', grants: { gkk: 'read', urunler: 'read' } } });
+  assert.equal(guncelle.status, 200, guncelle.text);
+  assert.equal(guncelle.json.role.grants.urunler, 'read');
+  assert.equal((await istek('DELETE', `/api/roles/${taslakRol.id}`, { cerez: admin })).status, 200, 'kullanilmayan rol silinebilir');
+
+  const izleyiciRol = await rolSagla(admin, 'İzleyici', IZLEYICI_GRANTS);
+  const v = await istek('POST', '/api/users', { cerez: admin, govde: { username: 'izleyici', password: SIFRE_VIEWER, role: 'İzleyici' } });
   assert.equal(v.status, 201, v.text);
   assert.ok(!v.text.includes('scrypt'), 'yanitta sifre ozeti yok');
+  assert.equal(v.json.user.roleName, 'İzleyici');
   const liste = await istek('GET', '/api/users', { cerez: admin });
-  assert.deepEqual(liste.json.users.map((u) => [u.username, u.role]), [['admin', 'admin'], ['izleyici', 'viewer']]);
+  assert.deepEqual(liste.json.users.map((u) => [u.username, u.isAdmin, u.roleName]), [['admin', true, null], ['izleyici', false, 'İzleyici']]);
+
+  // rol atanmis hesap varken silinemez
+  assert.equal((await istek('DELETE', `/api/roles/${izleyiciRol.id}`, { cerez: admin })).status, 409);
 });
 
 /* ---------------------------------------------------------------------- viewer */
@@ -167,7 +196,7 @@ test('admin: her sey acik; viewer hesabi olusturur', async () => {
 test('viewer: yalniz izleme; kutuphane, ayarlar, tezgah programlari/klasorleri, aktarim, kullanicilar 403', async () => {
   const viewer = await girisYap('izleyici', SIFRE_VIEWER);
   const me = await istek('GET', '/api/session', { cerez: viewer });
-  assert.deepEqual(me.json.user, { username: 'izleyici', role: 'viewer' });
+  assert.deepEqual(me.json.user, { username: 'izleyici', isAdmin: false, roleName: 'İzleyici', grants: IZLEYICI_GRANTS });
   assert.match((await istek('POST', '/api/auth/login', { govde: { username: 'izleyici', password: SIFRE_VIEWER } })).headers['set-cookie'][0], /Max-Age=2592000/, 'viewer: 30 gun');
 
   // izleme: acik
@@ -238,11 +267,12 @@ test('viewer: yalniz izleme; kutuphane, ayarlar, tezgah programlari/klasorleri, 
 test('operator (fabrika PC\'sinin ortak hesabi): is emri baslat/bitir ve durus nedeni acik; planlama/ayar/kutuphane/kullanici 403; IP gormez; viewer operator uclarini goremez', async () => {
   const admin = await girisYap('admin', SIFRE_ADMIN);
   const viewer = await girisYap('izleyici', SIFRE_VIEWER);
-  const olustur = await istek('POST', '/api/users', { cerez: admin, govde: { username: 'fabrika', password: 'fabrika-sifre-1', role: 'operator' } });
+  await rolSagla(admin, 'Operatör', OPERATOR_GRANTS);
+  const olustur = await istek('POST', '/api/users', { cerez: admin, govde: { username: 'fabrika', password: 'fabrika-sifre-1', role: 'Operatör' } });
   assert.equal(olustur.status, 201, olustur.text);
-  assert.equal(olustur.json.user.role, 'operator');
+  assert.equal(olustur.json.user.roleName, 'Operatör');
   const op = await girisYap('fabrika', 'fabrika-sifre-1');
-  assert.equal((await istek('GET', '/api/session', { cerez: op })).json.user.role, 'operator');
+  assert.equal((await istek('GET', '/api/session', { cerez: op })).json.user.roleName, 'Operatör');
 
   // yonetici bir urun karti ve is emri acar
   const kart = await istek('POST', '/api/planning/products', { cerez: admin, govde: { stockCode: 'OP-001', name: 'OPERATOR DENEME', material: 'HM-1', grossKg: 0.05, netKg: 0.04, plannedSec: 20 } });
@@ -400,7 +430,7 @@ test('ajan uclari: giris GEREKTIRMEZ ama yalniz sunucu bilgisayarindan; vekil/ba
 
 test('CSRF: baska siteden gelen yazma istekleri (Origin / Sec-Fetch-Site) reddedilir, ayni site gecer', async () => {
   const admin = await girisYap('admin', SIFRE_ADMIN);
-  const govde = { username: 'denemeci', password: 'deneme-sifre-9', role: 'viewer' };
+  const govde = { username: 'denemeci', password: 'deneme-sifre-9', role: 'İzleyici' };
   const kotu1 = await istek('POST', '/api/users', { cerez: admin, headers: { origin: 'http://saldirgan.example' }, govde });
   assert.equal(kotu1.status, 403);
   const kotu2 = await istek('POST', '/api/users', { cerez: admin, headers: { 'sec-fetch-site': 'cross-site' }, govde });

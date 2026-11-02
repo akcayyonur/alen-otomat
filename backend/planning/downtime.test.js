@@ -179,7 +179,7 @@ test('HTTP: kodlar, ana ekran, duruslar, neden ekle/kaldir; operator is emri bas
   const routes = createPlanningRoutes({ planning: p });
   const srv = http.createServer(async (req, res) => {
     const rol = req.headers['x-test-rol'];
-    if (rol) req.user = { username: 'fabrika', role: rol };
+    if (rol) req.user = { username: 'fabrika', isAdmin: rol === 'admin' };
     if (!(await routes(req, res, new URL(req.url, 'http://x')))) res.writeHead(404).end();
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));

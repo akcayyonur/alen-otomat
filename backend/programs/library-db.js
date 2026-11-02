@@ -11,6 +11,7 @@
  *   machine_scans     tezgah basina son tarama bilgisi
  *   transfers         tezgaha YAZMA denetim kaydi (kim, ne zaman, hangi tezgaha, sonuc);
  *                     kind = 'gonderme' (program) | 'klasor' (yeni musteri klasoru) | 'silme' (tornadan silme) | 'toplu' (toplu gonderme: program basina bir kayit)
+ *                     | 'yeniden-adlandirma' (kutuphanede ad degisince tornadaki dosyayi da RNFR/RNTO ile yeniden adlandirma; tezgah basina bir kayit)
  *   library_log       KUTUPHANEDEN silme VE yeniden adlandirma kaydi (kim, ne zaman, hangi program, eski/yeni ad)
  *   program_backups   TOPLU GONDERMEDE ezilen tornadaki eski haller (surum DEGIL: surum numaralarini ve "guncel surum" mantigini
  *                     bozmasin diye ayri tablo). Ayni (musteri, ad, SHA) bir kez saklanir.
@@ -429,6 +430,33 @@ export class LibraryDb {
   /** Tornadan silme sonrasi: envanterden kaldir (dosya artik tezgahta yok). */
   removeInventory(machineId, customer, name) {
     this.db.prepare('DELETE FROM machine_programs WHERE machine_id = ? AND customer = ? AND name = ?').run(machineId, customer, name);
+  }
+
+  /** Bu adla kayitli dosyasi olan tezgahlar (son envantere gore): kutuphanede yeniden adlandirirken "nerede var" sorusu. */
+  machinesWithEntry(customer, name) {
+    return this.db
+      .prepare('SELECT DISTINCT machine_id FROM machine_programs WHERE customer = ? AND name = ? ORDER BY machine_id')
+      .all(customer, name)
+      .map((r) => r.machine_id);
+  }
+
+  /**
+   * Tezgahtaki envanter kaydini YENIDEN ADLANDIRIR (gercek FTP rename basariyla dogrulandiktan sonra cagrilir):
+   * icerik/boyut/SHA aynen kalir, yalniz ad degisir; seen_at simdiye guncellenir (az once dogrulandi). Kayit
+   * yoksa sessizce atlanir (envanter zaten baska bir sekilde guncellenmis olabilir).
+   */
+  renameInventoryEntry(machineId, customer, oldName, newName) {
+    this.#tx(() => {
+      const row = this.db.prepare('SELECT * FROM machine_programs WHERE machine_id = ? AND customer = ? AND name = ?').get(machineId, customer, oldName);
+      if (!row) return;
+      this.db.prepare('DELETE FROM machine_programs WHERE machine_id = ? AND customer = ? AND name = ?').run(machineId, customer, oldName);
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO machine_programs (machine_id, customer, name, size, modified, seen_at, sha256)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(machineId, customer, newName, row.size, row.modified, Date.now(), row.sha256);
+    });
   }
 
   /** Gonderme sonrasi: tezgahta artik bu dosya var. */

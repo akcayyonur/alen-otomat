@@ -74,6 +74,8 @@ export const STEP_LABEL = Object.freeze({
   'klasor-dogrula': 'Klasörü doğrulama',
   silme: 'Tornadan silme (DELE)',
   'silme-dogrula': 'Silindiğini doğrulama',
+  'yeniden-adlandir': 'Yeniden adlandırma (RNFR/RNTO)',
+  dogrula: 'Doğrulama',
 });
 
 export const TRANSFER_STATUS = Object.freeze({

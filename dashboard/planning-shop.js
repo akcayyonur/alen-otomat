@@ -9,7 +9,7 @@
  */
 import { escapeHtml, stateOf } from './format.js';
 import { api, post } from './lib-common.js';
-import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, isViewer, sectionClosed, truncCell } from './planning-common.js';
+import { del, cellText, fmtNum, fmtDec, openModal, chip, debounce, rememberedPerson, rememberPerson, canWrite, isAdminRole, sectionClosed, truncCell } from './planning-common.js';
 import { openStartDialog, openFinishDialog, openEditFieldsDialog } from './planning-production.js';
 import { openCrateCard, openIssueCard } from './planning-card.js';
 import { openMeasureDialog, openMeasureReport } from './planning-measure.js';
@@ -43,7 +43,7 @@ export async function renderShop(host) {
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
   let last = '';
   let data = null;
-  const readOnly = isViewer(); // izleyici: her şeyi görür, hiçbir şeyi değiştiremez (sunucu da reddeder)
+  const readOnly = !canWrite('tezgahbasi'); // yalniz okuyabilen rol: her şeyi görür, hiçbir şeyi değiştiremez (sunucu da reddeder)
 
   /** Üretimdeki iş emrinin GKK ve ilk onay numaraları (ustaların iş emrine yazdığı). */
   function refsBlock(a) {
@@ -121,6 +121,7 @@ export async function renderShop(host) {
         cardBlock(a) +
         (readOnly ? '' : `<div class="shop-actions"><button type="button" class="icon-btn shop-btn" data-act="edit-wo" data-no="${escapeHtml(a.no)}" title="İlk onay rapor no, ölçülen net gramaj, GKK rapor no...">İş emrini düzenle</button>` +
           `<button type="button" class="icon-btn shop-btn" data-act="approval-new" data-no="${escapeHtml(a.no)}" title="İlk parça ölçülüp onaylanınca sıradaki ilk onay numarasını verir">İlk onay numarası al</button>` +
+          (isAdminRole() ? `<button type="button" class="icon-btn shop-btn" data-act="reassign" data-no="${escapeHtml(a.no)}" data-machine="${escapeHtml(m.id)}" title="Yanlışlıkla bu tezgaha bağlanmışsa doğru tezgaha taşır (yalnız yönetici)">Tezgahı düzelt…</button>` : '') +
           `<button type="button" class="icon-btn shop-btn btn-primary" data-act="finish" data-no="${escapeHtml(a.no)}">İş emrini bitir</button></div>`);
     } else {
       const running = m.program?.state === 'calisiyor';
@@ -194,6 +195,7 @@ export async function renderShop(host) {
     else if (act === 'wo-form') openWorkOrderForm(btn.dataset.no);
     else if (act === 'approval-new') createFirstApproval(btn.dataset.no, refresh);
     else if (act === 'crate-card') openCrateCard(Number(btn.dataset.id));
+    else if (act === 'reassign') openReassignDialog(btn.dataset.no, btn.dataset.machine, data.machines, refresh);
   };
 
   await load();
@@ -201,6 +203,44 @@ export async function renderShop(host) {
     if (host.__shopToken !== token || !host.isConnected) { clearInterval(timer); return; }
     load();
   }, REFRESH_MS);
+}
+
+/**
+ * Yanlışlıkla yanlış tezgaha bağlanmış (üretimdeki) iş emrini doğru tezgaha taşır. Eski tezgahtaki sayım
+ * kaybolur (sunucu uyarı döner); yeni tezgahta sayım şimdiden yeniden başlar.
+ */
+function openReassignDialog(no, currentId, machines, onDone) {
+  const secenekler = machines.filter((x) => x.id !== currentId);
+  const m = openModal({ title: `Tezgahı düzelt · ${no}` });
+  m.body.innerHTML =
+    `<p class="notice notice-sim">Bu iş emri şu an <b class="mono">${escapeHtml(currentId)}</b> tezgahında üretimde görünüyor. Yanlışlıkla bu tezgaha bağlandıysa doğru tezgahı seçin: ` +
+    `<b>${escapeHtml(currentId)} tezgahındaki sayım kaybolur</b>, doğru tezgahta sayım şimdiden yeniden başlar.</p>` +
+    '<form autocomplete="off"><label class="fld"><span>Doğru tezgah</span><select name="machineId">' +
+    secenekler.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.id)}${x.name && x.name !== x.id ? ` · ${escapeHtml(x.name)}` : ''}</option>`).join('') +
+    '</select></label>' +
+    '<p class="notice notice-sim" data-role="err" hidden></p>' +
+    '<div class="dt-actions"><button type="button" class="icon-btn" data-act="cancel">Vazgeç</button><button type="submit" class="icon-btn btn-primary">Tezgahı düzelt</button></div></form>';
+  const form = m.body.querySelector('form');
+  m.body.querySelector('[data-act="cancel"]').addEventListener('click', m.close);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const target = form.elements.machineId.value;
+    if (!window.confirm(`${no} iş emri ${currentId} → ${target} tezgahına taşınsın mı? ${currentId}'teki sayım kaybolur.`)) return;
+    const err = m.body.querySelector('[data-role="err"]');
+    const btn = form.querySelector('[type="submit"]');
+    err.hidden = true;
+    btn.disabled = true;
+    try {
+      const r = await post(`/api/planning/work-orders/${encodeURIComponent(no)}/reassign-machine`, { machineId: target });
+      m.close();
+      if (r.warnings?.length) window.alert(r.warnings.join('\n'));
+      onDone();
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+      btn.disabled = false;
+    }
+  });
 }
 
 /* ===================================================== başka iş emri seç */

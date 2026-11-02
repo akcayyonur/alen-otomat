@@ -117,6 +117,17 @@ test('kart bas: GKK rapor no basarken yazilabilir (is emrine islenir, gecmise ya
   assert.equal(p.getWorkOrder(w.no, { now: NOW }).crates.items.length, 3, 'gecersiz istekte kart olusmadi');
 });
 
+test('kart bas: is emrinin ilk onay rapor no alani karta kopyalanir (salt gosterim)', () => {
+  const { p, st } = kur();
+  const w = uretimde(p, st);
+  const k0 = p.issueCard(w.no, {}, { now: day(8) });
+  assert.equal(k0.firstApprovalNo, null, 'henuz ilk onay numarasi alinmadi');
+  p.updateWorkOrder(w.no, { firstApprovalNo: 'İ26-0007' }, { now: day(8, 10) });
+  const k1 = p.issueCard(w.no, {}, { now: day(9) });
+  assert.equal(k1.firstApprovalNo, 'İ26-0007');
+  assert.equal(p.getCrate(k0.id, { now: NOW }).firstApprovalNo, 'İ26-0007', 'eski kart yeniden gosterilince de is emrinin GUNCEL degeri gorunur');
+});
+
 test('kart bas: uyarilar (hic parca sayilmadi, az once baska kart basildi, tezgahtan veri yok)', () => {
   const { p, st } = kur();
   const w = uretimde(p, st);

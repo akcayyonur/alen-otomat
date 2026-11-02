@@ -27,7 +27,7 @@ const machineOptions = (machines, selected = '', blank = '— seçin —') =>
     `<option value="${escapeHtml(m.id)}"${m.id === selected ? ' selected' : ''}>${escapeHtml(m.id)}${m.name && m.name !== m.id ? ` · ${escapeHtml(m.name)}` : ''}</option>`).join('');
 const gramInput = (kg) => (kg === null || kg === undefined ? '' : String(Number((kg * 1000).toFixed(4))).replace('.', ','));
 const EVENT_LABEL = Object.freeze({
-  olusturuldu: 'oluşturuldu', guncellendi: 'güncellendi', iptal: 'iptal edildi', baslatildi: 'üretime başlatıldı', bitirildi: 'bitirildi', 'yeniden-acildi': 'üretime geri alındı',
+  olusturuldu: 'oluşturuldu', guncellendi: 'güncellendi', iptal: 'iptal edildi', baslatildi: 'üretime başlatıldı', bitirildi: 'bitirildi', 'yeniden-acildi': 'üretime geri alındı', 'elle-bitirildi': 'elle bitirildi', 'tezgah-duzeltildi': 'tezgah düzeltildi',
   'kart-basildi': 'ürün tanıtım kartı basıldı', 'olcu-kontrol': 'ölçü kontrolü girildi', 'olcu-plani': 'ölçü planı güncellendi', 'kasa-acildi': 'kasa açıldı', 'kasa-kapandi': 'kasa kapandı', 'kasa-paketlendi': 'kasa paketlendi', 'kasa-iptal': 'kasa iptal edildi',
   'fis-girildi': 'Mikro fişi girildi', 'fis-geri-alindi': 'Mikro fişi işareti geri alındı',
   'cizim-eklendi': 'teknik resim eklendi', 'cizim-silindi': 'teknik resim kaldırıldı',
@@ -470,7 +470,9 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       '<p class="notice notice-sim" data-role="err" hidden></p>' +
       '<div class="dt-actions"><button type="button" class="icon-btn" data-act="form">Formu aç / yazdır</button>' +
       (w.status === 'planlandi' ? '<button type="button" class="icon-btn btn-primary" data-act="start">Üretime başlat…</button>' : '') +
+      (w.status === 'planlandi' ? '<button type="button" class="icon-btn" data-act="finish-manual-ask">İş emrini bitir…</button>' : '') +
       (w.status === 'uretimde' ? '<button type="button" class="icon-btn btn-primary" data-act="finish">Bitir…</button>' : '') +
+      (w.status === 'uretimde' ? '<button type="button" class="icon-btn" data-act="reassign-ask">Tezgahı düzelt…</button>' : '') +
       (w.status === 'bitti' ? '<button type="button" class="icon-btn" data-act="reopen-ask">Üretime geri al…</button>' : '') +
       (canCancel ? '<button type="button" class="icon-btn btn-danger" data-act="cancel-ask">İptal et…</button>' : '') +
       (ro ? '' : '<button type="submit" class="icon-btn btn-primary">Kaydet</button>') + '</div></form>' +
@@ -478,6 +480,18 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       '<p class="notice notice-sim" data-role="reopen-err" hidden></p><div class="dt-actions"><button type="button" class="icon-btn" data-act="reopen-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="reopen-yes">Evet, geri al</button></div></div>' +
       '<div data-role="cancel-box" hidden><h4 class="sub">İş emrini iptal et</h4><label class="fld"><span>İptal nedeni (zorunlu)</span><input name="reason" maxlength="200" autocomplete="off"></label>' +
       '<p class="notice notice-sim" data-role="cancel-err" hidden></p><div class="dt-actions"><button type="button" class="icon-btn" data-act="cancel-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="cancel-yes">İptali onayla</button></div></div>' +
+      '<div data-role="reassign-box" hidden><h4 class="sub">Tezgahı düzelt</h4>' +
+      '<p class="hint">İş emri yanlış tezgahta başlatıldıysa doğru tezgahı seçin. Eski tezgahta sayılan adet bu iş emrine yazılmaz; yeni tezgahta sayım şimdiden yeniden başlar.</p>' +
+      `<label class="fld"><span>Doğru tezgah</span><select name="reassignMachine">${machineOptions(meta.machines.filter((x) => x.id !== w.machineId), '', '— seçin —')}</select></label>` +
+      '<p class="notice notice-sim" data-role="reassign-err" hidden></p>' +
+      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="reassign-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="reassign-yes">Tezgahı değiştir</button></div></div>' +
+      '<div data-role="finish-manual-box" hidden><h4 class="sub">İş emrini elle bitir</h4>' +
+      '<p class="hint">Bu iş emri hiç başlatılmadı (eski/geriye dönük kayıt). Adedi elle girip onaylayın: üretimde adımı atlanarak doğrudan "bitti" olur, adet telemetriden SAYILMAZ.</p>' +
+      '<div class="fld-grid"><label class="fld"><span>Adet (zorunlu)</span><input name="fmQty" inputmode="numeric" autocomplete="off"></label>' +
+      `<label class="fld"><span>Bitiş tarihi</span><input name="fmDate" type="date" value="${escapeHtml(isoDate(Date.now()))}"></label></div>` +
+      '<label class="fld"><span>Not</span><input name="fmNote" maxlength="500" autocomplete="off"></label>' +
+      '<p class="notice notice-sim" data-role="finish-manual-err" hidden></p>' +
+      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="finish-manual-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="finish-manual-yes">Adedi onayla, bitir</button></div></div>' +
       '<h4 class="sub">Geçmiş</h4><ul class="pl-events">' + w.events.map((e) => `<li><span class="mono">${escapeHtml(dateTimeText(e.at))}</span> · ${escapeHtml(e.by ?? '—')} · <b>${escapeHtml(EVENT_LABEL[e.kind] ?? e.kind)}</b>${e.detail ? ` — ${escapeHtml(e.detail)}` : ''}</li>`).join('') + '</ul>';
     wire();
   }
@@ -597,6 +611,38 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       const err = m.body.querySelector('[data-role="cancel-err"]');
       try {
         w = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/cancel`, { reason: m.body.querySelector('[name="reason"]').value });
+        onChanged();
+        draw();
+      } catch (e) { err.textContent = e.message; err.hidden = false; }
+    }
+    else if (act === 'reassign-ask') m.body.querySelector('[data-role="reassign-box"]').hidden = false;
+    else if (act === 'reassign-no') m.body.querySelector('[data-role="reassign-box"]').hidden = true;
+    else if (act === 'reassign-yes') {
+      const box = m.body.querySelector('[data-role="reassign-box"]');
+      const err = box.querySelector('[data-role="reassign-err"]');
+      const machineId = box.querySelector('[name="reassignMachine"]').value;
+      if (!machineId) { err.textContent = 'Tezgah seçin.'; err.hidden = false; return; }
+      try {
+        const r = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/reassign-machine`, { machineId });
+        w = r;
+        onChanged();
+        draw();
+        if (r.warnings?.length) window.alert(r.warnings.join('\n'));
+      } catch (e) { err.textContent = e.message; err.hidden = false; }
+    }
+    else if (act === 'finish-manual-ask') { m.body.querySelector('[data-role="finish-manual-box"]').hidden = false; m.body.querySelector('[name="fmQty"]').focus(); }
+    else if (act === 'finish-manual-no') m.body.querySelector('[data-role="finish-manual-box"]').hidden = true;
+    else if (act === 'finish-manual-yes') {
+      const box = m.body.querySelector('[data-role="finish-manual-box"]');
+      const err = box.querySelector('[data-role="finish-manual-err"]');
+      const rawQty = box.querySelector('[name="fmQty"]').value.trim();
+      const qty = rawQty === '' ? null : Number(rawQty.replace(/\./g, '').replace(',', '.'));
+      if (qty === null || !Number.isFinite(qty)) { err.textContent = 'Adet girilmeli.'; err.hidden = false; return; }
+      const dateVal = box.querySelector('[name="fmDate"]').value;
+      try {
+        w = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/finish-manual`, {
+          qty, finishedAt: dateVal || undefined, note: box.querySelector('[name="fmNote"]').value,
+        });
         onChanged();
         draw();
       } catch (e) { err.textContent = e.message; err.hidden = false; }

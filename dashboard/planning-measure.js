@@ -12,6 +12,15 @@ import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import { put, fmtNum, openModal, rememberedPerson, rememberPerson, isAdminRole, printModal } from './planning-common.js';
 
+/** Ölçüm cihazları (backend/planning/measure.js DEVICES/DEVICE_LABEL ile AYNI liste). */
+const DEVICES = Object.freeze([
+  { kind: 'kumpas', label: 'Kumpas' },
+  { kind: 'mastar', label: 'Mastar' },
+  { kind: 'kamera', label: 'Kameralı Görüntüleme' },
+  { kind: 'mihengir', label: 'Mihengir' },
+]);
+const deviceLabel = (kind) => DEVICES.find((d) => d.kind === kind)?.label ?? '';
+
 const SLOT_MS = 30 * 60_000;
 const pad = (n) => String(n).padStart(2, '0');
 const hm = (ms) => `${pad(new Date(ms).getHours())}:${pad(new Date(ms).getMinutes())}`;
@@ -43,6 +52,8 @@ const limitText = (r) => {
   if (r.min == null && r.max == null) return `nominal ${fmt(r.nominal)}`;
   return `${r.min == null ? '…' : fmt(r.min)} – ${r.max == null ? '…' : fmt(r.max)}`;
 };
+/** Satır başlığının altında gösterilen ikinci satır: tolerans aralığı + (varsa) ölçüm cihazı. */
+const rowMeta = (r) => [limitText(r), r.device ? deviceLabel(r.device) : ''].filter(Boolean).join(' · ');
 
 /* ====================================================================== giriş penceresi */
 
@@ -76,7 +87,7 @@ export async function openMeasureDialog(woNo, onDone = () => {}) {
     const isNow = st.slot === d.currentSlot;
     const rowsHtml = d.plan.map((r, i) => {
       const v = cur?.values[i + 1]?.value ?? null;
-      return `<tr data-row="${i + 1}"><td class="num"><b>${i + 1}</b></td><td><b>${escapeHtml(r.label)}</b>${limitText(r) ? `<br><small class="hint">${escapeHtml(limitText(r))}</small>` : ''}</td>` +
+      return `<tr data-row="${i + 1}"><td class="num"><b>${i + 1}</b></td><td><b>${escapeHtml(r.label)}</b>${rowMeta(r) ? `<br><small class="hint">${escapeHtml(rowMeta(r))}</small>` : ''}</td>` +
         `<td><input class="ms-in" name="v${i + 1}" inputmode="decimal" autocomplete="off" value="${escapeHtml(fmt(v))}" aria-label="${escapeHtml(r.label)} ölçüsü"></td><td class="ms-st" data-st="${i + 1}"></td></tr>`;
     }).join('');
     const checkHtml = CHECKS.map((c) => {
@@ -216,8 +227,8 @@ export async function openMeasurePlanDialog(target, onDone = () => {}) {
       productCode = data.stockCode;
     }
   } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`; return; }
-  const rows = plan.map((r) => ({ label: r.label, nominal: fmt(r.nominal), lower: fmt(r.lower), upper: fmt(r.upper) }));
-  if (rows.length === 0) rows.push({ label: '', nominal: '', lower: '', upper: '' });
+  const rows = plan.map((r) => ({ label: r.label, nominal: fmt(r.nominal), lower: fmt(r.lower), upper: fmt(r.upper), device: r.device ?? '' }));
+  if (rows.length === 0) rows.push({ label: '', nominal: '', lower: '', upper: '', device: '' });
   let error = null;
   let toProduct = isAdminRole(); // yönetici bir iş emrinde tanımlıyorsa varsayılan: ürün kartına da kaydet
 
@@ -226,12 +237,13 @@ export async function openMeasurePlanDialog(target, onDone = () => {}) {
       `<p class="pl-wohead">${head}</p>` +
       '<p class="hint">Her satır ölçülecek bir özelliktir; <b>kaç satır olacağı ürüne göre değişir</b> (3 ölçü, 5 ölçü ...; en çok 10). <b>Nominal</b> ve <b>sapmalar</b> yazılırsa tolerans dışı değerler otomatik işaretlenir. ' +
       'Alt sapmayı eksi işaretiyle yazın: <b>Ø34,2 −0,1/+0</b> → nominal 34,2 · alt −0,1 · üst 0. Sapma gerekmiyorsa boş bırakın.</p>' +
-      '<form autocomplete="off"><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th class="num">#</th><th>Ölçü adı</th><th>Nominal</th><th>Alt sapma</th><th>Üst sapma</th><th></th></tr></thead><tbody>' +
+      '<form autocomplete="off"><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th class="num">#</th><th>Ölçü adı</th><th>Nominal</th><th>Alt sapma</th><th>Üst sapma</th><th>Ölçüm cihazı</th><th></th></tr></thead><tbody>' +
       rows.map((r, i) => `<tr data-i="${i}"><td class="num"><b>${i + 1}</b></td>` +
         `<td><input name="label${i}" maxlength="40" value="${escapeHtml(r.label)}" placeholder="ör. Ø34,2" class="ms-in-w"></td>` +
         `<td><input name="nominal${i}" inputmode="decimal" value="${escapeHtml(r.nominal)}" class="ms-in"></td>` +
         `<td><input name="lower${i}" inputmode="decimal" value="${escapeHtml(r.lower)}" placeholder="−0,1" class="ms-in"></td>` +
         `<td><input name="upper${i}" inputmode="decimal" value="${escapeHtml(r.upper)}" placeholder="0" class="ms-in"></td>` +
+        `<td><select name="device${i}"><option value=""${r.device === '' ? ' selected' : ''}>—</option>${DEVICES.map((d) => `<option value="${d.kind}"${r.device === d.kind ? ' selected' : ''}>${escapeHtml(d.label)}</option>`).join('')}</select></td>` +
         `<td><button type="button" class="icon-btn icon-btn-sm" data-act="del" data-i="${i}" aria-label="${i + 1}. satırı sil">Sil</button></td></tr>`).join('') +
       '</tbody></table></div>' +
       (!forProduct && isAdminRole() && productCode
@@ -244,19 +256,22 @@ export async function openMeasurePlanDialog(target, onDone = () => {}) {
   }
   const read = () => {
     const f = m.body.querySelector('form');
-    rows.forEach((r, i) => { r.label = f.elements[`label${i}`].value; r.nominal = f.elements[`nominal${i}`].value; r.lower = f.elements[`lower${i}`].value; r.upper = f.elements[`upper${i}`].value; });
+    rows.forEach((r, i) => {
+      r.label = f.elements[`label${i}`].value; r.nominal = f.elements[`nominal${i}`].value; r.lower = f.elements[`lower${i}`].value; r.upper = f.elements[`upper${i}`].value;
+      r.device = f.elements[`device${i}`].value;
+    });
     if (f.elements.toProduct) toProduct = f.elements.toProduct.checked;
   };
   m.body.addEventListener('click', (ev) => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (act === 'close') { m.close(); return; }
-    if (act === 'add' && rows.length < 10) { read(); rows.push({ label: '', nominal: '', lower: '', upper: '' }); error = null; draw(); }
+    if (act === 'add' && rows.length < 10) { read(); rows.push({ label: '', nominal: '', lower: '', upper: '', device: '' }); error = null; draw(); }
     if (act === 'del') { read(); rows.splice(Number(ev.target.closest('[data-i]').dataset.i), 1); error = null; draw(); }
   });
   m.body.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     read();
-    const payload = rows.filter((r) => r.label.trim() !== '' || r.nominal.trim() !== '' || r.lower.trim() !== '' || r.upper.trim() !== '');
+    const payload = rows.filter((r) => r.label.trim() !== '' || r.nominal.trim() !== '' || r.lower.trim() !== '' || r.upper.trim() !== '' || r.device.trim() !== '');
     try {
       if (forProduct) await put(`/api/planning/products/${encodeURIComponent(t.stockCode)}/measure-plan`, { rows: payload });
       else await put(`/api/planning/work-orders/${encodeURIComponent(t.woNo)}/measure-plan`, { rows: payload, ...(toProduct && isAdminRole() ? { saveToProduct: true } : {}) });
@@ -307,7 +322,7 @@ export function sheetHtml(sheet) {
     // Satır sayısı ürüne göre değişir: tanımlı ölçü kadar satır basılır (3 ölçü, 5 ölçü ...); hiç tanımlı değilse kâğıt gibi 10 boş satır.
     const rows = Array.from({ length: plan.length > 0 ? plan.length : 10 }, (_, r) => {
       const p = plan[r];
-      const label = p ? `${r + 1}. ${escapeHtml(p.label)}${limitText(p) ? `<small>${escapeHtml(limitText(p))}</small>` : ''}` : `${r + 1}.`;
+      const label = p ? `${r + 1}. ${escapeHtml(p.label)}${rowMeta(p) ? `<small>${escapeHtml(rowMeta(p))}</small>` : ''}` : `${r + 1}.`;
       return `<tr><th class="ms-lbl">${label}</th>${idx.map((i) => {
         const v = cells.get(i)?.values[r + 1];
         if (!v) return '<td></td>';

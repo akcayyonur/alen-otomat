@@ -24,12 +24,14 @@
     Iki paketin yerel DLL'leri ayni adi tasidigi icin ayni surecte yuklenemez: her
     model kurulumda kendi klasorunde (agent\ ve agent22\) ayri bir ajandir.
 
-    -KapaliBolumler: bu kurulumda KAPALI Planlama bolumleri (varsayilan: paketleme, hammadde).
+    -KapaliBolumler: bu kurulumda KAPALI Planlama bolumleri (varsayilan: HEPSI ACIK, @()).
     Kapali bolum hic kimseye (yonetici dahil) gorunmez ve sunucu ilgili uclari reddeder
-    (config\features.json). Hazir olunca yeniden acmak = yeni bir kurulum paketi:
-        .\build-installer.ps1 -KapaliBolumler @()                    # hepsi acik
-        .\build-installer.ps1 -KapaliBolumler 'hammadde'            # yalniz hammadde kapali
-    Depodaki config\features.json her seyi ACIK birakir (gelistirme/demo); paketteki dosyayi bu parametre yazar.
+    (config\features.json). KULLANICI KARARI (2026-11-02, tekrar tekrar belirtildi): yonetici
+    icin Planlama'da HICBIR bolum kapali kurulmamali - varsayilani elle KAPATMAK gerekir, acik
+    birakmak degil:
+        .\build-installer.ps1                                        # varsayilan: hepsi acik
+        .\build-installer.ps1 -KapaliBolumler 'hammadde'            # yalniz hammadde kapali (BILINCLI istisna)
+    Depodaki config\features.json zaten her seyi ACIK birakir (gelistirme/demo); paketteki dosyayi bu parametre yazar.
 
     -MikroEnvFile: MikroAPI kimlik bilgilerini (host/port/firma kodu/kullanici/sifre/anahtar) ICEREN bir .env
     dosyasi (ornek: .claude\mikro.env formati) - verilirse paketlenir, ILK kurulumda data\mikro.env olarak
@@ -56,8 +58,9 @@ param(
     [string]$NodeExe,
 
     # Bu kurulumda KAPALI Planlama bolumleri (shared/features.js: paketleme, hammadde). Bos liste = hepsi acik.
-    # Varsayilan KAPALI: bu bolumler rafine edilene kadar kurulumlara girmez; acmak icin acikca @() verilir.
-    [string[]]$KapaliBolumler = @('paketleme', 'hammadde'),
+    # VARSAYILAN HEPSI ACIK (2026-11-02, kullanici karari): yonetici icin kapali bolum OLMAMALI.
+    # Bir bolumu bilincli olarak kapatmak gerekiyorsa -KapaliBolumler ile ACIKCA verilir.
+    [string[]]$KapaliBolumler = @(),
 
     # MikroAPI kimlik bilgileri (.env dosyasi) - verilirse ILK kurulumda data\mikro.env olarak gomulur.
     [string]$MikroEnvFile = $env:CNC_MIKRO_ENV,

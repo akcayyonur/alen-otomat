@@ -18,7 +18,7 @@ const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'tailscale-user-login'];
 
-const DISABLED_USER = Object.freeze({ id: 0, username: 'yerel (giriş kapalı)', role: 'admin', authDisabled: true });
+const DISABLED_USER = Object.freeze({ id: 0, username: 'yerel (giriş kapalı)', isAdmin: true, roleName: null, grants: null, authDisabled: true });
 
 /* ------------------------------------------------------------------------ yardimcilar */
 
@@ -96,7 +96,7 @@ async function readJson(req) {
   }
 }
 
-const publicUser = (u) => ({ username: u.username, role: u.role });
+const publicUser = (u) => ({ username: u.username, isAdmin: !!u.isAdmin, roleName: u.roleName ?? null, grants: u.isAdmin ? null : (u.grants ?? {}) });
 
 /* ----------------------------------------------------------------------------- kapi */
 
@@ -135,12 +135,20 @@ export function createGate({ auth, disabled = false }) {
       send(res, 401, { error: 'Giriş gerekli.' });
       return false;
     }
-    if (kind === 'admin' && req.user.role !== 'admin') {
+    if (req.user.isAdmin) return true; // admin HER ZAMAN her seye erisir
+    if (kind === 'admin') {
       send(res, 403, { error: 'Bu işlem için yönetici yetkisi gerekir.' });
       return false;
     }
-    if (kind === 'operator' && req.user.role !== 'admin' && req.user.role !== 'operator') {
-      send(res, 403, { error: 'Bu işlem için operatör ya da yönetici yetkisi gerekir.' });
+    if (kind === 'viewer') return true; // giris yapmis herkese acik temel izleme
+    // kind = {screen, level}: rolun o ekranda yetkisi olmali
+    const grant = req.user.grants?.[kind.screen];
+    if (!grant) {
+      send(res, 403, { error: 'Bu ekrana erişim yetkiniz yok.' });
+      return false;
+    }
+    if (kind.level === 'write' && grant !== 'write') {
+      send(res, 403, { error: 'Bu ekranda yalnız görüntüleme yetkiniz var.' });
       return false;
     }
     return true;
@@ -169,11 +177,12 @@ export function createAuthRoutes({ auth, disabled = false, sessionExtra = {} }) 
     const method = req.method;
     if (!pathname.toLowerCase().startsWith('/api/')) return false;
     const usersMatch = /^\/api\/users(?:\/(\d+)(\/password)?)?$/.exec(pathname);
+    const rolesMatch = /^\/api\/roles(?:\/(\d+))?$/.exec(pathname);
     const known =
       (method === 'GET' && pathname === '/api/session') ||
       (method === 'POST' && ['/api/auth/login', '/api/auth/setup', '/api/auth/logout', '/api/auth/password'].includes(pathname)) ||
       (method === 'GET' && pathname === '/api/auth/audit') ||
-      usersMatch;
+      usersMatch || rolesMatch;
     if (!known) return false;
 
     try {
@@ -239,6 +248,27 @@ export function createAuthRoutes({ auth, disabled = false, sessionExtra = {} }) 
         if (method === 'PUT' && id !== null && usersMatch[2]) {
           const b = await readJson(req);
           await auth.setPassword(id, b.password, { actor, ...meta(req) });
+          return send(res, 200, { ok: true }), true;
+        }
+        return false;
+      }
+
+      if (rolesMatch) {
+        const id = rolesMatch[1] ? Number(rolesMatch[1]) : null;
+        const actor = req.user;
+        if (method === 'GET' && id === null) return send(res, 200, { roles: auth.listRoles() }), true;
+        if (method === 'POST' && id === null) {
+          const b = await readJson(req);
+          const role = auth.createRole({ name: b.name, grants: b.grants }, { actor, ...meta(req) });
+          return send(res, 201, { role }), true;
+        }
+        if (method === 'PUT' && id !== null) {
+          const b = await readJson(req);
+          const role = auth.updateRole(id, { name: b.name, grants: b.grants }, { actor, ...meta(req) });
+          return send(res, 200, { role }), true;
+        }
+        if (method === 'DELETE' && id !== null) {
+          auth.deleteRole(id, { actor, ...meta(req) });
           return send(res, 200, { ok: true }), true;
         }
         return false;

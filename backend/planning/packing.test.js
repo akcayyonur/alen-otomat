@@ -146,11 +146,13 @@ test('is emri ayrintisinda paketleme toplami: satir, koli, adet, hurda (iptal ed
 
 /* ------------------------------------------------------------ yetki ve HTTP */
 
-test('yetki: paketleme formu operator + yonetici, izleyiciye kapali; klasor eslestirme ve dosya kaldirma yalniz yonetici; etiket dosyasini operator acar', () => {
+test('yetki: paketleme formu "paketleme" ekranina bagli (read/write), izleyiciye kapali; klasor eslestirme ve dosya kaldirma yalniz yonetici; etiket dosyasini yazabilen rol acar', () => {
+  for (const [m, yol] of [['GET', '/api/planning/packing/sheet'], ['GET', '/api/planning/packing/suggest'], ['GET', '/api/planning/product-files/5']]) {
+    assert.deepEqual(classify(m, yol), { screen: 'paketleme', level: 'read' }, `${m} ${yol}`);
+  }
   for (const [m, yol] of [
-    ['GET', '/api/planning/packing/sheet'], ['GET', '/api/planning/packing/suggest'], ['PUT', '/api/planning/packing/sheet/air'], ['POST', '/api/planning/packing/rows'],
-    ['PUT', '/api/planning/packing/rows/12'], ['DELETE', '/api/planning/packing/rows/12'], ['GET', '/api/planning/product-files/5'],
-  ]) assert.equal(classify(m, yol), 'operator', `${m} ${yol}`);
+    ['PUT', '/api/planning/packing/sheet/air'], ['POST', '/api/planning/packing/rows'], ['PUT', '/api/planning/packing/rows/12'], ['DELETE', '/api/planning/packing/rows/12'],
+  ]) assert.deepEqual(classify(m, yol), { screen: 'paketleme', level: 'write' }, `${m} ${yol}`);
   for (const [m, yol] of [
     ['DELETE', '/api/planning/product-files/5'], ['GET', '/api/planning/drawing-folder'], ['PUT', '/api/planning/drawing-folder/dir'], ['POST', '/api/planning/drawing-folder/match'],
     ['GET', '/api/planning/sticker-folder'], ['PUT', '/api/planning/sticker-folder/dir'], ['POST', '/api/planning/sticker-folder/match'],

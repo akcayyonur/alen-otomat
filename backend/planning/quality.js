@@ -14,6 +14,7 @@ import { parseApprovalCode, formatApprovalCode, readApprovalSheet } from './firs
 import { parseDate } from './normalize.js';
 import { machineNumber } from './calc.js';
 import { inspectPdf, mergePdfs, PdfError } from '../pdf-merge.js';
+import { text } from './fields.js';
 
 /** Bir iş emrine en çok bu kadar çizim; her biri en çok bu kadar bayt. */
 export const MAX_DRAWINGS = 8;
@@ -22,14 +23,6 @@ export const MAX_DRAWING_BYTES = 20 * 1024 * 1024;
 export const MAX_PRODUCT_FILES = 8;
 export const MAX_STICKER_BYTES = 10 * 1024 * 1024;
 const KIND_LABEL = Object.freeze({ cizim: 'teknik resim', etiket: 'etiket' });
-
-function text(value, label, max) {
-  if (value === undefined || value === null) return null;
-  const t = String(value).trim();
-  if (t === '') return null;
-  if (t.length > max) throw new PlanningError(`${label} en fazla ${max} karakter olabilir.`);
-  return t;
-}
 
 /** ms / 'yyyy-aa-gg' / 'gg.aa.yyyy' → yerel gece yarısı (ms) | null; geçersizse hata. */
 function day(value, label) {

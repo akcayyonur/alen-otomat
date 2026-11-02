@@ -697,11 +697,12 @@ export class PlanningDb {
       steps: { washTo: !!r.wash_to, washDone: !!r.wash_done, dryTo: !!r.dry_to, dryDone: !!r.dry_done, annealTo: !!r.anneal_to, annealDone: !!r.anneal_done },
       // kartta gorunen is emri bilgileri (is emrinin kopya degerleri)
       stockCode: r.stock_code ?? null, productName: r.product_name ?? null, customerCode: resolveCustomerCode(r.customer_code, r.product_name), gkkReportNo: r.gkk_report_no ?? null,
+      firstApprovalNo: r.first_approval_no ?? null,
       targetQty: r.target_qty == null ? null : Number(r.target_qty),
     };
   }
 
-  #crateSelect = `SELECT c.*, w.stock_code, w.product_name, w.customer_code, w.gkk_report_no, w.target_qty
+  #crateSelect = `SELECT c.*, w.stock_code, w.product_name, w.customer_code, w.gkk_report_no, w.first_approval_no, w.target_qty
                     FROM crates c LEFT JOIN work_orders w ON w.no = c.wo_no`;
 
   getCrate(id) {

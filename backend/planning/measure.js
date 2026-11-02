@@ -14,6 +14,9 @@ export const SLOTS_PER_FORM = 48;
 export const FORM_START_MIN = 7 * 60 + 30;
 export const CHECK_KINDS = Object.freeze(['gorsel', 'gecer', 'gecmez']);
 export const CHECK_LABEL = Object.freeze({ gorsel: 'Görsel Kontrol', gecer: 'Geçer Mastarlar', gecmez: 'Geçmez Mastarlar' });
+/** Ölçü satırının hangi cihazla ölçüldüğü (isteğe bağlı): kâğıt formda satır adının yanında basılır. */
+export const DEVICES = Object.freeze(['kumpas', 'mastar', 'kamera', 'mihengir']);
+export const DEVICE_LABEL = Object.freeze({ kumpas: 'Kumpas', mastar: 'Mastar', kamera: 'Kameralı Görüntüleme', mihengir: 'Mihengir' });
 
 const pad = (n) => String(n).padStart(2, '0');
 
@@ -56,9 +59,10 @@ const num = (v, label) => {
 };
 
 /**
- * Ölçü planı (satır tanımları) doğrulaması. Her satır: {label, nominal?, lower?, upper?}; lower/upper NOMİNALE göre işaretli sapmadır
- * (ör. Ø34,2 −0,1/+0 → nominal 34,2, lower −0,1, upper 0). Sapma verilirse nominal gerekir; lower ≤ upper olmalı.
- * @returns {{label: string, nominal: number|null, lower: number|null, upper: number|null}[]}
+ * Ölçü planı (satır tanımları) doğrulaması. Her satır: {label, nominal?, lower?, upper?, device?}; lower/upper NOMİNALE göre işaretli sapmadır
+ * (ör. Ø34,2 −0,1/+0 → nominal 34,2, lower −0,1, upper 0). Sapma verilirse nominal gerekir; lower ≤ upper olmalı. `device` hangi cihazla
+ * ölçüleceği (DEVICES'tan biri; boş = belirtilmemiş).
+ * @returns {{label: string, nominal: number|null, lower: number|null, upper: number|null, device: string|null}[]}
  */
 export function normalizePlan(rows) {
   if (!Array.isArray(rows)) throw new RangeError('Ölçü planı bir liste olmalı.');
@@ -77,7 +81,10 @@ export function normalizePlan(rows) {
     for (const [v, n] of [[nominal, 'nominal'], [lower, 'alt sapma'], [upper, 'üst sapma']]) {
       if (v !== null && Math.abs(v) > 1_000_000) throw new RangeError(`${i + 1}. satır: ${n} çok büyük.`);
     }
-    return { label, nominal, lower, upper };
+    const deviceRaw = String(r?.device ?? '').trim();
+    const device = deviceRaw === '' ? null : deviceRaw;
+    if (device !== null && !DEVICES.includes(device)) throw new RangeError(`${i + 1}. satır: ölçüm cihazı geçersiz.`);
+    return { label, nominal, lower, upper, device };
   });
 }
 

@@ -7,7 +7,7 @@
  */
 import { escapeHtml, stateOf } from './format.js';
 import { api, post } from './lib-common.js';
-import { cellText, fmtNum, dateTimeText, openModal, chip, fmtDec, rememberedPerson, rememberPerson, parseInput, gramToKg } from './planning-common.js';
+import { cellText, fmtNum, dateTimeText, openModal, chip, fmtDec, rememberedPerson, rememberPerson, parseInput, gramToKg, isAdminRole } from './planning-common.js';
 import { openIssueCard } from './planning-card.js';
 import { openGkkPicker } from './planning-gkk.js';
 import { createFirstApproval } from './planning-approvals.js';
@@ -70,8 +70,10 @@ export function progressHtml(w) {
     : '<span class="is-null">—</span>';
   return (
     '<section class="pl-prog" data-role="progress">' +
-    `<h4 class="sub">Üretim · ${p.frozen ? 'kapanışta dondurulmuş sonuç' : 'canlı (10 sn\'de bir tazelenir)'}</h4>` +
-    `<p class="hint">${escapeHtml(dateTimeText(p.from))} → ${p.open ? 'şimdi' : escapeHtml(dateTimeText(p.to))} · ${escapeHtml(w.machineId)}</p>` +
+    `<h4 class="sub">Üretim · ${p.source === 'elle' || p.source === 'elle-adet' ? `adet elle girildi ${chip('warn', '✎', 'elle girildi')}` : p.frozen ? 'kapanışta dondurulmuş sonuç' : 'canlı (10 sn\'de bir tazelenir)'}</h4>` +
+    (p.source === 'elle'
+      ? `<p class="hint">Bitiş: ${escapeHtml(dateTimeText(p.to))} · adet telemetriden sayılmadı${p.note ? ` · ${escapeHtml(p.note)}` : ''}</p>`
+      : `<p class="hint">${escapeHtml(dateTimeText(p.from))} → ${p.open ? 'şimdi' : escapeHtml(dateTimeText(p.to))} · ${escapeHtml(w.machineId)}</p>`) +
     `<div class="pl-meter" role="img" aria-label="${escapeHtml(meterText)}"><span class="${over ? 'is-over' : ''}" style="width:${Math.min(100, pct)}%"></span></div>` +
     `<p class="pl-meter-t"><b>${escapeHtml(meterText)}</b></p>` +
     '<div class="pl-kpis">' +
@@ -201,7 +203,8 @@ export async function openFinishDialog(no, onDone = () => {}) {
     warningsHtml(p?.warnings ?? []) +
     '<form autocomplete="off"><div class="fld-grid">' +
     '<label class="fld fld-touch"><span>Bitiş zamanı</span><input name="endAt" type="datetime-local"><small class="hint">Boş bırakın: şimdi. Bitirmeyi unuttuysanız gerçek bitiş zamanını girin; adet o ana kadar sayılır.</small></label>' +
-    '<label class="fld fld-touch"><span>Yapan kişi (isteğe bağlı)</span><input name="person" maxlength="60" autocomplete="off"></label></div>' +
+    '<label class="fld fld-touch"><span>Yapan kişi (isteğe bağlı)</span><input name="person" maxlength="60" autocomplete="off"></label>' +
+    (isAdminRole() ? '<label class="fld fld-touch"><span>Adet (elle, isteğe bağlı)</span><input name="qty" inputmode="numeric" autocomplete="off"><small class="hint">Boş bırakın: tezgah sayacından gelen adet. Doldurursan telemetri adedi yerine bu adet kaydedilir (tezgah sayımı geçmişte saklanır).</small></label>' : '') + '</div>' +
     '<p class="notice notice-sim" data-role="err" hidden></p>' +
     '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="submit" class="icon-btn btn-primary">İş emrini bitir</button></div></form>';
   const form = m.body.querySelector('form');
@@ -216,6 +219,7 @@ export async function openFinishDialog(no, onDone = () => {}) {
     try {
       const r = await post(`/api/planning/work-orders/${encodeURIComponent(no)}/finish`, {
         ...(form.elements.endAt.value ? { endAt: form.elements.endAt.value } : {}), person: form.elements.person.value,
+        ...(form.elements.qty?.value.trim() ? { qty: Number(form.elements.qty.value.trim().replace(/\./g, '').replace(',', '.')) } : {}),
       });
       m.body.innerHTML =
         `<div class="notice"><b>Bitirildi:</b> <span class="mono">${escapeHtml(r.no)}</span> · <b>${fmtNum(r.progress?.produced ?? 0)}</b> adet (hedef ${fmtNum(r.targetQty)})</div>` +

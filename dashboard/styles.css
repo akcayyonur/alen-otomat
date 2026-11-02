@@ -411,6 +411,7 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 .tbl-edit select option:disabled{color:var(--ink-faint);}
 .inherit{display:block;font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:2px;}
 .chk{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-soft);white-space:nowrap;}
+.chk-inline{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--ink-soft);white-space:nowrap;margin-right:14px;}
 .icon-btn[disabled]{opacity:.5;cursor:not-allowed;}
 
 .footnote{
@@ -672,7 +673,7 @@ dialog.modal.modal-wide{width:min(1120px,96vw);}
 .pl-f-table th,.pl-f-table td{border:1px solid #111;padding:0 4px;height:25px;font-size:9px;text-align:center;font-weight:700;}
 .pl-f-table td{height:26px;}
 .pl-f-foot{margin:8px 0 0;font-size:9px;color:#555;text-align:right;}
-dialog.pl-form-dlg .modal-body{background:var(--surface-2);}
+dialog.pl-form-dlg .modal-body{background:var(--surface-2);overflow:hidden;}
 .pl-form-actions{justify-content:flex-end;margin:0;}
 
 @media print {
@@ -885,8 +886,10 @@ dialog.pl-form-dlg .modal-body{background:var(--surface-2);}
 .dr-up:focus-within .icon-btn{outline:2px solid var(--accent);outline-offset:2px;}
 .dr-up.is-busy{opacity:.55;pointer-events:none;}
 
-/* iş emri formunun arka sayfası (ekranda birleşik PDF; baskıda form tek başına basılır) */
-.pl-f-pdf{display:block;align-self:center;width:100%;max-width:880px;height:calc(100vh - 210px);min-height:480px;border:1px solid var(--line-strong);border-radius:10px;background:#fff;}
+/* iş emri formunun arka sayfası (ekranda birleşik PDF; baskıda form tek başına basılır).
+   flex:1 ile .modal-body'nin (overflow:hidden, bkz. yukarıda) kalan tüm yüksekliğini doldurur: kaydırma
+   TEK sahiplidir — PDF görüntüleyicisinin kendi iç kaydırması — modal gövdesiyle dokunmatikte yarışmaz. */
+.pl-f-pdf{display:block;align-self:center;width:100%;max-width:880px;flex:1 1 auto;height:calc(100vh - 210px);min-height:480px;border:1px solid var(--line-strong);border-radius:10px;background:#fff;}
 .shop-li-actions{display:flex;gap:6px;flex:0 0 auto;}
 
 /* ölçü raporu: kartlar satırı */

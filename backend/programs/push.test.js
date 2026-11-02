@@ -12,7 +12,7 @@ import http from 'node:http';
 import { kur, ekle } from './test/harness.js';
 import { createProgramRoutes } from './routes.js';
 import { sha256 } from './library.js';
-import { BusyError, DisabledError, UnsupportedError } from './machine-files.js';
+import { BusyError, DisabledError } from './machine-files.js';
 
 const ic = (ad, v) => Buffer.from(`//${ad} v${v}\r\nG0 X${v}.\r\nM99\r\n`, 'latin1');
 const bekle = async (fn, bitti, ms = 10_000) => {
@@ -176,7 +176,7 @@ test('UYGULA: ozel secim (skipKeys) disinda kalanlara dokunulmaz; plan ikinci ke
 
 /* ------------------------------------------------------------------ kapilar */
 
-test('KAPILAR: yanlis onay metni, kapali ozellik, dogrulanmamis model (22TB), plan yok, bos secim', async () => {
+test('KAPILAR: yanlis onay metni, kapali ozellik, plan yok, bos secim (model kapisinin MEKANIZMASI - sendPolicy - drivers-gate.test.js\'te sentetik surucuyle sinanir; gercek configte su an sendEnabled:false olan model yok, 22TB 2026-10-30da acildi)', async () => {
   const t = await kurPush();
   try {
     const { id, plan } = await planla(t);
@@ -184,13 +184,6 @@ test('KAPILAR: yanlis onay metni, kapali ozellik, dogrulanmamis model (22TB), pl
     assert.throws(() => basla(t, 'yok-boyle-plan'), /Plan bulunamadı/);
     assert.throws(() => basla(t, id, { skipKeys: [...plan.yeni, ...plan.ezilecek].map((x) => x.key) }), /Gönderilecek program yok/);
     assert.equal(komutlar(t.server, 'STOR').length, 0, 'reddedilen istek tornaya yazmaz');
-
-    t.machines[0].controllerModel = '22TB'; // config/drivers.json: sendEnabled=false
-    assert.throws(() => basla(t, id), UnsupportedError);
-    const p22 = await planla(t); // plan (okuma) kapali modelde de cikar, kapi planda gorunur
-    assert.equal(p22.plan.gate.allowed, false);
-    assert.match(p22.plan.gate.reason, /doğrulan/i);
-    assert.equal(komutlar(t.server, 'STOR').length, 0);
   } finally { await t.kapat(); }
 
   const kapali = await kurPush({ disabled: true });

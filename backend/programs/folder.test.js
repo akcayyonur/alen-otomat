@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { kur, ekle } from './test/harness.js';
 import { ValidationError } from './library.js';
-import { BusyError, DisabledError, UnsupportedError, NotFoundError } from './machine-files.js';
+import { BusyError, DisabledError, NotFoundError } from './machine-files.js';
 import { createProgramRoutes } from './routes.js';
 
 const komutlar = (s, onek) => s.commands.filter((k) => k.startsWith(onek));
@@ -86,22 +86,14 @@ test('klasor ac: gecersiz ad 400 ve tornaya baglanilmaz; yanlis onay metni 400; 
   } finally { await t.kapat(); }
 });
 
-test('klasor ac: TRANSFER_DISABLED -> 403; 22TB (gonderme kapali model) -> 422; ikisinde de tornaya baglanilmaz', async () => {
+test('klasor ac: TRANSFER_DISABLED -> 403, tornaya baglanilmaz (model kapisinin MEKANIZMASI - ayni sendPolicy cagrisi - drivers-gate.test.js\'te sentetik surucuyle sinanir)', async () => {
   const t = await kur({ disabled: true });
   const t2 = await kur();
   try {
     await assert.rejects(() => t.files.createFolder({ machineId: 'CNC-08', name: 'YENI', confirm: 'CNC-08' }), DisabledError);
     assert.equal(t.server.sessions, 0);
 
-    t2.machines.push({ id: 'CNC-22', name: 'Torna 22', ip: '127.0.0.1', driverId: 'syntec-remoteapi', controllerModel: '22TB' });
-    await assert.rejects(
-      () => t2.files.createFolder({ machineId: 'CNC-22', name: 'YENI', confirm: 'CNC-22' }),
-      (e) => e instanceof UnsupportedError && /SYNTEC 22TB/.test(e.message),
-    );
-    assert.equal(t2.server.sessions, 0, '22TB: tornaya tek baglanti bile acilmadi');
-    assert.equal(t2.library.db.listTransfers({}).length, 0);
-
-    // 11TB ise engellenmez
+    // 11TB (ve artik 22TB) engellenmez.
     t2.machines.push({ id: 'CNC-11', name: 'Torna 11', ip: '127.0.0.1', driverId: 'syntec-remoteapi', controllerModel: '11TB' });
     const r = await t2.files.createFolder({ machineId: 'CNC-11', name: 'YENI', confirm: 'CNC-11' });
     assert.equal(r.status, 'basarili', r.error);
@@ -166,12 +158,10 @@ test('klasor ac: hicbir kosulda silme komutu (DELE/RMD) gonderilmez ve baska yaz
 
 /* ---------------------------------------------------------------------- HTTP */
 
-test('HTTP: POST /api/machines/:id/folders - 200 kayit, hata kodlari (400/403/404/422), kayit listesinde kind=klasor', async () => {
+test('HTTP: POST /api/machines/:id/folders - 200 kayit, hata kodlari (400/403/404), kayit listesinde kind=klasor', async () => {
   const t = await kur();
-  const t22 = { machines: [...t.machines, { id: 'CNC-22', name: 'Torna 22', ip: '127.0.0.1', driverId: 'syntec-remoteapi', controllerModel: '22TB' }] };
   try {
-    const routes = createProgramRoutes({ library: t.library, files: t.files, listMachines: () => t22.machines });
-    t.machines.push(t22.machines[1]);
+    const routes = createProgramRoutes({ library: t.library, files: t.files, listMachines: () => t.machines });
     const server = http.createServer(async (req, res) => {
       if (!(await routes(req, res, new URL(req.url, 'http://x')))) { res.writeHead(404); res.end('{}'); }
     });
@@ -195,9 +185,6 @@ test('HTTP: POST /api/machines/:id/folders - 200 kayit, hata kodlari (400/403/40
       assert.equal((await post('/api/machines/CNC-08/folders', { name: 'ŞİRKET', confirm: 'CNC-08' })).status, 400);
       assert.equal((await post('/api/machines/CNC-08/folders', { name: 'X1', confirm: 'yanlis' })).status, 400);
       assert.equal((await post('/api/machines/CNC-99/folders', { name: 'X1', confirm: 'CNC-99' })).status, 404);
-      const m22 = await post('/api/machines/CNC-22/folders', { name: 'X1', confirm: 'CNC-22' });
-      assert.equal(m22.status, 422);
-      assert.match(m22.body.error, /SYNTEC 22TB/);
 
       const log = await (await fetch(`${base}/api/transfers?machineId=CNC-08`)).json();
       assert.deepEqual(log.transfers.map((x) => [x.kind, x.status]), [['klasor', 'reddedildi'], ['klasor', 'basarili']]);

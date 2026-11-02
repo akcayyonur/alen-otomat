@@ -26,36 +26,38 @@ import { renderMeasureReports } from './planning-reports.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
 import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
 import { openFolderDialog } from './planning-docs.js';
-import { TAB_ROLES, tabsForRole, defaultTabFor } from './planning-tabs.js';
+import { renderPriceStudies } from './planning-price.js';
+import { tabsForUser, defaultTabFor } from './planning-tabs.js';
 
 const TABS = Object.freeze([
-  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Duruş süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', roles: TAB_ROLES.tezgahbasi, plain: true, render: renderShop },
-  { key: 'paketleme', label: 'Paketleme', sub: 'paketleme formu (EYS.FR.007)', hint: 'Koli içi adet ürün başına öğrenilir ve önerilir.', roles: TAB_ROLES.paketleme, plain: true, render: renderPacking },
-  { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca form açılır; "Düzenle" ile değiştirin.', roles: TAB_ROLES.isemirleri, render: renderWorkOrders },
-  { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor no takibi (EYS.FR.011).', roles: TAB_ROLES.gkk, plain: true, importer: true, render: renderGkk },
-  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013).', roles: TAB_ROLES.ilkonay, plain: true, importer: true, render: renderApprovals },
-  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', roles: TAB_ROLES.olcuraporlari, plain: true, render: renderMeasureReports },
-  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Kazanılan süre ÷ ayrılan süre.', roles: TAB_ROLES.verimlilik, plain: true, render: renderEfficiency },
-  { key: 'cizelgeleme', label: 'Çizelgeleme', sub: 'tezgah önerisi (OR-Tools)', hint: 'Öneri asla otomatik uygulanmaz.', roles: TAB_ROLES.cizelgeleme, plain: true, render: renderSchedule },
-  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', roles: TAB_ROLES.hammadde, plain: true, render: renderMaterial },
-  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', roles: TAB_ROLES.urunler, render: renderProducts },
-  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', roles: TAB_ROLES.siparisler, render: renderOrders },
-  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', roles: TAB_ROLES.programlar, render: renderPrograms },
+  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Duruş süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', plain: true, render: renderShop },
+  { key: 'paketleme', label: 'Paketleme', sub: 'paketleme formu (EYS.FR.007)', hint: 'Koli içi adet ürün başına öğrenilir ve önerilir.', plain: true, render: renderPacking },
+  { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca form açılır; "Düzenle" ile değiştirin.', render: renderWorkOrders },
+  { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor no takibi (EYS.FR.011).', plain: true, importer: true, render: renderGkk },
+  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013).', plain: true, importer: true, render: renderApprovals },
+  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', plain: true, render: renderMeasureReports },
+  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
+  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', render: renderProducts },
+  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', render: renderOrders },
+  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', plain: true, render: renderMaterial },
+  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Kazanılan süre ÷ ayrılan süre.', plain: true, render: renderEfficiency },
+  { key: 'cizelgeleme', label: 'Çizelgeleme', sub: 'tezgah önerisi (OR-Tools)', hint: 'Öneri asla otomatik uygulanmaz.', plain: true, render: renderSchedule },
+  { key: 'fiyat', label: 'Fiyat çalışması', sub: 'ürün kartından önce: resim → hammadde/süre', hint: 'Ürün kartına otomatik dönüşmez; yönetici dolu kaydı görüp Mikro\'da kendisi açar.', plain: true, render: renderPriceStudies },
 ]);
 
-const roleOf = () => getSession()?.user?.role ?? 'viewer';
-/** Rolun gorebildigi VE bu kurulumda kapali olmayan bolumler (menu ve ekran bunu kullanir). */
-const visibleTabs = () => TABS.filter((t) => t.roles.includes(roleOf()) && !closedSections().includes(t.key));
-/** Rolun gorebildigi bolumler (sunucu da yetkiyi ayrica zorlar). */
-export const planningTabsFor = (role = roleOf()) => tabsForRole(role, closedSections());
-/** Giriste acilan bolum: operator ve izleyici tezgah basini, yonetici is emirlerini gorur. */
-export const defaultPlanningTab = (role = roleOf()) => defaultTabFor(role);
+const userOf = () => getSession()?.user ?? null;
+/** Kullanicinin gorebildigi VE bu kurulumda kapali olmayan bolumler (menu ve ekran bunu kullanir). */
+const visibleTabs = () => { const mine = new Set(tabsForUser(userOf(), closedSections())); return TABS.filter((t) => mine.has(t.key)); };
+/** Kullanicinin gorebildigi bolumler (sunucu da yetkiyi ayrica zorlar). */
+export const planningTabsFor = (user = userOf()) => tabsForUser(user, closedSections());
+/** Giriste acilan bolum: admin is emirlerini, digerleri gorebildiklerinden ilkini gorur. */
+export const defaultPlanningTab = (user = userOf()) => defaultTabFor(user, closedSections());
 
 /** Yan menu (app.js cagirir): bolum dugmeleri; secili bolum isaretlenir. Adresler #/planlama/<bolum>. */
 export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
   const mine = visibleTabs();
   const current = mine.find((t) => t.key === tab) ?? mine[0];
-  nav.hidden = mine.length < 2 && roleOf() !== 'admin'; // tek bolumlu operator: menu gereksiz
+  nav.hidden = mine.length < 2 && !userOf()?.isAdmin; // tek bolumlu rol: menu gereksiz
   nav.innerHTML =
     '<p class="sidebar-label">Planlama</p>' +
     mine.map((t) =>
@@ -72,7 +74,7 @@ const n = (v) => nf.format(v ?? 0);
 export function renderPlanning(host, tab = defaultPlanningTab()) {
   const mine = visibleTabs();
   const current = mine.find((t) => t.key === tab) ?? mine[0];
-  const admin = roleOf() === 'admin';
+  const admin = userOf()?.isAdmin === true;
   // Ice aktarma ve sayilar yalniz yonetici + planlama bolumlerinde; tezgah basi (operator ekrani) sade kalir.
   // GKK ve ilk onay bolumlerinde yalniz "CSV iceri al" dugmesi vardir (urun/siparis ozeti degil).
   const showAdminBar = admin && !current.plain;

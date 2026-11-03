@@ -61,7 +61,7 @@ test('features: hatali dosya sessizce kabul edilmez (bilinmeyen bolum, yanlis ya
 test('sekmeler: kapali bolum HICBIR kullanicida (admin dahil) gorunmez; digerleri ve acilis sekmesi etkilenmez', () => {
   const kapali = ['paketleme', 'hammadde'];
   assert.ok(!tabsForUser(ADMIN_USER, kapali).includes('paketleme') && !tabsForUser(ADMIN_USER, kapali).includes('hammadde'));
-  assert.deepEqual(tabsForUser(ADMIN_USER, kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar', 'urunler', 'siparisler', 'verimlilik', 'cizelgeleme', 'fiyat']);
+  assert.deepEqual(tabsForUser(ADMIN_USER, kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'numune', 'olcuraporlari', 'programlar', 'urunler', 'siparisler', 'verimlilik', 'cizelgeleme', 'fiyat']);
   assert.deepEqual(tabsForUser(OPERATOR_USER, kapali), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar'], 'operator Paketleme sekmesini de gormez');
   assert.deepEqual(tabsForUser(VIEWER_USER, kapali), tabsForUser(VIEWER_USER, []), 'izleyici zaten gormuyordu');
   assert.deepEqual(tabsForUser(ADMIN_USER, ['hammadde']).includes('paketleme'), true, 'yalniz listedeki kapanir');

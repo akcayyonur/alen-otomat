@@ -1053,10 +1053,9 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
   **İLK ONAY NO (2026-11-02, kullanıcı isteği):** iş emrinin `firstApprovalNo` alanından **salt gösterim** olarak gelir (bu pencereden değişmez; "İlk onay numarası al" akışıyla yazılır). `planning-db.js` `#crateSelect` artık `w.first_approval_no`'yu da join eder, `#crateOut` `firstApprovalNo` döner — GKK rapor no ile aynı desen
   (kartın alanı, kasaya özel donmuş bir değer DEĞİL; iş emrinin O ANKİ değeri, kart yeniden basılsa/görüntülense bile günceli gösterir). Testi `cards.test.js`. Tarayıcıda gerçek sunucuya karşı uçtan uca denendi (önizlemede ve gerçek `POST .../cards` yanıtında görünüyor).
 
-**Numune kartı (2026-11-02, kullanıcı isteği):** ilk onay numarası alınınca (Tezgah başı "İlk onay numarası al", iş emrini düzenle "Numara al…", ya da sekmedeki "İş emrinden numara al…") pencere artık KAPANMAZ: numuneye takılacak ayrı bir kart önizlemesi gösterilir ve **"Numune kartı çıktısı al"** ile (ürün tanıtım
-kartı bas'taki gibi) A5 yazdırılır. Kart ürün tanıtım kartıyla AYNI `.pl-card`/`.pl-c-table` görsel dilini kullanır ama farklı, sabit bir alan seti taşır (kullanıcının verdiği görsele birebir): TARİH · **İLK BASKI/NUMUNE NO** (= az önce alınan ilk onay kodu, ör. İ26-001; ayrı bir sayaç YOK) · ALEN ÜRÜN KODU ·
-MÜŞTERİ ÜRÜN KODU · İŞ EMRİ NO · GKK RAPOR NO · OPERATÖR İSMİ · CNC NO. Backend değişikliği gerekmedi: `createFirstApproval`'ın zaten döndürdüğü kayıt (`code/stockCode/gkCode/woNo/operator/cncNo/approvedOn`) + önceden çekilmiş iş emrinin `customerCode`'u yeter (`dashboard/planning-approvals.js` `numuneCardHtml`,
-yazdırma `planning-common.js`'teki paylaşılan `printModal` ile). Tarayıcıda gerçek sunucuya karşı uçtan uca denendi (numara alma → kart önizlemesi doğru alanlarla → "Numune kartı çıktısı al" `window.print()`'i doğru tetikliyor). **Gerçek yazıcıdan A5 baskı ve kâğıtla karşılaştırma henüz denenmedi.**
+**Numune kartı — aynı gün KALDIRILDI, yerine "Numune Takip" ekranı geldi (2026-11-02, kullanıcı kararı):** yukarıdaki satırda tarif edilen "ilk onay sonrası ayrı kart önizlemesi" fikri kullanıcının aynı oturumda verdiği ikinci bir talimatla terk edildi: onun yerine kendi listesi, durumu ve yazdırılabilir formu olan
+kapsamlı bir **Numune Takip** ekranı istendi (bkz. §6 "Numune Takip (EYS.FR.012)"). `dashboard/planning-approvals.js`'teki `numuneCardHtml` fonksiyonu ve `createFirstApproval`'ın kart gösteren sürümü SİLİNDİ; "İlk onay numarası al" penceresi eskisi gibi yalnızca numarayı veren, "Tamam" ile kapanan basit bir
+ekrana döndü. İlk onay akışı ile numune takibi artık tamamen ayrı iki ekrandır.
 - **İş emri alan değişiklikleri:** (1) oluştururken **alternatif hammadde** girilebilir (ürün kartındakini ezer). (2) **Tezgah seçmeden iş emri oluşturulabilir**; başlatırken seçilir (`machine_id` sütunu NOT NULL olduğu için atanmamış = `''`, API'de `null`; başlatırken tezgah ZORUNLU: `400 no-machine`; tezgahsız bekleyen iş emri
   Tezgah başında hiçbir tezgahın sırasında görünmez, "Başka iş emri başlat…" ile seçilir). (3) **"Hammadde GK no" kaldırıldı** (GKK rapor no ile aynı şey; eski sütun veritabanında durur, kullanılmaz). (4) İş emri formunda **BRÜT GRAMAJ tek kutu** (maliyet ve üretim brüt gramajı aynı). (5) **İlk onay rapor no olmadan da başlatılabilir** (zaten isteğe bağlıydı; başlatma penceresi bunu yazar).
   (6) **Tezgah başında "İş emrini düzenle"**: ilk parça yapılıp ölçülünce **ilk onay rapor no, ölçülen net gramaj**, GKK rapor no, kullanılan hammadde ve açıklama operatörce girilir (`POST /api/planning/work-orders/:no/fields {fields}`; yalnız bu 5 alan, planlama alanları 403; geçmişe "güncellendi" yazılır; `OPERATOR_EDIT_FIELDS`). Testi `wo-fields.test.js`.
@@ -1385,7 +1384,65 @@ görüldü; admin girişinde her ikisi de çalışmaya devam ediyor. Testi `back
 - **`text()`/`number()` doğrulayıcıları** `price-studies.js`/`quality.js`/`planning.js`'te birebir üç kopyaydı → `backend/planning/fields.js` (yeni dosya) tek kaynağa taşındı, üçü de oradan import ediyor.
 - **`listUsers()`** (`backend/auth/auth.js`) ve `auth-cli.js listele` her kullanıcı için ayrı `getRole()` sorgusu yapıyordu (N+1) → tek seferde rol haritası kuruluyor.
 - **`shared/screens.js`'teki `sanitizeGrants`** hiç çağrılmayan ölü kod olduğu doğrulanıp (repo genelinde sıfır çağıran) silindi.
-- Hepsi `npm test` (577/577) ile doğrulandı; üçü (reassign-machine admin kapısı, ölçüm cihazı, kart İLK ONAY NO, numune kartı) ayrıca izole bir test ortamında gerçek sunucuya karşı tarayıcıda uçtan uca denendi.
+- Hepsi `npm test` ile doğrulandı; dördü (reassign-machine admin kapısı, ölçüm cihazı, kart İLK ONAY NO, o günkü ilk sürüm "numune kartı") ayrıca izole bir test ortamında gerçek sunucuya karşı tarayıcıda uçtan uca denendi.
+
+### Numune Takip (EYS.FR.012 "Numune Talep / Takip Formu") — 2026-11-02, kullanıcı isteği
+
+Kâğıt formun (fotoğrafla verildi) dijital karşılığı: müşteriye numune üretilip gönderilmesi ve müşteriden e-posta ile gelen
+onay/ret kararının takibi. İş emirleri ekranıyla aynı desen — liste + "Yeni … aç" + satırdan "Düzenle" — ama kendi, bağımsız
+bir kayıttır: **`products` tablosuyla HİÇ bağlanmaz** (ürün kartı henüz hiç olmayabilir; Alen/müşteri ürün kodu serbest metin,
+Fiyat çalışması'yla aynı ilke). Aynı gün daha önce eklenen "numune kartı" (ilk onay sonrası ayrı kart önizlemesi) bu ekranla
+**değiştirildiği için KALDIRILDI** (bkz. yukarıdaki not).
+
+- **Kâğıt formun hatası düzeltildi:** formda "KALİTE KONTROL RAPOR NO" yazan alan aslında **GKK rapor no**'dur (kullanıcı
+  teyidi) — ekranda ve basılan formda "GKK rapor no" olarak gösterilir, GKK/ilk onay/ürün tanıtım kartı ekranlarındaki aynı
+  `openGkkPicker`'dan "Listeden seç…" ile doldurulur.
+- **Akış:** "Yeni numune formu aç" → NUMUNE TANIMLAMA (müşteri *zorunlu*, geri kalanı isteğe bağlı: müşteri numune/ürün kodu,
+  Alen ürün kodu, numune miktarı, teslim tarihi) + NUMUNE ÜRETİM BİLGİLERİ (fiyat teklif/numune net ağırlığı, üretim süresi,
+  hammadde, alternatif hammadde, kullanılan mastar/lar, üretim miktarı, ayrılan örnek miktarı, üretim tarihi, GKK rapor no,
+  gönderilen miktar) → "Formu oluştur" ile kayıt açılır (kod verilir, pencere kapanmaz: artık "düzenle" görünümüne geçer) →
+  "Formu görüntüle/yazdır" ile A4 dikey çıktı alınıp müşteriye gönderilir (fiziksel/e-posta) → müşteriden gelen karar
+  **elle**, "Düzenle"den **✓ Onaylandı** / **✕ Onaylanmadı** ile işaretlenir (karar tarihi + onaylandıysa isteğe bağlı not,
+  reddedildiyse **"Ret sebebi ve müşteri rapor no"** — kâğıt formun kendi SONUÇ bölümü alan adlarıyla birebir); yanlış
+  işaretlenen karar **"Kararı geri al"** ile `bekliyor`'a döner. Satır rengi yeşil/kırmızı/sarı, **her zaman ikon+etiket
+  çipiyle birlikte** (CLAUDE.md §7: renk tek başına anlam taşımaz): `chip('ok','✓','onaylandı')` / `chip('bad','✕',
+  'onaylanmadı')` / `chip('warn','◔','karar bekliyor')`; yeni `.pl-rejected` satır sınıfı (kırmızı ton, `.chip-bad`/
+  `.badge.st-alarm`'la aynı aile) — `.pl-waiting`/`.pl-done` zaten vardı, `.pl-cancelled` (iptal) bu amaçla kullanılmadı.
+- **Kod:** kâğıt defterin kendi "SERİ NO"su gibi **6 haneli, yıl ÖNEKİ YOK, düz artan sıra** (`000001`…; ürün tanıtım
+  kartının `K000001` deseniyle aynı mantık — GKK/ilk onay'ın yıl-içi sayaçlarından FARKLI). Kâğıt defterde hâlâ kullanılan
+  bir sıra varsa ekranın altındaki kutudan (yalnız admin) bir kez taban girilir; taban yalnız yükseltilebilir.
+- **Backend:** `backend/planning/sample-tracking.js` (`SampleTracking`, tablo `sample_requests` `planlama.db`'de; kendi
+  `counters` satırını `name='numune', year=0` ile paylaşılan `counters` tablosunda tutar — tabloyu kendi `CREATE TABLE IF
+  NOT EXISTS`'i ile kurar ki hangi modülden önce ilklenirse ilklensin bağımsız çalışsın). `planning.js`'te `this.samples =
+  new SampleTracking({ planning: this })`. Doğrulayıcılar (`text`/`number`/`day`) ortak `fields.js`'ten — yeni kopya
+  YAZILMADI. Kısmi güncelleme (`update`) iş emri "Düzenle"siyle aynı mantık: yalnız gönderilen alanlar değişir; `requestedOn`
+  NOT NULL olduğu için boş gönderilirse dokunulmaz (temizlenmez). Onaylanmış/reddedilmiş bir kayıt da düzenlenebilir
+  (müşteri bilgisi sonradan düzeltilebilsin diye) ve **silinebilir** (yalnız admin; bu geçmiş bir üretim kaydı değil, yanlış
+  açılmış bir formdur — GKK/ilk onay kayıtlarıyla aynı "admin silebilir" ilkesi).
+- **Ekran:** `dashboard/planning-numune.js` — `renderSamples` (arama/durum süzgeci, "Listeyi yazdır", sayaç tabanı kutusu),
+  `openSampleDialog` (oluştur/düzenle/karar/geri al/sil, tek dosyada), `sampleFormHtml`/`openSampleForm` (A4 dikey, kâğıt
+  formun bölümleriyle birebir: NUMUNE TANIMLAMA · NUMUNE ÜRETİM BİLGİLERİ · MÜŞTERİ GERİ BİLDİRİM · SONUÇ). Liste yazdırma
+  `openListPrint`, tekil form yazdırma `printModal` (ikisi de `planning-common.js`'teki paylaşılan yardımcılar).
+- **Ekran kaydı:** `shared/screens.js`/`dashboard/screens.js`'e `{ id: 'numune', label: 'Numune takip', app: 'planlama',
+  writable: true }` (iki dosya birebir aynı kalmalı, `apps.test.js` denetler); `policy.js` `SCREEN_ROUTES`'a GET→read,
+  POST/PUT/decide/reopen→write; sıra tabanı (PUT) ve DELETE **kayıtsız bırakıldı** → admin'e düşer (GKK/ilk onay'daki
+  "okuma herkese, yazma role'e, idari işlemler admin'e" deseniyle aynı).
+- **Uçlar:** `GET /api/planning/samples?q=&status=` · `POST /api/planning/samples` · `GET/PUT /api/planning/samples/:id` ·
+  `DELETE /api/planning/samples/:id` (admin) · `POST .../samples/:id/decide {status, decidedOn?, note?}` ·
+  `POST .../samples/:id/reopen` · `PUT /api/planning/samples/sequence {last}` (admin).
+- **Rota düzeltmesi (aynı gün bulundu):** `dashboard/app.js`'teki hash-yönlendirme düzenli ifadesi (`pm`, `readRoute()`)
+  yeni ekranlar eklenince TEK TEK güncellenmesi gereken ayrı bir liste — `numune` eklenmeyi UNUTULMUŞTU: `#/planlama/numune`
+  sessizce (konsolda hata yok) Telemetri filo ekranına düşüyordu, çünkü regex eşleşmeyince kod en sondaki `else` dalına
+  (`state.view = 'fleet'`) iniyordu. Backend tarafı (policy.js, screens.js, apps.test.js) zaten doğruydu; yalnız bu
+  istemci-içi rota listesi atlanmıştı. Düzeltildi (`pm` regex'ine ve baştaki yorum satırına `numune` eklendi).
+- **Doğrulama:** `backend/planning/sample-tracking.test.js` (9 test: oluşturma, kısmi güncelleme + NOT NULL tarih koruması,
+  karar/geri al, liste arama-süzme-sıralama, sayaç tabanı, silme, uçtan uca HTTP). `npm test` 587/587 yeşil. Tarayıcıda
+  gerçek sunucuya (AUTH_DISABLED) karşı uçtan uca denendi: kayıt oluşturma (tüm alanlar + GKK "Listeden seç…" — boş
+  geliştirme veritabanında beklendiği gibi "Eşleşen kayıt yok" dedi), onaylama (yeşil satır + ✓ çip), reddetme (kırmızı
+  satır + ✕ çip, "Ret sebebi ve müşteri rapor no" alanı), tekil form yazdırma önizlemesi (GKK RAPOR NO etiketi doğru, SONUÇ
+  bölümü), liste yazdırma önizlemesi; konsolda hata yok.
+- **DENENMEDİ:** gerçek yazıcıdan A4 baskı ve kâğıt EYS.FR.012 ile yan yana karşılaştırma; gerçek bir müşteri e-postasıyla
+  üretimde kullanım (şimdilik yalnız sentetik veri).
 
 **Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
 `RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
@@ -1433,7 +1490,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `dashboard/format.js` | Alan tanımları ve etiketler — **arayüzün tek kaynağı**. |
 | `dashboard/config-view.js` | Ayarlar ekranı. |
 | `dashboard/production-view.js` | Tezgah detayındaki vardiya adetleri paneli ve "Üretim raporu" ekranı (makine / ürün / günlük görünümü). |
-| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
+| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`) · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
 | `backend/planning/packing.js` · `dashboard/planning-packing-form.js` | Paketleme formu (EYS.FR.007): vardiya sayfası, satırlar, hava basıncı, koli içi adet öğrenme/öneri, yazdırma. Bkz. §6 "Paketleme formu". |
 | `backend/planning/doc-folder.js` · `dashboard/planning-docs.js` | Teknik resim klasörü ve etiket klasörü (iki ayrı `DocFolder`): dosyaları ürün koduna göre ürün kartlarına bağlama, eşle penceresi. Bkz. §6 "Teknik resim klasörü ve Etiket klasörü". |
 | `backend/planning/sources.js` · `dashboard/planning-sources.js` | Kaynak klasörü: Mikro/GKK Excel dosyalarını sabit klasörden okuyup değişenleri uygulama ("Kaynak dosyadan yenile"), klasör ayarı ve sonuç penceresi. Bkz. §6 "Kaynak klasörü". |
@@ -1486,6 +1543,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `/api/planning/crates` · `crates/:id` · `crates/:id/close\|pack\|void` · `work-orders/:no/crates` (POST) · `crates/sequence` (PUT, yönetici) | **Kasa / Ürün Tanıtım Kartı** (operatör + yönetici): kasalar (`?woNo=&machine=&state=`), kasa + kart bilgileri, kapat (`person?`), paketleme adedi (`qty, person?`), iptal (`reason`), iş emrinde yeni kasa aç (kart numarasını sistem verir), kart numarası sırası tabanı (`last`). |
 | `/api/planning/gkk` (GET/POST) · `gkk/sequence` (PUT) · `gkk/:id` (PUT/DELETE) | **GKK rapor numaraları** (EYS.FR.011): liste/arama (`?q=&erpMaterial=&stockCode=`; `matches[]` iş emri hammaddesine uyanlar, `match`: `tam`/`islemli`/`urun`), yeni numara (POST), düzenle/sil, numara tabanı. **Okuma: herkes (izleyici dahil); yazma yalnız yönetici.** |
 | `/api/planning/first-approvals` (GET/POST) · `first-approvals/sequence` (PUT) · `first-approvals/:id` (PUT/DELETE) | **İlk onay raporu** (EYS.FR.013): liste (`?q=&year=`), numara al (`woNo, person?, again?`; **operatör + yönetici**, iş emrinin alanına da yazar), elle kayıt/düzeltme/silme/numara tabanı yalnız yönetici; okuma herkes. |
+| `/api/planning/samples` (GET/POST) · `samples/:id` (GET/PUT/DELETE) · `samples/:id/decide\|reopen` (POST) · `samples/sequence` (PUT) | **Numune takip** (EYS.FR.012, `products`'a bağlanmaz): liste (`?q=&status=`), yeni form (yalnız müşteri zorunlu), ayrıntı/düzenle, sil (admin), müşteriden gelen karar (`{status, decidedOn?, note?}`) ve geri al, numara tabanı (admin). `numune` ekranı: GET okuma, POST/PUT/decide/reopen yazma. |
 | `/api/planning/work-orders/:no/print.pdf` (GET) · `work-orders/:no/drawings.pdf` (GET) · `work-orders/:no/drawings?name=` (POST) · `work-orders/:no/drawings/:id` (DELETE) | **İş emri formu + teknik resimler**: `print.pdf` = form (ön sayfa) + resimler (arka sayfalar) TEK PDF (`application/pdf`, izleyici ve operatör dahil herkes; ekranda gösterilen ve basılan dosya) · `drawings.pdf` = yalnız birleşik resimler · yükle (gövde = ham PDF, yönetici) · kaldır (yönetici). |
 | `/api/planning/measure-reports` · `work-orders/:no/measure-report` · `products/:kod/measure-plan` (PUT) | **Ölçü raporları** (okuma herkes): ölçümü olan iş emirleri ve bir iş emrinin tüm ölçümleri · ürün kartının kalıcı ölçü planı (yönetici). |
 | `/api/planning/work-orders` (+ `/next`, `/sequence`, `/:no`, `/:no/cancel`, `/:no/start`, `/:no/finish`, `/:no/reopen`) | **İş emri** (yalnız admin): liste (`?q=&status=&machine=`), oluştur (POST: `lineId` ya da `stockCode`, `targetQty`, `machineId`, …), sıradaki numara, numara tabanı (PUT), ayrıntı + geçmiş + gerçekleşen üretim (`progress`), düzenle (PUT), iptal (POST, `reason`), **üretime başlat** (`machineId?, startAt?, person?, fields?`), **bitir** (`endAt?, person?`; sonuç dondurulur), **üretime geri al**. |

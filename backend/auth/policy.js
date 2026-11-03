@@ -74,6 +74,13 @@ export const SCREEN_ROUTES = Object.freeze([
   [['GET'], /^\/api\/planning\/first-approvals$/, 'ilkonay', 'read'],
   [['POST'], /^\/api\/planning\/first-approvals$/, 'ilkonay', 'write'],
 
+  // numune takip (EYS.FR.012): olusturma/duzenleme/karar herkese (usta doldurur, ofis karari isaretler); sira tabani/silme kayitsiz -> admin
+  [['GET'], /^\/api\/planning\/samples$/, 'numune', 'read'],
+  [['POST'], /^\/api\/planning\/samples$/, 'numune', 'write'],
+  [['GET'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'read'],
+  [['PUT'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'write'],
+  [['POST'], /^\/api\/planning\/samples\/\d{1,12}\/(?:decide|reopen)$/, 'numune', 'write'],
+
   // olcu raporlari: HER ZAMAN salt okunur (girisler tezgah basindan / `tezgahbasi` ekranindan yapilir)
   [['GET'], /^\/api\/planning\/measure-reports$/, 'olcuraporlari', 'read'],
   [['GET'], /^\/api\/planning\/work-orders\/\d{10}\/measure-report$/, 'olcuraporlari', 'read'],

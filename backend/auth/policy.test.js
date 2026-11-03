@@ -121,6 +121,18 @@ test('ekran: GKK rapor no / ilk onay raporu - okuma herkese, usta numara ALABILI
   ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
 });
 
+test('ekran: numune takip (EYS.FR.012) - olustur/duzenle/karar herkese, sira tabani/silme yonetici', () => {
+  S('GET', '/api/planning/samples', 'numune', 'read');
+  S('POST', '/api/planning/samples', 'numune', 'write');
+  S('GET', '/api/planning/samples/5', 'numune', 'read');
+  S('PUT', '/api/planning/samples/5', 'numune', 'write');
+  S('POST', '/api/planning/samples/5/decide', 'numune', 'write');
+  S('POST', '/api/planning/samples/5/reopen', 'numune', 'write');
+  for (const [m, p] of [['DELETE', '/api/planning/samples/5'], ['PUT', '/api/planning/samples/sequence']]) {
+    assert.equal(K(m, p), 'admin', `${m} ${p}`);
+  }
+});
+
 test('ekran: olcu raporlari - HER ZAMAN salt okunur (girisler tezgah basindan)', () => {
   S('GET', '/api/planning/measure-reports', 'olcuraporlari', 'read');
   S('GET', '/api/planning/work-orders/2026001055/measure-report', 'olcuraporlari', 'read');

@@ -22,6 +22,7 @@ import { renderEfficiency } from './planning-efficiency.js';
 import { renderSchedule } from './planning-schedule.js';
 import { renderGkk } from './planning-gkk.js';
 import { renderApprovals } from './planning-approvals.js';
+import { renderSamples } from './planning-numune.js';
 import { renderMeasureReports } from './planning-reports.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
 import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
@@ -34,7 +35,8 @@ const TABS = Object.freeze([
   { key: 'paketleme', label: 'Paketleme', sub: 'paketleme formu (EYS.FR.007)', hint: 'Koli içi adet ürün başına öğrenilir ve önerilir.', plain: true, render: renderPacking },
   { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca form açılır; "Düzenle" ile değiştirin.', render: renderWorkOrders },
   { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor no takibi (EYS.FR.011).', plain: true, importer: true, render: renderGkk },
-  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay / numune takip', hint: 'İlk baskı onay / numune takip listesi (EYS.FR.013).', plain: true, importer: true, render: renderApprovals },
+  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay listesi', hint: 'İlk baskı onay listesi (EYS.FR.013).', plain: true, importer: true, render: renderApprovals },
+  { key: 'numune', label: 'Numune takip', sub: 'numune talep/takip formu', hint: 'Müşteriye numune üretilip gönderilmesi ve onay/ret takibi (EYS.FR.012).', plain: true, render: renderSamples },
   { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', plain: true, render: renderMeasureReports },
   { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
   { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', render: renderProducts },

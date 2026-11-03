@@ -10,6 +10,7 @@ export const SCREENS = Object.freeze([
   { id: 'isemirleri', label: 'İş emirleri', app: 'planlama', writable: false },
   { id: 'gkk', label: 'GKK rapor no', app: 'planlama', writable: true },
   { id: 'ilkonay', label: 'İlk onay raporu', app: 'planlama', writable: true },
+  { id: 'numune', label: 'Numune takip', app: 'planlama', writable: true },
   { id: 'olcuraporlari', label: 'Ölçü raporları', app: 'planlama', writable: false },
   { id: 'programlar', label: 'Program eşleme', app: 'planlama', writable: true },
   { id: 'urunler', label: 'Ürün kartları', app: 'planlama', writable: true },

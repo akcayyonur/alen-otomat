@@ -336,6 +336,25 @@ export class LibraryDb {
     return r ? { meta: versionMeta(r), content: toBuffer(r.content) } : null;
   }
 
+  /**
+   * Bir kutuphanenin HER programinin EN SON surumu, icerigiyle birlikte - flasha/USB'ye aktarilacak ZIP icin
+   * (bkz. `library.js` `exportZip`). `listPrograms` + programa gore `getVersion` dongusu yerine tek sorgu.
+   * @returns {{customer: string, name: string, content: Buffer, createdAt: number}[]}
+   */
+  exportEntries(library = 'ortak') {
+    return this.db
+      .prepare(
+        `SELECT p.customer, p.name, v.content, v.created_at
+           FROM programs p
+           JOIN program_versions v ON v.program_id = p.id
+            AND v.version_no = (SELECT MAX(version_no) FROM program_versions WHERE program_id = p.id)
+          WHERE p.library = ?
+          ORDER BY p.customer, p.name`,
+      )
+      .all(library)
+      .map((r) => ({ customer: r.customer, name: r.name, content: toBuffer(r.content), createdAt: r.created_at }));
+  }
+
   /** Bir kutuphanenin tum surumlerinin (program, surum, sha, boyut) ozeti: karsilastirma icin, icerik yok. */
   allVersionsIndex(library = 'ortak') {
     return this.db

@@ -16,6 +16,7 @@
  */
 import { createHash } from 'node:crypto';
 import { LibraryDb } from './library-db.js';
+import { buildZip } from './zip-writer.js';
 
 export const MAX_PROGRAM_BYTES = 1_000_000;
 /** Kutuphaneden tek seferde silinebilecek en fazla program (yanlis "hepsini sec" riskini sinirlar). */
@@ -482,6 +483,21 @@ export class Library {
       machines: machines.map((m) => ({ id: m.id, name: m.name, scannedAt: scans.get(m.id)?.finishedAt ?? null, scanStatus: scans.get(m.id)?.status ?? null })),
       rows,
     };
+  }
+
+  /**
+   * Bir kutuphanenin TUM programlarini (her birinin en son surumu), bir flash/USB'ye kopyalanabilecek TEK bir
+   * ZIP dosyasi olarak paketler. Musteri klasoru olanlar ZIP icinde kendi klasorunde, kok (musterisiz) programlar
+   * ZIP'in kokunde. Bos kutuphanede bos (0 girdili) ama gecerli bir ZIP doner.
+   * @returns {Buffer}
+   */
+  exportZip(library = DEFAULT_LIBRARY) {
+    const entries = this.db.exportEntries(library).map((e) => ({
+      path: e.customer === '' ? e.name : `${e.customer}/${e.name}`,
+      content: e.content,
+      mtime: new Date(e.createdAt),
+    }));
+    return buildZip(entries);
   }
 
   /** Yukleme ekranindaki musteri secenekleri: kutuphanede ve tezgahlarda gorulenlerin birlesimi. */

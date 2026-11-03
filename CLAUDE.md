@@ -650,9 +650,31 @@ hiç `library` bilmeyen her çağıran (eski istemci, eski test) tıpkı öncede
 - **Tarayıcıda gerçek yerel `data/library.db`'ye karşı denendi:** kütüphane seçici her iki yerde de doğru veriyi getiriyor (ör. `CNC-03`
   kütüphanesinde oluşturulan bir program `Ortak`a geçince görünmüyor — kütüphaneler arası yalıtım doğrulandı), toplu alım penceresindeki radyo
   sorusu doğru şekilde çıkıyor. Test için oluşturulan geçici program (`TEST-SPLIT-01`) temizlendi.
-- **Henüz yapılmayanlar (kullanıcı "önce kütüphane bölünmesiyle başlayalım" dedi, bilerek kapsam dışı bırakıldı):** (1) bitmiş ürün depo akışı
-  (iş emri bitince Geçici depoya Mikro fişiyle aktarım, paketlemeden Merkez'e sevk) — henüz tasarlanmadı/yazılmadı; (2) bir tezgahın kütüphanesini
-  doğrudan bir USB/flash'a aktarma (ZIP indirme) — henüz yazılmadı, kullanıcı "bunu da ekleyelim" dedi ama sıradaki iş olarak bırakıldı.
+- **Henüz yapılmayan (kullanıcı "önce kütüphane bölünmesiyle başlayalım" dedi, bilerek kapsam dışı bırakıldı):** bitmiş ürün depo akışı (iş emri
+  bitince Geçici depoya Mikro fişiyle aktarım, paketlemeden Merkez'e sevk) — henüz tasarlanmadı/yazılmadı. (Kütüphaneyi flash/USB'ye aktarma ZIP
+  indirmesi aşağıdaki "Kütüphaneyi ZIP olarak dışa aktarma" bölümünde AYNI oturumda tamamlandı.)
+
+**Kütüphaneyi ZIP olarak dışa aktarma — flash/USB'ye kopyalamak için (2026-11-03, kullanıcı isteği):** "CNC-01'e girip toplu çektiğimiz programları
+doğrudan bir flasha aktarabilir miyiz" sorusuna cevap: Program kütüphanesi ekranının başlığında ve her tezgahın kendi "Programlar" panelinde
+**"ZIP olarak indir"** bağlantısı — seçili kütüphanedeki (ortak ya da o tezgahın kendisi) **her programın en son sürümünü**, müşteri klasör
+yapısını koruyarak (kök programlar ZIP'in kökünde, `MUSTERI_A/SR001.013` gibi klasörlü programlar kendi klasöründe) **tek bir `.zip` dosyasına**
+paketler; kullanıcı bu dosyayı normal bir indirme gibi alır ve istediği bir flash/USB belleğe elle kopyalar (tarayıcıdan doğrudan bir USB
+sürücüsüne yazma mümkün değil — bu zaten plan aşamasında "ZIP indirme yeterli" diye netleşmişti).
+- **Sıfır dış bağımlılık korundu:** `backend/programs/zip-writer.js` — `node:zlib`'in yerleşik `deflateRawSync`/`crc32`'si dışında hiçbir şeye
+  ihtiyaç duymayan, bağımsız bir ZIP32 yazıcı (yalnız yazma; `backend/pdf-merge.js`'in PDF için yaptığı elle-ikili-format yaklaşımıyla aynı
+  desen). Metin gibi sıkışan içerik `deflate` ile yazılır; zaten küçük/sıkışmayan içerik (deflate çıktısı büyürse) **store** (sıkıştırmasız)
+  yazılır — tek dosyalık programlar için fazladan şişme olmasın. **Windows'un kendi `Expand-Archive`'ı ile elle çapraz doğrulandı** (bu modülün
+  kendi test okuyucusuna değil, bağımsız bir araca karşı): kök ve klasörlü dosyalar, store VE deflate girdileri doğru ad/klasör/içerikle açıldı.
+- **Uç:** `GET /api/library/export.zip?library=` (`library` vars. `ortak`, geçersizse 400) → `application/zip`, `Content-Disposition: attachment;
+  filename="<kütüphane>-kutuphane.zip"`. `library.js` `exportZip(library)`, veri `library-db.js` `exportEntries(library)` (tek SQL sorgusu: her
+  programın en son sürümü + içeriği, `listPrograms` + program başına `getVersion` döngüsü yerine). Boş kütüphane geçerli (0 girdili) bir ZIP
+  döner — hata değil.
+- **Testler:** `backend/programs/zip-writer.test.js` (5: boş liste, kök+klasörlü yol, store/deflate seçimi, çok dosyalı sıralı okuma — kendi
+  test-amaçlı ZIP okuyucusuyla) + `backend/programs/export-zip.test.js` (4: en son sürümün paketlenmesi, kütüphaneler arası sızıntı olmaması, boş
+  kütüphane, HTTP uç + yanlış `library` 400). `npm test` 604/604 yeşil.
+- **Tarayıcıda gerçek sunucuya (dev, gerçek `data/library.db`) karşı denendi:** her iki düğme de (ana ekran "ortak", tezgah paneli kendi
+  kütüphanesi) doğru `?library=` ile doğru `Content-Type`/`Content-Disposition` döndürüyor; konsolda hata yok. Gerçek veri yazılmadan (yalnız
+  okuma) test edildi, veritabanına dokunulmadı.
 
 **Program editörü (2026-10-08):** yeni NC programı doğrudan üründe yazılır ("Yeni program yaz…") ya da var olan programın bir
 sürümü düzenlenir ("Düzenle…"); kaydedince kütüphanede **yeni sürüm** olur (eski sürümler aynen kalır), "Kaydet ve tezgaha gönder…"
@@ -1452,6 +1474,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `GET /api/drivers` · `GET /api/config` · `PUT /api/config/machines` | Sürücüler ve yapılandırma. |
 | `POST /api/library/programs/delete` · `GET /api/library/log` | **Kütüphaneden silme** (admin; geri dönüşsüz): `ids`, `confirm` (tek programda adı, çoklu sayısı), `by`; yanıt `deleted[]`, `programs`, `versions` · silme kaydı (kim, ne zaman, sürüm SHA'ları). |
 | `GET /api/library/config` · `/customers` · `/matrix[?library=]` | Özellik durumu (`transferEnabled`…), müşteri klasörleri, program × tezgah matrisi (`library`: `ortak` ya da bir tezgah kimliği, vars. `ortak`, §6 "Kütüphane bölünmesi"). |
+| `GET /api/library/export.zip?library=` | **Kütüphaneyi ZIP olarak dışa aktar** (flash/USB'ye kopyalamak için, §6): seçili kütüphanedeki her programın en son sürümü, müşteri klasör yapısı korunarak. `library` geçersizse 400. |
 | `GET/POST /api/library/programs` | Liste (`?library=&customer=&q=`); yükleme: gövde = ham dosya, `?library=&customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik; `library` vars. `ortak`, §6 "Kütüphane bölünmesi"). |
 | `POST /api/library/programs/text` | **Editör kaydı** (JSON: `text`, `lineEnding`, `encoding`, `bom`, `by`, `note`, `library?`; yeni program için `customer`+`name`, yeni sürüm için `programId`+`baseVersionNo`, `acceptNewer`). 201 yeni sürüm, 200 aynı içerik, 409 `code: exists` / `newer-version`. |
 | `GET /api/library/programs/:id` · `/versions/:no[?download=1\|full=1]` | Sürümler (programın KENDİ kütüphanesindeki yedekleriyle) · önizleme (JSON; `full=1` kesmeden tam metin + `roundTrip`) ya da ham indirme. |
@@ -1472,9 +1495,11 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 ## 10. Sıradaki işler
 
 - [x] ~~Program kütüphanesi bölünmesi (ortak + makine başına)~~ — yapıldı (2026-11-03), bkz. §6 "Kütüphane bölünmesi: Ortak + makine başına". **Fabrika PC'sinde gerçek kullanımda henüz denenmedi** (yalnız bu makinedeki geliştirme veritabanıyla).
-- [ ] **Aynı istekten gelen iki parça, henüz yapılmadı (kullanıcı kararı: önce kütüphane bölünmesi, sonra bunlar):**
-      (1) **Bitmiş ürün depo akışı** — iş emri bitince "Geçici depoya aktar?" onayı + Mikro'da `Merkez → Geçici` fişi (üretilen adet × ürün), Paketleme'de paketlenen kasalar `Geçici → Merkez` sevk fişiyle kapatılır. `material-reservations.js`'teki hammadde rezervasyonundan AYRI bir akış (o hammaddeyi, bu BİTMİŞ ÜRÜNÜ taşır). Henüz tasarlanmadı.
-      (2) **Bir tezgahın kütüphanesini flash/USB'ye aktarma** (ör. toplu çekilen `CNC-01` kütüphanesini ZIP olarak indirip bir flash belleğe kopyalamak) — kullanıcı "bunu da ekleyelim" dedi, henüz yazılmadı.
+- [x] ~~Bir tezgahın kütüphanesini flash/USB'ye aktarma (ZIP)~~ — yapıldı (2026-11-03), bkz. §6 "Kütüphaneyi ZIP olarak dışa aktarma".
+- [ ] **Bitmiş ürün depo akışı** (kullanıcının aynı istekteki ikinci parçası, kullanıcı kararıyla kütüphane bölünmesi ve ZIP'ten SONRAYA bırakıldı,
+      henüz tasarlanmadı): iş emri bitince "Geçici depoya aktar?" onayı + Mikro'da `Merkez → Geçici` fişi (üretilen adet × ürün), Paketleme'de
+      paketlenen kasalar `Geçici → Merkez` sevk fişiyle kapatılır. `material-reservations.js`'teki hammadde rezervasyonundan AYRI bir akış (o
+      hammaddeyi, bu BİTMİŞ ÜRÜNÜ taşır).
 - [x] ~~Installer'a MikroAPI ortam değişkenlerini GÖM~~ — yapıldı (2026-10-29), bkz. "MikroAPI kimlik bilgileri ve yazma artık installer'a gömülüyor".
 - [ ] **Çizelgeleme / optimizasyon (OR-Tools CP-SAT) — MVP + Setup.exe'ye Python gömme YAPILDI (2026-10-26), yalnız sentetik veriyle ve bu makinede derlenen pakette denendi.** Ayrıntı: §6 "Çizelgeleme / optimizasyon". Sıradaki: fabrika PC'sinde gerçek kurulum + gerçek iş emri verisiyle dene.
 - [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — yükseltilmiş

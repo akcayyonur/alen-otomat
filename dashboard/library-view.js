@@ -132,6 +132,7 @@ function buildLibrarySkeleton() {
     '<b>Gönderilen program tezgahta aktif olmaz</b>: çalıştırmak için panelden seçilmesi gerekir.</p>' +
     '</div>' +
     '<label class="fld-inline lib-library-pick"><span>Kütüphane</span><select data-role="library" aria-label="Kütüphane seç"></select></label>' +
+    '<a class="icon-btn" data-role="export-zip" download title="Seçili kütüphanenin tüm programlarını tek ZIP olarak indirir (bir flash/USB\'ye kopyalamak için)">ZIP olarak indir</a>' +
     '</header>' +
     '<p class="hint" data-role="library-hint"></p>' +
     '<p data-role="msg" class="notice" hidden></p>' +
@@ -201,6 +202,7 @@ function renderLibrarySelect() {
   lib.host.querySelector('[data-role="library-hint"]').textContent = lib.library === 'ortak'
     ? 'Ortak kütüphane: tüm tezgahlara gönderilebilir, "Toplu gönder" bununla çalışır.'
     : `${libraryLabel(lib.library, lib.config?.machines)} tezgahına özel kütüphane: programlar yalnızca burada görünür, başka tezgaha göndermek istisnai bir durumdur.`;
+  lib.host.querySelector('[data-role="export-zip"]').href = `/api/library/export.zip?library=${encodeURIComponent(lib.library)}`;
 }
 
 // Bir gonderme/tarama/iceri alma bitince (baska ekranlardan da) kutuphane listeleri tazelenir.
@@ -735,6 +737,7 @@ export function renderMachinePrograms(host, machine) {
       '<button type="button" class="icon-btn" data-act="bulk-push" title="Kütüphanedeki programların son sürümlerini bu tornaya topluca yazar; aynı adlı farklı dosyaların üzerine, ÖNCE tornadaki hâli yedekleyerek">Toplu gönder…</button>' +
       `<button type="button" class="icon-btn" data-act="new-folder"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Yeni klasör…</button>` +
       `<button type="button" class="icon-btn btn-primary" data-act="send"${blocked ? ` disabled title="${escapeHtml(blocked)}"` : ''}>Program gönder…</button>` +
+      `<a class="icon-btn" href="/api/library/export.zip?library=${encodeURIComponent(st.library)}" download title="Seçili kütüphanenin tüm programlarını tek ZIP olarak indirir (bir flash/USB'ye kopyalamak için)">ZIP olarak indir</a>` +
       // Özellik genelde açık ama bu kontrolcü modelinde doğrulanmamışsa nedeni göster (üzerine gelmeden de görünsün).
       (blocked && st.cfg.transferEnabled
         ? `<span class="hint" style="margin:0" title="${escapeHtml(blocked)}">${escapeHtml(info.controllerModel ?? '')} modelinde gönderme, gerçek tezgahta doğrulanana kadar kapalı</span>`

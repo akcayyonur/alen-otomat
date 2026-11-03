@@ -162,6 +162,17 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         const lib = validLibrary(url.searchParams.get('library'));
         return sendJson(res, 200, library.matrix(listMachines().filter((x) => eligibility(x).capable), lib)), true;
       }
+      if (method === 'GET' && path === '/api/library/export.zip') {
+        const lib = validLibrary(url.searchParams.get('library'));
+        const zip = library.exportZip(lib);
+        res.writeHead(200, {
+          'content-type': 'application/zip',
+          'content-disposition': `attachment; filename="${lib}-kutuphane.zip"`,
+          'content-length': zip.length,
+          'cache-control': 'no-store',
+        });
+        return res.end(zip), true;
+      }
 
       /* ---- kutuphane ---- */
       if (method === 'GET' && R.programs(path)) {

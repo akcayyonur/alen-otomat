@@ -50,17 +50,25 @@ function stockCodeOf(v) {
   return s;
 }
 
+const MAX_QTY = 1_000_000;
+/** Bitmiş ürün (adet) miktarı: kg'dan farklı olarak her zaman tam sayı. */
+function pieceCount(v) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0 || n > MAX_QTY) throw new PlanningError(`Adet 1 ile ${MAX_QTY.toLocaleString('tr-TR')} arasında bir tam sayı olmalı.`, 400, 'bad-qty');
+  return n;
+}
+
 function noteOf(v) {
   const s = String(v ?? '').trim();
   if (s.length > 200) throw new PlanningError('Not en fazla 200 karakter olabilir.', 400, 'bad-note');
   return s || null;
 }
 
-/** DahiliStokHareketKaydetV2'nin bir tek satırı (ortak alanlar; evraktip/tip/cins çağıran ekler). */
-function baseSatir({ stockCode, kg, cikisDepoNo, girisDepoNo, now }) {
+/** DahiliStokHareketKaydetV2'nin bir tek satırı (ortak alanlar; evraktip/tip/cins çağıran ekler). `miktar`: hammaddede kg, bitmiş üründe adet. */
+function baseSatir({ stockCode, miktar, cikisDepoNo, girisDepoNo, now }) {
   return {
     sth_stok_kod: stockCode,
-    sth_miktar: kg,
+    sth_miktar: miktar,
     sth_cikis_depo_no: cikisDepoNo,
     sth_giris_depo_no: girisDepoNo,
     sth_evrakno_seri: EVRAK_SERI,
@@ -112,9 +120,26 @@ export class MikroStock {
     const from = positiveInt(fromDepotNo, 'Kaynak depo');
     const to = positiveInt(toDepotNo, 'Hedef depo');
     if (from === to) throw new PlanningError('Kaynak ve hedef depo aynı olamaz.', 400, 'same-depot');
-    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), kg: kgAmount(kg), cikisDepoNo: from, girisDepoNo: to, now }), sth_evraktip: 2, sth_tip: 2, sth_cins: 6 };
+    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), miktar: kgAmount(kg), cikisDepoNo: from, girisDepoNo: to, now }), sth_evraktip: 2, sth_tip: 2, sth_cins: 6 };
     const body = wrapEvrak(satir, noteOf(note));
     return { kind: 'transfer', endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
+  }
+
+  /**
+   * Bitmiş ürün depo transferi (Merkez <-> Geçici) — hammadde transferiyle AYNI evrak türü (evraktip=2/tip=2/cins=6),
+   * yalnız stok kodu ürünün kendi Alen stok kodu ve miktar KG değil ADET (tam sayı). İş emri bitince (Merkez->Geçici)
+   * ve paketlenince (Geçici->Merkez) `product-depot.js` tarafından çağrılır; bkz. CLAUDE.md "Bitmiş ürün depo akışı".
+   * GERÇEK BİR ÜRÜN STOK KODUYLA HENÜZ DENENMEDİ (yalnız hammadde stok koduyla, 2026-10-29) — evrak türü resmi
+   * olarak doğrulandı ve mekanik olarak hammaddeyle birebir aynı, ama ürün stok kartlarının STOKLAR'daki gerçek
+   * davranışı (varsa farklı bir kısıt) sahada ilk denemede görülecek.
+   */
+  previewProductTransfer({ fromDepotNo, toDepotNo, stockCode, qty, note } = {}, { now = Date.now() } = {}) {
+    const from = positiveInt(fromDepotNo, 'Kaynak depo');
+    const to = positiveInt(toDepotNo, 'Hedef depo');
+    if (from === to) throw new PlanningError('Kaynak ve hedef depo aynı olamaz.', 400, 'same-depot');
+    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), miktar: pieceCount(qty), cikisDepoNo: from, girisDepoNo: to, now }), sth_evraktip: 2, sth_tip: 2, sth_cins: 6 };
+    const body = wrapEvrak(satir, noteOf(note));
+    return { kind: 'urun-transfer', endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
   }
 
   /**
@@ -130,7 +155,7 @@ export class MikroStock {
   previewVirman({ depotNo, stockCode, kg, note, direction = 'cikan' } = {}, { now = Date.now() } = {}) {
     const dep = positiveInt(depotNo, 'Depo');
     if (direction !== 'cikan' && direction !== 'giren') throw new PlanningError('Yön "çıkan" ya da "giren" olmalı.', 400, 'bad-direction');
-    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), kg: kgAmount(kg), cikisDepoNo: dep, girisDepoNo: dep, now }), sth_evraktip: 6, sth_tip: direction === 'cikan' ? 1 : 0, sth_cins: 3 };
+    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), miktar: kgAmount(kg), cikisDepoNo: dep, girisDepoNo: dep, now }), sth_evraktip: 6, sth_tip: direction === 'cikan' ? 1 : 0, sth_cins: 3 };
     const body = wrapEvrak(satir, noteOf(note));
     return { kind: 'virman', direction, endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
   }

@@ -20,6 +20,7 @@ import { openGkkPicker } from './planning-gkk.js';
 import { createFirstApproval } from './planning-approvals.js';
 import { drawingsEditorHtml, wireDrawings } from './planning-drawings.js';
 import { materialPanelHtml } from './planning-material.js';
+import { depotPanelHtml } from './planning-depot.js';
 import { openFormDialog } from './auth-view.js';
 
 const machineOptions = (machines, selected = '', blank = '— seçin —') =>
@@ -446,7 +447,7 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       (ro ? `<p class="notice notice-sim"><b>İptal edildi</b> (${escapeHtml(dateTimeText(w.cancelledAt))}): ${escapeHtml(w.cancelReason ?? '')}</p>` : '') +
       (w.line ? `<p class="notice"><b>Sipariş:</b> ${escapeHtml(w.customer)} · müşteri sip. no <b class="mono">${escapeHtml(w.custOrderNo || '—')}</b> · evrak ${escapeHtml(w.docNo || '—')} · satır: sipariş ${fmtNum(w.line.qty)}, kalan ${fmtNum(w.line.remaining)}, iş emrinde ${fmtNum(w.line.planned)}, planlanmamış ${fmtNum(w.line.unplanned)}</p>` : '<p class="notice">Siparişsiz iş emri.</p>') +
       `<p class="hint" data-role="calc">${[w.plannedHours !== null ? `planlanan süre ${fmtDec(w.plannedHours)} saat` : null, w.rawKg !== null ? `hammadde ${fmtDec(w.rawKg)} kg` : null, w.bars !== null ? `${fmtDec(w.bars)} çubuk` : null].filter(Boolean).join(' · ')}</p>` +
-      progressHtml(w) + materialPanelHtml(w) + cratesHtml(w) +
+      progressHtml(w) + materialPanelHtml(w) + depotPanelHtml(w) + cratesHtml(w) +
       '<form autocomplete="off" data-role="form"><div class="fld-grid">' +
       input('targetQty', 'Hedef adet', w.targetQty, ' inputmode="numeric"') +
       `<label class="fld"><span>Termin</span><input name="dueDate" type="date" value="${escapeHtml(isoDate(w.dueDate))}"${dis}></label>` +
@@ -647,6 +648,16 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
         draw();
       } catch (e) { err.textContent = e.message; err.hidden = false; }
     }
+    else if (act === 'depot-finish-send' || act === 'depot-pack-send') {
+      const btn = ev.target.closest('[data-act]');
+      btn.disabled = true;
+      try {
+        const r = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/depot/${act === 'depot-finish-send' ? 'finish-transfer' : 'packing-transfer'}`, {});
+        w.depot = r;
+        onChanged();
+        draw();
+      } catch (e) { btn.disabled = false; window.alert(e.message); }
+    }
   });
   draw();
 
@@ -660,12 +671,15 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       w.progress = fresh.progress;
       w.crates = fresh.crates;
       w.consumption = fresh.consumption;
+      w.depot = fresh.depot;
       const box = m.body.querySelector('[data-role="progress"]');
       if (box) box.outerHTML = progressHtml(w);
       const cbox = m.body.querySelector('[data-role="crates"]');
       if (cbox) cbox.outerHTML = cratesHtml(w);
       const mbox = m.body.querySelector('[data-role="material"]');
       if (mbox) mbox.outerHTML = materialPanelHtml(w);
+      const dbox = m.body.querySelector('[data-role="depot"]');
+      if (dbox) dbox.outerHTML = depotPanelHtml(w);
     } catch { /* gecici ag hatasi: bir sonraki turda yeniden denenir */ }
   }, 10_000);
 }

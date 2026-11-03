@@ -30,6 +30,12 @@
  *   POST /api/planning/price-studies?title=&name=       yeni calisma: govde = ham PDF (yalniz yonetici)
  *   GET  /api/planning/price-studies/:id                 ayrinti;  GET .../drawing.pdf  teknik resim;  DELETE .../:id  (yalniz yonetici)
  *   PUT  /api/planning/price-studies/:id/fill {material, plannedSec, note?}   usta hammadde+sure doldurur ('fiyat' ekranina yazabilen rol)
+ *   GET  /api/planning/samples?q=&status=                NUMUNE TAKIP listesi (EYS.FR.012; `products` ile baglanmaz, musteri/alen urun kodu serbest metin)
+ *   POST /api/planning/samples                            yeni numune formu ac (yalniz musteri zorunlu)
+ *   GET/PUT /api/planning/samples/:id                      ayrinti / duzenle (uretim+gonderim alanlari zamanla doldurulur);  DELETE .../:id  (yalniz yonetici)
+ *   POST .../samples/:id/decide {status:'onaylandi'|'reddedildi', decidedOn?, note?}   musteriden gelen karar (e-posta ile gelir, elle girilir)
+ *   POST .../samples/:id/reopen                            yanlis isaretlenen karari geri al ('bekliyor'a doner)
+ *   PUT  /api/planning/samples/sequence {last}              numara tabani (kagittaki SERI NO ile cakismasin; yalniz yonetici)
  *   GET  /api/planning/downtime-codes                   durus nedeni kodlari (D1-D46, Z1-Z4) ve gruplari
  *   GET  /api/planning/shop/overview                    fabrika PC'si ana ekrani: tezgah basina durum, uretimdeki is emri, bekleyenler, nedeni sorulmamis duruslar
  *   GET  /api/planning/shop/stops?machine=&hours=       bir tezgahin OLCULMUS duruslari ve baglanmis nedenleri
@@ -49,6 +55,9 @@
  *   GET  /api/planning/material/mikro/materials?q=       hammadde (HM%) arama (canli okuma, salt SELECT)
  *   POST /api/planning/material/mikro/transfer-preview|transfer-send {fromDepotNo, toDepotNo, stockCode, kg, note?}   DEPOLAR ARASI SEVKIYAT fisi: onizle (govde kurulur, GONDERILMEZ) / gonder (yalniz MIKRO_WRITE_ENABLED=1 ise; yoksa 409 mikro-write-disabled)
  *   POST /api/planning/material/mikro/virman-preview|virman-send {depotNo, stockCode, kg, note?}   SARFIYAT (stok virman) fisi: ayni kurallar
+ *   GET  /api/planning/work-orders/:no/depot-status      BITMIS URUN DEPO AKISI durumu (uretilen/Gecici'ye aktarilan, paketlenen/Merkez'e sevk edilen; yalniz yonetici)
+ *   POST /api/planning/work-orders/:no/depot/finish-transfer    is emri BITINCE: uretilen adedin gonderilmemis kismi Merkez->Gecici (ayni MIKRO_WRITE_ENABLED kurali)
+ *   POST /api/planning/work-orders/:no/depot/packing-transfer   PAKETLENINCE: paketlenen adedin gonderilmemis kismi (delta) Gecici->Merkez
  *   GET  /api/planning/efficiency?from=&to=&machine=    verimlilik raporu (is emri x vardiya; yalniz yonetici);  .../efficiency.csv?...&view=gunluk|matris|urun|tezgah
  *   GET  /api/planning/downtime-report?from=&to=&machine=    durus raporu (neden kodu dakikalari, nedeni belirsiz);  .../downtime-report.csv?...&view=durus|durus-kod-gun
  *   GET  /api/planning/programs                         tornalarda gorulen programlar + esleme durumu (operator + yonetici; esleme yazma uclari da)
@@ -273,6 +282,29 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         return sendJson(res, 200, planning.priceStudies.fill(Number(m[1]), await readJson(req), { by: who(req) })), true;
       }
 
+      /* ---- numune takip (EYS.FR.012): urun karti olmayabilir, `products` ile baglanmaz ---- */
+      if (path === '/api/planning/samples') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.samples.list({
+            q: url.searchParams.get('q') ?? '', status: url.searchParams.get('status') ?? '',
+            limit: intParam(url, 'limit', 200, { min: 1, max: 1000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') return sendJson(res, 201, planning.samples.create(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'PUT' && path === '/api/planning/samples/sequence') return sendJson(res, 200, planning.samples.setSequence((await readJson(req)).last)), true;
+      if ((m = /^\/api\/planning\/samples\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, planning.samples.get(Number(m[1]))), true;
+        if (method === 'PUT') return sendJson(res, 200, planning.samples.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.samples.delete(Number(m[1]))), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/decide$/.exec(path))) {
+        return sendJson(res, 200, planning.samples.decide(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/reopen$/.exec(path))) {
+        return sendJson(res, 200, planning.samples.reopen(Number(m[1]), { by: who(req) })), true;
+      }
+
       /* ---- siparisler ---- */
       if (method === 'GET' && path === '/api/planning/orders') {
         return sendJson(res, 200, {
@@ -328,6 +360,15 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       // Hic baslatilmamis eski is emrini geriye donuk, ELLE bitirir (adet telemetriden sayilmaz).
       if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/finish-manual$/.exec(path))) {
         return sendJson(res, 200, planning.finishWorkOrderManually(m[1], await readJson(req), { by: who(req) })), true;
+      }
+      /* ---- bitmis urun depo akisi (Merkez<->Gecici, Mikro yazma MIKRO_WRITE_ENABLED=1 olmadan KAPALI; yalniz yonetici) ---- */
+      if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/depot-status$/.exec(path))) {
+        return sendJson(res, 200, planning.productDepot.statusFor(m[1])), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/depot\/(finish-transfer|packing-transfer)$/.exec(path))) {
+        const by = who(req);
+        const result = m[2] === 'finish-transfer' ? await planning.productDepot.sendFinishTransfer(m[1], { by }) : await planning.productDepot.sendPackingTransfer(m[1], { by });
+        return sendJson(res, 200, result), true;
       }
       /* ---- olcu kontrolu (EYS.FR.005): operator + yonetici ---- */
       if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/measurements$/.exec(path))) return sendJson(res, 200, planning.getMeasurements(m[1])), true;

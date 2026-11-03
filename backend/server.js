@@ -180,6 +180,7 @@ const STATIC_FILES = {
   '/planning-mikro.js': ['../dashboard/planning-mikro.js', 'text/javascript; charset=utf-8'],
   '/planning-gkk.js': ['../dashboard/planning-gkk.js', 'text/javascript; charset=utf-8'],
   '/planning-approvals.js': ['../dashboard/planning-approvals.js', 'text/javascript; charset=utf-8'],
+  '/planning-depot.js': ['../dashboard/planning-depot.js', 'text/javascript; charset=utf-8'],
   '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],
   '/planning-reports.js': ['../dashboard/planning-reports.js', 'text/javascript; charset=utf-8'],
   '/planning-tabs.js': ['../dashboard/planning-tabs.js', 'text/javascript; charset=utf-8'],

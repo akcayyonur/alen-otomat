@@ -18,10 +18,12 @@ import { Sources } from './sources.js';
 import { Mikro } from './mikro.js';
 import { MikroClient } from './mikro-client.js';
 import { MikroStock } from './mikro-stock.js';
+import { ProductDepot } from './product-depot.js';
 import { DocFolder } from './doc-folder.js';
 import { Packing } from './packing.js';
 import { Schedule } from './schedule.js';
 import { PriceStudies } from './price-studies.js';
+import { SampleTracking } from './sample-tracking.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -85,6 +87,7 @@ export class Planning {
     this.quality = new Quality({ planning: this, db: this.db.db });
     /** Fiyat çalışması: ürün kartı açılmadan önceki teknik resim + hammadde/süre ön çalışması (price-studies.js). `products` ile BAĞLANMAZ. */
     this.priceStudies = new PriceStudies({ planning: this });
+    this.samples = new SampleTracking({ planning: this });
     /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
     /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */
@@ -96,6 +99,8 @@ export class Planning {
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });
     /** Paketleme formu (EYS.FR.007): urun kodu uzerinden satirlar, koli ici adet ogrenme/oneri (packing.js). */
     this.packing = new Packing({ planning: this });
+    /** Bitmiş ürün depo akışı (product-depot.js): iş emri bitince Merkez->Geçici, paketlenince Geçici->Merkez; `mikroStock`'u kullanır. */
+    this.productDepot = new ProductDepot({ planning: this });
     /** Cizelgeleme / optimizasyon (OR-Tools CP-SAT, ayri Python sureci): bekleyen is emirlerini tezgahlara ONERIR (schedule.js). ASLA otomatik uygulamaz. */
     this.schedule = new Schedule({ planning: this });
     this.listSeenPrograms = listSeenPrograms;
@@ -500,6 +505,8 @@ export class Planning {
       crates: this.#cratesSummary(w, progress, now),
       // hammadde sarfiyati (D/F): alan adi `material` is emrinin kendi hammadde metni oldugu icin `consumption`
       consumption: { ...c, fis: this.#fisOf(w) },
+      // bitmis urun depo akisi (Merkez<->Gecici, Mikro): product-depot.js statusFor() getWorkOrder()'i TEKRAR CAGIRMAZ (sonsuz donguyu onlemek icin ham satirdan okur).
+      depot: this.productDepot.statusFor(w.no),
       reservation: this.db.getReservation(w.no),
       events: this.db.workOrderEvents(w.no),
       line: w.lineId == null ? null : this.db.getLine(w.lineId),

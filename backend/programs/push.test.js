@@ -130,13 +130,13 @@ test('UYGULA: yeniler yazilir, ezilecekler YEDEKLENEREK ezilir (RNTO ezme semant
     assert.deepEqual(artik(t), ['AA/ZZUP123456'], 'kendi geçici/yan adlı dosyamız kalmadı; eski artığa dokunulmadı');
 
     // yedekler: tornadaki ESKI haller kutuphanede
-    const bFarkli = t.library.db.listBackups('MUSTERI_B', 'P-FARKLI');
+    const bFarkli = t.library.db.listBackups('ortak', 'MUSTERI_B', 'P-FARKLI');
     assert.equal(bFarkli.length, 1);
     assert.ok(t.library.db.getBackup(bFarkli[0].id).content.equals(ic('TORNA-ELI', 9)));
-    assert.equal(t.library.db.listBackups('MUSTERI_B', 'P-BOYUT').length, 1);
-    assert.equal(t.library.db.listBackups('MUSTERI_B', 'P-ESKI').length, 0, 'zaten kütüphanede v1');
+    assert.equal(t.library.db.listBackups('ortak', 'MUSTERI_B', 'P-BOYUT').length, 1);
+    assert.equal(t.library.db.listBackups('ortak', 'MUSTERI_B', 'P-ESKI').length, 0, 'zaten kütüphanede v1');
     // yedekler SURUM degildir: surum numaralari ve "guncel surum" bozulmaz
-    assert.equal(t.library.db.listVersions(t.library.db.findProgram('MUSTERI_B', 'P-FARKLI').id).length, 1);
+    assert.equal(t.library.db.listVersions(t.library.db.findProgram('ortak', 'MUSTERI_B', 'P-FARKLI').id).length, 1);
 
     // yalniz kendi gecici/yan adli dosyalarimiz silinir; hicbir RNTO mevcut bir adin uzerine gitmez (mock default: 550 verirdi)
     for (const k of komutlar(t.server, 'DELE')) assert.match(k, /^DELE ZZ(UP|RB)\d{6}$/, `izinsiz DELE: ${k}`);
@@ -278,7 +278,7 @@ test('HATA: geri alma da basarisiz olursa "dogrulanamadi" + eski halin yan adi a
     assert.ok(yanAd, 'eski hal yan adla duruyor');
     assert.ok(t.server.read(`MUSTERI_B/${yanAd}`).equals(ic('TORNA-ELI', 9)), 'içerik kayıpsız');
     assert.match(a.results[0].detail, new RegExp(yanAd));
-    assert.equal(t.library.db.listBackups('MUSTERI_B', 'P-FARKLI').length, 1, 'kütüphanede de yedek var');
+    assert.equal(t.library.db.listBackups('ortak', 'MUSTERI_B', 'P-FARKLI').length, 1, 'kütüphanede de yedek var');
   } finally { await t.kapat(); }
 });
 
@@ -303,7 +303,7 @@ test('YARIS: plandan sonra operator dosyayi degistirdiyse ezilen, PLAN ANINDAKI 
     const { id } = await planla(t);
     t.server.put('MUSTERI_B/P-FARKLI', ic('OPERATOR-DUZELTTI', 5));
     await uygula(t, id);
-    const [b] = t.library.db.listBackups('MUSTERI_B', 'P-FARKLI');
+    const [b] = t.library.db.listBackups('ortak', 'MUSTERI_B', 'P-FARKLI');
     assert.ok(t.library.db.getBackup(b.id).content.equals(ic('OPERATOR-DUZELTTI', 5)));
     AYNI(t, 'MUSTERI_B/P-FARKLI', ic('FARKLI', 3));
   } finally { await t.kapat(); }
@@ -370,8 +370,8 @@ test('YEDEK: kutuphaneye YENI SURUM olarak geri alinir (surum numarasi ileri gid
   try {
     const { id } = await planla(t);
     await uygula(t, id);
-    const prog = t.library.db.findProgram('MUSTERI_B', 'P-FARKLI');
-    const [b] = t.library.db.listBackups('MUSTERI_B', 'P-FARKLI');
+    const prog = t.library.db.findProgram('ortak', 'MUSTERI_B', 'P-FARKLI');
+    const [b] = t.library.db.listBackups('ortak', 'MUSTERI_B', 'P-FARKLI');
     const r = t.library.restoreBackup({ id: b.id, by: 'ayse' });
     assert.equal(r.created, true);
     assert.equal(r.version.versionNo, 2);
@@ -420,7 +420,7 @@ test('HTTP: plan -> uygula -> ilerleme/sonuc, durdur, onay hatasi 400, plan yok 
     assert.equal((await post('/api/machines/CNC-08/programs/push-stop', { planId })).status, 404, 'çalışan iş yok');
 
     // yedekler
-    const prog = await j(`/api/library/programs/${t.library.db.findProgram('MUSTERI_B', 'P-FARKLI').id}`);
+    const prog = await j(`/api/library/programs/${t.library.db.findProgram('ortak', 'MUSTERI_B', 'P-FARKLI').id}`);
     assert.equal(prog.body.backups.length, 1);
     const bid = prog.body.backups[0].id;
     assert.equal('content' in prog.body.backups[0], false, 'liste içerik taşımaz');

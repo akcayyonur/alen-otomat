@@ -26,8 +26,8 @@ const normalize = (s) => s.replace(/\r\n?/g, '\n');
 const fileLabel = (customer, name) => `${customer === '' ? '' : `${customer}\\`}${name}`;
 const stopPolling = () => { clearTimeout(timer); timer = null; };
 
-/** @param {{machineId: string, machineName?: string, knownFolders?: string[]}} opts */
-export function openBulkImport({ machineId, machineName = '', knownFolders = [] }) {
+/** @param {{machineId: string, machineName?: string, library?: string, knownFolders?: string[]}} opts */
+export function openBulkImport({ machineId, machineName = '', library = machineId, knownFolders = [] }) {
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.className = 'modal modal-wide';
@@ -38,7 +38,7 @@ export function openBulkImport({ machineId, machineName = '', knownFolders = [] 
   stopPolling();
   for (const k of Object.keys(bi)) delete bi[k];
   Object.assign(bi, {
-    machineId, machineName, folders: [...knownFolders].sort((a, b) => a.localeCompare(b, 'tr')), picked: new Set(knownFolders),
+    machineId, machineName, library, folders: [...knownFolders].sort((a, b) => a.localeCompare(b, 'tr')), picked: new Set(knownFolders),
     phase: 'intro', planId: null, progress: null, plan: null, decisions: new Map(), skipFolders: new Set(),
     openDiff: null, diffs: new Map(), error: null, result: null, busy: false,
   });
@@ -55,7 +55,7 @@ async function startPlan() {
   render();
   const allPicked = bi.folders.length === 0 || bi.picked.size === bi.folders.length;
   try {
-    const r = await post(`/api/machines/${encodeURIComponent(bi.machineId)}/programs/import-plan`, allPicked ? {} : { folders: [...bi.picked] });
+    const r = await post(`/api/machines/${encodeURIComponent(bi.machineId)}/programs/import-plan`, { library: bi.library, ...(allPicked ? {} : { folders: [...bi.picked] }) });
     bi.planId = r.planId;
     poll();
   } catch (err) {
@@ -180,6 +180,11 @@ function renderIntro() {
   return '<p class="notice">Tornadaki <b>tüm klasörler ve programlar</b> FTP ile <b>okunur</b>; tornaya hiçbir şey yazılmaz. ' +
     'Dosyalar sıralı ve kısa aralıklarla okunur (üretimi yormamak için); yüzlerce dosyada birkaç dakika sürebilir. ' +
     'Sonra neyin alınacağını siz görüp onaylarsınız. <b>Aynı adlı ama içeriği farklı</b> programlar otomatik alınmaz: farkı görüp karar verirsiniz.</p>' +
+    '<label class="fld"><span>Hangi kütüphaneye alınsın?</span>' +
+    '<div class="mx-list">' +
+    `<label class="chk" style="margin:0"><input type="radio" name="bi-library" data-library="${escapeHtml(bi.machineId)}"${bi.library === bi.machineId ? ' checked' : ''}> ${escapeHtml(bi.machineId)} kütüphanesi (bu tezgaha özel)</label>` +
+    `<label class="chk" style="margin:0"><input type="radio" name="bi-library" data-library="ortak"${bi.library === 'ortak' ? ' checked' : ''}> Ortak kütüphane</label>` +
+    '</div><p class="hint" style="margin-top:2px">Alınan programlar seçtiğiniz kütüphanede görünür; diğer kütüphanelere dokunulmaz.</p></label>' +
     (bi.folders.length > 0
       ? '<details class="grp"><summary><b>Klasör seç</b> (isteğe bağlı: varsayılan hepsi) · ' +
         `<span data-role="picked-count">${num(bi.picked.size)} / ${num(bi.folders.length)}</span></summary><div class="grp-body"><div class="mx-list">` +
@@ -260,7 +265,7 @@ function renderDone() {
   const r = bi.result;
   const toplam = r.yeniProgram + r.yeniSurum;
   return `<div class="result result-${r.hatalar.length ? 'warn' : 'ok'}"><span class="result-ic" aria-hidden="true">${r.hatalar.length ? '▲' : '✓'}</span><div>` +
-    `<b>${num(toplam)} program kütüphaneye alındı.</b>` +
+    `<b>${num(toplam)} program ${bi.library === 'ortak' ? 'Ortak' : bi.library} kütüphanesine alındı.</b>` +
     `<p>${num(r.yeniProgram)} yeni program · ${num(r.yeniSurum)} mevcut programa yeni sürüm · ${num(r.zatenVardi)} zaten kütüphanedeydi · ${num(r.atlanan)} alınmadı (atlanan).</p>` +
     `<p>Tornaya hiçbir şey yazılmadı. Tezgahın matrisi güncellendi.</p></div></div>` +
     (r.hatalar.length ? `<h4 class="sub">Hatalar (${num(r.hatalar.length)})</h4><ul class="checks">` +
@@ -290,7 +295,9 @@ function wire() {
 
   dlg.addEventListener('change', (ev) => {
     const t = ev.target;
-    if (t.dataset?.folder !== undefined) {
+    if (t.dataset?.library !== undefined) {
+      bi.library = t.dataset.library;
+    } else if (t.dataset?.folder !== undefined) {
       if (t.checked) bi.picked.add(t.dataset.folder); else bi.picked.delete(t.dataset.folder);
       q('[data-role="picked-count"]').textContent = `${num(bi.picked.size)} / ${num(bi.folders.length)}`;
       q('[data-act="start"]').disabled = bi.picked.size === 0;

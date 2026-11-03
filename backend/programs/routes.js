@@ -9,7 +9,7 @@
  * kullanabilir; ikinci onay = tezgah adini yazmak). Gonderen `by` alani ve istemci
  * IP'si denetim kaydina yazilir. Ozelligi tamamen kapatmak: TRANSFER_DISABLED=1.
  */
-import { MAX_PROGRAM_BYTES, TEMP_PREFIX, ValidationError } from './library.js';
+import { MAX_PROGRAM_BYTES, TEMP_PREFIX, ValidationError, DEFAULT_LIBRARY } from './library.js';
 import { FtpError } from './ftp-client.js';
 import { driverFtpOptions, sendPolicy, deletePolicy } from './machine-files.js';
 
@@ -115,6 +115,16 @@ const R = {
  * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, url: URL) => Promise<boolean>}
  */
 export function createProgramRoutes({ library, files, listMachines, authRequired = false }) {
+  /**
+   * Gercekten var olan bir kutuphane mi: 'ortak' (ORTAK kutuphane) ya da tam olarak bir tezgah kimligi (o tezgahin
+   * KENDI kutuphanesi). Baska her sey 400 - yazim hatasi sessizce "goruntude olmayan" bir kutuphane YARATMASIN.
+   */
+  const validLibrary = (raw) => {
+    const value = String(raw ?? '').trim() || DEFAULT_LIBRARY;
+    if (value === DEFAULT_LIBRARY || listMachines().some((m) => m.id === value)) return value;
+    throw new ValidationError(`Kütüphane bulunamadı: "${value}" (ortak ya da bir tezgah kimliği olmalı).`);
+  };
+
   // Tarama/kutuphane icin uygun mu (FTP ayari var mi) + kontrolcu modelinde GONDERME acik mi.
   const eligibility = (m) => {
     const policy = sendPolicy(m);
@@ -149,18 +159,21 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         return sendJson(res, 200, { customers: library.customers() }), true;
       }
       if (method === 'GET' && path === '/api/library/matrix') {
-        return sendJson(res, 200, library.matrix(listMachines().filter((x) => eligibility(x).capable))), true;
+        const lib = validLibrary(url.searchParams.get('library'));
+        return sendJson(res, 200, library.matrix(listMachines().filter((x) => eligibility(x).capable), lib)), true;
       }
 
       /* ---- kutuphane ---- */
       if (method === 'GET' && R.programs(path)) {
         const customer = url.searchParams.has('customer') ? url.searchParams.get('customer') : null;
-        return sendJson(res, 200, { programs: library.db.listPrograms({ customer, q: url.searchParams.get('q') ?? '' }) }), true;
+        const lib = validLibrary(url.searchParams.get('library'));
+        return sendJson(res, 200, { programs: library.db.listPrograms({ library: lib, customer, q: url.searchParams.get('q') ?? '' }) }), true;
       }
 
       if (method === 'POST' && R.programs(path)) {
         const content = await readBuffer(req, MAX_PROGRAM_BYTES + 1024);
         const result = library.addUpload({
+          library: validLibrary(url.searchParams.get('library')),
           customer: url.searchParams.get('customer') ?? '',
           name: url.searchParams.get('name'),
           note: url.searchParams.get('note'),
@@ -176,7 +189,7 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         const b = await readJson(req, MAX_TEXT_JSON_BYTES);
         const result = library.saveText({
           programId: b.programId ?? null, baseVersionNo: b.baseVersionNo ?? null,
-          customer: b.customer ?? '', name: b.name, text: b.text,
+          library: validLibrary(b.library), customer: b.customer ?? '', name: b.name, text: b.text,
           lineEnding: b.lineEnding ?? 'CRLF', encoding: b.encoding ?? 'utf-8', bom: b.bom === true,
           note: b.note ?? null, createdBy: who(req, b.by), acceptNewer: b.acceptNewer === true,
         });
@@ -219,7 +232,7 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
         const program = library.db.getProgram(Number(m[1]));
         if (!program) return sendJson(res, 404, { error: 'Program bulunamadı.' }), true;
         return sendJson(res, 200, {
-          program, versions: library.db.listVersions(program.id), backups: library.db.listBackups(program.customer, program.name),
+          program, versions: library.db.listVersions(program.id), backups: library.db.listBackups(program.library, program.customer, program.name),
         }), true;
       }
 
@@ -271,15 +284,16 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
       if (method === 'GET' && (m = R.machinePrograms(path))) {
         const id = decodeURIComponent(m[1]);
         if (!listMachines().some((x) => x.id === id)) return sendJson(res, 404, { error: `Tezgah bulunamadı: ${id}` }), true;
-        return sendJson(res, 200, library.compareMachine(id)), true;
+        return sendJson(res, 200, library.compareMachine(id, validLibrary(url.searchParams.get('library')))), true;
       }
       if (method === 'POST' && (m = R.machineScan(path))) {
-        return sendJson(res, 200, await files.scan(decodeURIComponent(m[1]))), true;
+        const b = await readJson(req);
+        return sendJson(res, 200, await files.scan(decodeURIComponent(m[1]), validLibrary(b.library))), true;
       }
       if (method === 'POST' && (m = R.machineImport(path))) {
         const body = await readJson(req);
         const result = await files.importFromMachine({
-          machineId: decodeURIComponent(m[1]), customer: body.customer ?? '', name: body.name, by: who(req, body.by),
+          machineId: decodeURIComponent(m[1]), library: validLibrary(body.library), customer: body.customer ?? '', name: body.name, by: who(req, body.by),
         });
         return sendJson(res, result.created ? 201 : 200, result), true;
       }
@@ -296,7 +310,7 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
       /* ---- toplu iceri alma (plan + uygula; tornaya yalniz OKUMA) ---- */
       if (method === 'POST' && (m = R.importPlan(path))) {
         const b = await readJson(req);
-        const planId = files.startImportPlan({ machineId: decodeURIComponent(m[1]), folders: b.folders ?? null });
+        const planId = files.startImportPlan({ machineId: decodeURIComponent(m[1]), library: validLibrary(b.library), folders: b.folders ?? null });
         return sendJson(res, 202, { planId }), true;
       }
       if (method === 'GET' && (m = R.importPlanGet(path))) {
@@ -316,7 +330,7 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
       /* ---- TOPLU GONDERME: plan (tornaya yalniz OKUMA) + uygula (yedekleyerek ezer) + durdur ---- */
       if (method === 'POST' && (m = R.pushPlan(path))) {
         const b = await readJson(req);
-        const planId = files.startPushPlan({ machineId: decodeURIComponent(m[1]), folders: b.folders ?? null });
+        const planId = files.startPushPlan({ machineId: decodeURIComponent(m[1]), library: validLibrary(b.library), folders: b.folders ?? null });
         return sendJson(res, 202, { planId }), true;
       }
       if (method === 'GET' && (m = R.pushPlanGet(path))) {
@@ -339,13 +353,13 @@ export function createProgramRoutes({ library, files, listMachines, authRequired
       if (method === 'POST' && (m = R.deletePrecheck(path))) {
         const b = await readJson(req);
         return sendJson(res, 200, await files.deletePrecheck({
-          machineId: decodeURIComponent(m[1]), customer: b.customer ?? '', name: b.name, acks: b.acks ?? [],
+          machineId: decodeURIComponent(m[1]), library: validLibrary(b.library), customer: b.customer ?? '', name: b.name, acks: b.acks ?? [],
         })), true;
       }
       if (method === 'POST' && (m = R.deleteProgram(path))) {
         const b = await readJson(req);
         const rec = await files.deleteProgram({
-          machineId: decodeURIComponent(m[1]), customer: b.customer ?? '', name: b.name, confirm: b.confirm,
+          machineId: decodeURIComponent(m[1]), library: validLibrary(b.library), customer: b.customer ?? '', name: b.name, confirm: b.confirm,
           by: who(req, b.by), acks: b.acks ?? [], clientIp: req.clientIp ?? req.socket.remoteAddress ?? null,
         });
         return sendJson(res, 200, rec), true;

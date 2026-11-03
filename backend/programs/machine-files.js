@@ -192,7 +192,7 @@ export class MachineFiles {
    * Tezgahin tum musteri klasorlerini listeler ve envanteri yeniler. Kutuphanede
    * karsiligi olan dosyalarin (boyutu tutanlarin) SHA'si icin indirilir.
    */
-  async scan(machineId) {
+  async scan(machineId, library = 'ortak') {
     const machine = this.#machine(machineId);
     const ftp = this.ftpOptionsFor(machine);
     return this.#lock(machineId, 'tarama', async () => {
@@ -231,7 +231,7 @@ export class MachineFiles {
           }
 
           // Kutuphanede karsiligi olan dosyalarin SHA'si
-          const candidates = this.library.hashCandidates(entries).slice(0, MAX_HASH_DOWNLOADS);
+          const candidates = this.library.hashCandidates(entries, library).slice(0, MAX_HASH_DOWNLOADS);
           const byFolder = new Map();
           for (const e of candidates) {
             if (!byFolder.has(e.customer)) byFolder.set(e.customer, []);
@@ -269,7 +269,7 @@ export class MachineFiles {
   /* ------------------------------------------------------------------- iceri alma */
 
   /** Tezgahtaki bir programi kutuphaneye alir (kaynak: 'tezgah-tarama'). */
-  async importFromMachine({ machineId, customer, name, by = null }) {
+  async importFromMachine({ machineId, library = 'ortak', customer, name, by = null }) {
     const machine = this.#machine(machineId);
     const cleanCustomer = validateCustomer(customer);
     const ftp = this.ftpOptionsFor(machine);
@@ -293,7 +293,7 @@ export class MachineFiles {
         return { folder, fileName: file.name, content };
       });
       const result = this.library.addFromMachine({
-        machineId, customer: found.folder, name: found.fileName, content: found.content, createdBy: by,
+        machineId, library, customer: found.folder, name: found.fileName, content: found.content, createdBy: by,
       });
       this.library.db.setInventorySha(machineId, found.folder, found.fileName, result.version.sha256);
       return result;
@@ -753,9 +753,10 @@ export class MachineFiles {
    * Bir tornadaki TUM programlari okuyup kutuphaneye gore siniflandiran PLANI arka planda baslatir ve plan kimligini
    * dondurur (ilerleme icin getImportPlan sorgulanir). Tornaya YALNIZ OKUMA yapilir; TRANSFER_DISABLED ve model
    * kapisi bunu engellemez (okuma). Tezgah kilidi plan boyunca tutulur: baska islem 409 alir.
-   * @param {{machineId: string, folders?: string[]|null}} p `folders`: yalniz bu musteri klasorleri (kok dosyalar dahil degil)
+   * @param {{machineId: string, library?: string, folders?: string[]|null}} p `folders`: yalniz bu musteri
+   *   klasorleri (kok dosyalar dahil degil); `library`: siniflandirmanin yapildigi HEDEF kutuphane (plan boyunca sabit kalir)
    */
-  startImportPlan({ machineId, folders = null }) {
+  startImportPlan({ machineId, library = 'ortak', folders = null }) {
     const machine = this.#machine(machineId);
     const ftp = this.ftpOptionsFor(machine);
     if (folders !== null && (!Array.isArray(folders) || folders.some((f) => typeof f !== 'string'))) {
@@ -764,7 +765,7 @@ export class MachineFiles {
     if (this.locks.has(machineId)) {
       throw new BusyError(`${machineId} için başka bir işlem sürüyor (${this.locks.get(machineId)}). Bitmesini bekleyin.`);
     }
-    const plan = this.plans.create(machineId);
+    const plan = this.plans.create(machineId, library);
     this.#lock(machineId, 'toplu okuma', () => this.#runImportPlan(plan, machine, ftp, folders))
       .catch((err) => { plan.status = 'hata'; plan.error = err.message; plan.contents.clear(); });
     return plan.id;
@@ -863,7 +864,7 @@ export class MachineFiles {
     const ayni = [];
     const cakisma = [];
     for (const d of downloaded) {
-      const cls = this.library.classifyIncoming({ customer: d.customer, name: d.name, sha256: d.sha256, content: plan.contents.get(d.key) });
+      const cls = this.library.classifyIncoming({ library: plan.library, customer: d.customer, name: d.name, sha256: d.sha256, content: plan.contents.get(d.key) });
       if (cls.kind === 'yeni') {
         yeni.push({ key: d.key, customer: d.customer, name: d.name, size: d.size, modified: d.modified });
       } else if (cls.kind === 'ayni') {
@@ -946,7 +947,7 @@ export class MachineFiles {
       const content = plan.contents.get(item.key);
       if (!content) { out.hatalar.push({ customer: item.customer, name: item.name, error: 'içerik planda yok' }); return; }
       try {
-        const r = this.library.addFromMachine({ machineId, customer: item.customer, name: item.name, content, createdBy: by, note });
+        const r = this.library.addFromMachine({ machineId, library: plan.library, customer: item.customer, name: item.name, content, createdBy: by, note });
         if (!r.created) out.zatenVardi += 1;
         else if (r.newProgram) out.yeniProgram += 1;
         else out.yeniSurum += 1;
@@ -975,9 +976,10 @@ export class MachineFiles {
    * yoksa / program su an calisiyorsa -> `atlanan`. Tornada olup kutuphanede olmayanlara DOKUNULMAZ (`tornadaOzel`: yalniz listelenir).
    * Kok dizindeki (ortak alan) programlar toplu gonderime GIRMEZ. Plan, model kapisi kapali olsa da cikarilabilir (okuma);
    * uygulama kapali modelde reddedilir.
-   * @param {{machineId: string, folders?: string[]|null}} p `folders`: yalniz bu musteri klasorleri
+   * @param {{machineId: string, library?: string, folders?: string[]|null}} p `folders`: yalniz bu musteri klasorleri;
+   *   `library`: hangi kutuphanenin tornaya yazilacagi (plan boyunca sabit kalir)
    */
-  startPushPlan({ machineId, folders = null }) {
+  startPushPlan({ machineId, library = 'ortak', folders = null }) {
     const machine = this.#machine(machineId);
     const ftp = this.ftpOptionsFor(machine);
     if (folders !== null && (!Array.isArray(folders) || folders.some((f) => typeof f !== 'string'))) {
@@ -986,7 +988,7 @@ export class MachineFiles {
     if (this.locks.has(machineId)) {
       throw new BusyError(`${machineId} için başka bir işlem sürüyor (${this.locks.get(machineId)}). Bitmesini bekleyin.`);
     }
-    const plan = this.pushPlans.create(machineId);
+    const plan = this.pushPlans.create(machineId, library);
     this.#lock(machineId, 'toplu gönderme planı', () => this.#runPushPlan(plan, machine, ftp, folders))
       .catch((err) => { plan.status = 'hata'; plan.error = err.message; });
     return plan.id;
@@ -1000,7 +1002,7 @@ export class MachineFiles {
     const unknownState = !live || !live.connected;
     const running = unknownState ? [] : [live.program, live.mainProgram].filter(Boolean).map(baseName);
 
-    const all = this.library.db.listPrograms();
+    const all = this.library.db.listPrograms({ library: plan.library });
     const programs = all.filter((p) => p.customer !== '' && (!filter || filter.has(p.customer.toLowerCase())));
     const kokProgramSayisi = all.filter((p) => p.customer === '').length;
 
@@ -1042,7 +1044,7 @@ export class MachineFiles {
       // Icerik karsilastirmasi: kutuphanede ayni (musteri, ad) olan ve boyutu bir surumle tutan dosyalar indirilip SHA'lanir.
       // Boyutu hicbir surumle tutmayan dosya zaten KESIN farklidir (indirmeye gerek yok).
       const entries = [...lathe.values()].flatMap((f) => [...f.files.values()]);
-      const candidates = this.library.hashCandidates(entries);
+      const candidates = this.library.hashCandidates(entries, plan.library);
       plan.progress = { phase: 'okuma', folder: null, done: 0, total: candidates.length };
       const byFolder = new Map();
       for (const e of candidates) {
@@ -1486,7 +1488,7 @@ export class MachineFiles {
    *   - kok dizindeki (ortak alan) dosya ek onay ister
    *   - KUTUPHANEDE ayni icerikli kopya yoksa ek onay ister ("kopyasiz sil: geri alinamaz")
    */
-  async #inspectDelete(c, { machine, customer, name }) {
+  async #inspectDelete(c, { machine, customer, name, library = 'ortak' }) {
     const checks = [];
     const add = (id, level, title, detail = '', ack = null) => checks.push({ id, level, title, detail, ...(ack ? { ack } : {}) });
     const out = { checks, folder: null, entry: null, libraryCopy: null };
@@ -1537,7 +1539,7 @@ export class MachineFiles {
     const content = await c.retr(entry.name, { maxBytes: MAX_PROGRAM_BYTES });
     const sha = sha256(content);
     out.entry.sha256 = sha;
-    const program = this.library.db.findProgram(folder, entry.name);
+    const program = this.library.db.findProgram(library, folder, entry.name);
     const versions = program ? this.library.db.listVersions(program.id) : [];
     const hit = versions.find((v) => v.sha256 === sha);
     if (hit) {
@@ -1555,8 +1557,8 @@ export class MachineFiles {
     return out;
   }
 
-  /** Silme ON KONTROLU: tornaya yalniz okuma. Sonuc: kontroller, onay gereken uyarilar, silinebilir mi. */
-  async deletePrecheck({ machineId, customer = '', name, acks = [] }) {
+  /** Silme ON KONTROLU: tornaya yalniz okuma. Sonuc: kontroller, onay gereken uyarilar, silinebilir mi. `library`: kutuphane kopyasi hangi kutuphaneye gore aranacak. */
+  async deletePrecheck({ machineId, library = 'ortak', customer = '', name, acks = [] }) {
     const machine = this.#machine(machineId);
     const target = validateCustomer(customer);
     const file = String(name ?? '').trim();
@@ -1573,7 +1575,7 @@ export class MachineFiles {
     }
     const ftp = this.ftpOptionsFor(machine);
     const result = await this.#lock(machineId, 'silme ön kontrolü', () =>
-      withFtp(ftp, (c) => this.#inspectDelete(c, { machine, customer: target, name: file })));
+      withFtp(ftp, (c) => this.#inspectDelete(c, { machine, customer: target, name: file, library })));
     const sum = this.#summarize(result.checks, acks);
     return { ...base, customer: result.folder ?? target, name: result.entry?.name ?? file, checks: result.checks,
       canDelete: sum.canSend, needsAck: sum.needsAck, entry: result.entry, libraryCopy: result.libraryCopy };
@@ -1588,7 +1590,7 @@ export class MachineFiles {
    *   - her silme (reddedilenler dahil) `transfers` tablosuna kind='silme' ile yazilir
    * Klasor SILINMEZ; yalniz tek dosya.
    */
-  async deleteProgram({ machineId, customer = '', name, confirm, by = null, clientIp = null, acks = [] }) {
+  async deleteProgram({ machineId, library = 'ortak', customer = '', name, confirm, by = null, clientIp = null, acks = [] }) {
     const machine = this.#machine(machineId);
     this.#assertDeleteAllowed(machine);
     const file = String(name ?? '').trim();
@@ -1613,7 +1615,7 @@ export class MachineFiles {
         await withFtp(ftp, async (c) => {
           let ins;
           await timed('on-kontrol', async () => {
-            ins = await this.#inspectDelete(c, { machine, customer: target, name: file });
+            ins = await this.#inspectDelete(c, { machine, customer: target, name: file, library });
             const sum = this.#summarize(ins.checks, acks);
             if (!sum.canSend) {
               const why = ins.checks.filter((k) => k.level === 'block' || (k.level === 'warn' && k.ack && !acks.includes(k.ack)));

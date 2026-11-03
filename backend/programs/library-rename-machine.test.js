@@ -206,7 +206,7 @@ test('>1 tezgah: onay = tezgah SAYISI; ikisi de BAGIMSIZ basariyla degisir', asy
 
 test('HTTP: POST /api/library/programs/:id/rename-on-machines (200 basarili, 400 onay)', async () => {
   const t = await kurRename();
-  const prog = t.library.db.findProgram('MUSTERI_B', 'YENI-AD');
+  const prog = t.library.db.findProgram('ortak', 'MUSTERI_B', 'YENI-AD');
   const routes = createProgramRoutes({ library: t.library, files: t.files, listMachines: () => t.machines });
   const server = http.createServer(async (req, res) => {
     if (!(await routes(req, res, new URL(req.url, 'http://x')))) { res.writeHead(404); res.end('{}'); }

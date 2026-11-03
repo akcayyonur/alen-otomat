@@ -152,21 +152,21 @@ test('uygula: yeniler alinir, cakisma YALNIZ "al" denirse yeni surum olur, atla/
     assert.deepEqual(out, { yeniProgram: 2, yeniSurum: 1, zatenVardi: 0, atlanan: 2, hatalar: [] });
 
     const lib = t.library.db;
-    const yeni = lib.findProgram('MUSTERI_B', 'NEW-1');
+    const yeni = lib.findProgram('ortak', 'MUSTERI_B', 'NEW-1');
     const v = lib.getVersion(yeni.id, 1);
     assert.equal(v.meta.source, 'tezgah-tarama');
     assert.equal(v.meta.sourceMachine, 'CNC-08');
     assert.equal(v.meta.createdBy, 'ayse');
     assert.equal(v.meta.note, 'CNC-08 toplu alım');
     assert.ok(v.content.equals(A), 'tornadan okunan baytlar AYNEN');
-    assert.ok(lib.findProgram('', 'O9001'), 'kok (ortak alan) programi da alinir');
-    assert.equal(lib.findProgram('AA', 'NEW-2'), null, 'skipKeys: alinmadi');
+    assert.ok(lib.findProgram('ortak', '', 'O9001'), 'kok (ortak alan) programi da alinir');
+    assert.equal(lib.findProgram('ortak', 'AA', 'NEW-2'), null, 'skipKeys: alinmadi');
 
-    const diff = lib.findProgram('MUSTERI_B', 'DIFF-1');
+    const diff = lib.findProgram('ortak', 'MUSTERI_B', 'DIFF-1');
     assert.equal(lib.listVersions(diff.id).length, 2, 'cakisma "al": yeni surum, eski surum durur');
     assert.ok(lib.getVersion(diff.id, 2).content.equals(C));
     assert.ok(lib.getVersion(diff.id, 1).content.equals(D), 'kutuphanedeki eski surum aynen kaldi');
-    const eol = lib.findProgram('MUSTERI_B', 'EOL-1');
+    const eol = lib.findProgram('ortak', 'MUSTERI_B', 'EOL-1');
     assert.equal(lib.listVersions(eol.id).length, 1, '"atla": degismedi');
 
     const durum = Object.fromEntries(t.library.compareMachine('CNC-08').entries.map((e) => [`${e.customer}/${e.name}`, e.status]));
@@ -189,7 +189,7 @@ test('uygula: ayni plan ikinci kez uygulanirsa tekrar surum ACILMAZ; gecersiz ka
     const ikinci = t.files.applyImport({ machineId: 'CNC-08', planId, decisions: kararlar });
     assert.equal(ikinci.yeniProgram + ikinci.yeniSurum, 0, 'ikinci uygulama yeni bir sey eklemez');
     assert.equal(ikinci.zatenVardi, 4, '3 yeni + 1 cakisma zaten kutuphanede');
-    assert.equal(t.library.db.listVersions(t.library.db.findProgram('MUSTERI_B', 'DIFF-1').id).length, 2);
+    assert.equal(t.library.db.listVersions(t.library.db.findProgram('ortak', 'MUSTERI_B', 'DIFF-1').id).length, 2);
 
     assert.throws(() => t.files.applyImport({ machineId: 'CNC-08', planId, decisions: { x: 'belki' } }), ValidationError);
     assert.throws(() => t.files.applyImport({ machineId: 'CNC-08', planId, decisions: [] }), ValidationError);

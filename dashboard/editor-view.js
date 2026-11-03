@@ -28,10 +28,10 @@ const keyOf = (c, n) => `${c.toLowerCase()}\u0000${n.toLowerCase()}`;
 /* ------------------------------------------------------------------ acilis */
 
 /**
- * @param {{mode?: 'new'|'version', programId?: number|null, versionNo?: number|null, customer?: string,
+ * @param {{mode?: 'new'|'version', programId?: number|null, versionNo?: number|null, customer?: string, library?: string,
  *   onSend?: ((programId: number, versionNo: number) => void)|null}} opts
  */
-export async function openEditor({ mode = 'new', programId = null, versionNo = null, customer = '', onSend = null } = {}) {
+export async function openEditor({ mode = 'new', programId = null, versionNo = null, customer = '', library = 'ortak', onSend = null } = {}) {
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.className = 'modal modal-wide';
@@ -41,7 +41,7 @@ export async function openEditor({ mode = 'new', programId = null, versionNo = n
   }
   for (const k of Object.keys(ed)) delete ed[k];
   Object.assign(ed, {
-    mode, programId: null, baseVersionNo: null, latestVersionNo: null, sourceLabel: '',
+    mode, library, programId: null, baseVersionNo: null, latestVersionNo: null, sourceLabel: '',
     customer, name: '', note: '', by: userName.get(),
     text: '', initialText: '', lineEnding: 'CRLF', initialLineEnding: 'CRLF', encoding: 'utf-8', initialEncoding: 'utf-8', bom: false,
     forceChange: false, notRoundTrip: false, customers: [], existing: new Set(),
@@ -49,7 +49,7 @@ export async function openEditor({ mode = 'new', programId = null, versionNo = n
   });
 
   try {
-    const [cust, progs] = await Promise.all([api('/api/library/customers'), api('/api/library/programs')]);
+    const [cust, progs] = await Promise.all([api('/api/library/customers'), api(`/api/library/programs?library=${encodeURIComponent(library)}`)]);
     ed.customers = cust.customers;
     ed.existing = new Set(progs.programs.map((p) => keyOf(p.customer, p.name)));
     if (mode === 'version') {
@@ -172,7 +172,7 @@ function refresh() {
   }
   q('title').textContent = version
     ? `Düzenle · ${ed.sourceLabel} (v${ed.baseVersionNo} üzerinden)`
-    : (ed.sourceLabel ? `Yeni program · ${ed.sourceLabel} kopyası` : 'Yeni program');
+    : (ed.sourceLabel ? `Yeni program · ${ed.sourceLabel} kopyası` : `Yeni program · ${ed.library === 'ortak' ? 'Ortak kütüphane' : `${ed.library} kütüphanesi`}`);
   q('info').innerHTML = version
     ? 'Kaydedince bu program için <b>yeni bir sürüm</b> oluşur; eski sürümler kütüphanede aynen kalır. ' +
       'İçerik yorumlanmaz: <b>söz dizimi denetimi yoktur</b>, bu yüzden kaydetmeden önce değişiklikleri gözden geçirin.'
@@ -403,7 +403,7 @@ async function save({ then = 'done' } = {}) {
     note: ed.note.trim(), by: ed.by.trim(), acceptNewer: ed.acceptNewer,
     ...(ed.mode === 'version'
       ? { programId: ed.programId, baseVersionNo: ed.baseVersionNo }
-      : { customer: ed.customer.trim(), name: ed.name.trim() }),
+      : { library: ed.library, customer: ed.customer.trim(), name: ed.name.trim() }),
   };
   try {
     ed.result = await post('/api/library/programs/text', body);

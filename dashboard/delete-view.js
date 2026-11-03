@@ -17,8 +17,8 @@ const dd = {};
 
 const fileLabel = (customer, name) => `${customer === '' ? '' : `${customer}\\`}${name}`;
 
-/** @param {{machineId: string, customer: string, name: string, onDone?: () => void}} opts */
-export async function openDeleteDialog({ machineId, customer, name, onDone = null }) {
+/** @param {{machineId: string, customer: string, name: string, library?: string, onDone?: () => void}} opts */
+export async function openDeleteDialog({ machineId, customer, name, library = 'ortak', onDone = null }) {
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.className = 'modal';
@@ -28,12 +28,12 @@ export async function openDeleteDialog({ machineId, customer, name, onDone = nul
   }
   for (const k of Object.keys(dd)) delete dd[k];
   Object.assign(dd, {
-    machineId, customer, name, onDone, pre: null, acks: new Set(), confirm: '', by: userName.get(), busy: false, error: null, result: null, loading: true,
+    machineId, customer, name, library, onDone, pre: null, acks: new Set(), confirm: '', by: userName.get(), busy: false, error: null, result: null, loading: true,
   });
   render();
   if (!dlg.open) dlg.showModal();
   try {
-    dd.pre = await post(`/api/machines/${encodeURIComponent(machineId)}/programs/delete-precheck`, { customer, name });
+    dd.pre = await post(`/api/machines/${encodeURIComponent(machineId)}/programs/delete-precheck`, { customer, name, library });
   } catch (err) {
     dd.error = `Ön kontrol yapılamadı: ${err.message}`;
   }
@@ -127,7 +127,7 @@ function wire() {
     render();
     try {
       dd.result = await post(`/api/machines/${encodeURIComponent(dd.machineId)}/programs/delete`, {
-        customer: dd.pre.customer ?? dd.customer, name: targetName(), confirm: dd.confirm, by: dd.by.trim(), acks: [...dd.acks],
+        customer: dd.pre.customer ?? dd.customer, name: targetName(), library: dd.library, confirm: dd.confirm, by: dd.by.trim(), acks: [...dd.acks],
       });
       announce();
       dd.onDone?.();

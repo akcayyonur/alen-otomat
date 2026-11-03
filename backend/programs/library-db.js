@@ -5,7 +5,9 @@
  * ve gerektiginde sifirlanabilir; kutuphane (programlarin kendisi) ASLA budanmaz
  * ve ayri yedeklenir. `node:sqlite`, bagimlilik yok.
  *
- *   programs          kimlik = (musteri klasoru, ad); musteri '' = kok (musterisiz)
+ *   programs          kimlik = (kutuphane, musteri klasoru, ad); musteri '' = kok (musterisiz).
+ *                      `library`: 'ortak' (varsayilan, ORTAK kutuphane) ya da bir tezgah kimligi (ör. 'CNC-03' -
+ *                      o tezgahin KENDI kutuphanesi). Ayni (musteri, ad) FARKLI kutuphanelerde ayri ayri var olabilir.
  *   program_versions  icerik BLOB + SHA-256; ayni icerik ikinci kez surum olmaz
  *   machine_programs  son taramada tezgahta GORULENLER (envanter)
  *   machine_scans     tezgah basina son tarama bilgisi
@@ -26,11 +28,12 @@ import { dirname } from 'node:path';
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS programs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  library    TEXT    NOT NULL DEFAULT 'ortak' COLLATE NOCASE,
   customer   TEXT    NOT NULL COLLATE NOCASE,
   name       TEXT    NOT NULL COLLATE NOCASE,
   note       TEXT,
   created_at INTEGER NOT NULL,
-  UNIQUE (customer, name)
+  UNIQUE (library, customer, name)
 );
 
 CREATE TABLE IF NOT EXISTS program_versions (
@@ -80,6 +83,7 @@ CREATE TABLE IF NOT EXISTS machine_programs (
 CREATE TABLE IF NOT EXISTS transfers (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   machine_id   TEXT    NOT NULL,
+  library      TEXT,
   program_id   INTEGER,
   version_id   INTEGER,
   customer     TEXT,
@@ -103,6 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_transfers_machine ON transfers (machine_id, start
 -- Toplu gonderimde ezilen tornadaki eski haller: geri donus icin. Surum degil (program_versions'a girmez).
 CREATE TABLE IF NOT EXISTS program_backups (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  library     TEXT    NOT NULL DEFAULT 'ortak' COLLATE NOCASE,
   customer    TEXT    NOT NULL COLLATE NOCASE,
   name        TEXT    NOT NULL COLLATE NOCASE,
   machine_id  TEXT    NOT NULL,
@@ -112,15 +117,19 @@ CREATE TABLE IF NOT EXISTS program_backups (
   created_at  INTEGER NOT NULL,
   created_by  TEXT,
   transfer_id INTEGER,
-  UNIQUE (customer, name, sha256)
+  UNIQUE (library, customer, name, sha256)
 );
-CREATE INDEX IF NOT EXISTS idx_backups_name ON program_backups (customer, name);
+-- idx_backups_name BURADA YOK (bkz. constructor): 'library' sutununu referans eder, eski (sutun henuz
+-- eklenmemis) bir program_backups tablosunda CREATE TABLE IF NOT EXISTS sessizce atlanir ama bu INDEX
+-- atlanmaz ve "no such column: library" ile PATLAR - sutun #migrate() tablo yeniden kurulumuyla
+-- EKLENDIKTEN SONRA, ayri olarak kurulur.
 
 CREATE TABLE IF NOT EXISTS library_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   at         INTEGER NOT NULL,
   action     TEXT    NOT NULL,
   program_id INTEGER,
+  library    TEXT,
   customer   TEXT,
   name       TEXT,
   versions   INTEGER,
@@ -148,10 +157,10 @@ const versionMeta = (r) => ({
   createdBy: r.created_by,
 });
 
-const programRow = (r) => ({ id: r.id, customer: r.customer, name: r.name, note: r.note, createdAt: r.created_at });
+const programRow = (r) => ({ id: r.id, library: r.library, customer: r.customer, name: r.name, note: r.note, createdAt: r.created_at });
 
 const backupMeta = (r) => ({
-  id: r.id, customer: r.customer, name: r.name, machineId: r.machine_id, sha256: r.sha256, size: r.size,
+  id: r.id, library: r.library, customer: r.customer, name: r.name, machineId: r.machine_id, sha256: r.sha256, size: r.size,
   createdAt: r.created_at, createdBy: r.created_by, transferId: r.transfer_id,
 });
 
@@ -165,6 +174,9 @@ export class LibraryDb {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
     this.#migrate();
+    // 'library' sutununu referans eder: SCHEMA'nin kendisinde degil, buraya - #migrate() (eski tabloyu
+    // yeniden kurup sutunu ekleme) KESIN bittikten sonra kurulur (bkz. program_backups tablosundaki not).
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_backups_name ON program_backups (library, customer, name)');
   }
 
   /** Var olan (gercek) library.db'yi bozmadan eksik sutunlari ekler. */
@@ -172,6 +184,51 @@ export class LibraryDb {
     const cols = this.db.prepare('PRAGMA table_info(transfers)').all().map((c) => c.name);
     // kind: 'gonderme' (program gonderme) | 'klasor' (tezgahta yeni musteri klasoru acma)
     if (!cols.includes('kind')) this.db.exec("ALTER TABLE transfers ADD COLUMN kind TEXT NOT NULL DEFAULT 'gonderme'");
+    if (!cols.includes('library')) this.db.exec('ALTER TABLE transfers ADD COLUMN library TEXT');
+
+    const logCols = this.db.prepare('PRAGMA table_info(library_log)').all().map((c) => c.name);
+    if (!logCols.includes('library')) this.db.exec('ALTER TABLE library_log ADD COLUMN library TEXT');
+
+    // 'programs' DROP edilecekse program_versions.program_id -> programs(id) FK'si bunu reddeder (RENAME ile
+    // ayni ID'ler geri geldigi icin islemin SONUNDA FK'ler yine saglam - auth-db.js'teki users gocuyle ayni desen).
+    this.db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.#migrateLibraryColumn('programs', 'UNIQUE (library, customer, name)');
+      this.#migrateLibraryColumn('program_backups', 'UNIQUE (library, customer, name, sha256)');
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+
+  /**
+   * Eski semada `library` sutunu yok (eski UNIQUE kisiti kutuphane bolunmesinden ONCE kuruldugu icin): SQLite
+   * kisit degistiremedigi icin tablo AuthDb'deki `users_new` deseniyle yeniden kurulur - kayitlar (ve ID'leri,
+   * baska tablolardan FK ile referans edildigi icin) korunur, hepsi `library='ortak'` olur (davranis degismez,
+   * her sey eskisi gibi tek kutuphanede gorunmeye devam eder). Sutunu referans eden INDEX'ler burada DEGIL,
+   * constructor'da #migrate()'den SONRA kurulur (bkz. oradaki not - erken kurulursa eski tabloda patlar).
+   */
+  #migrateLibraryColumn(table, uniqueClause) {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+    if (cols.includes('library')) return; // zaten yeni sema
+    if (cols.length === 0) return; // tablo henuz yok: SCHEMA zaten dogru kurar
+
+    const createSql = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table).sql;
+    const newSql = createSql
+      .replace(new RegExp(`^CREATE TABLE ${table}`, 'i'), `CREATE TABLE ${table}_new`)
+      .replace(/,\s*UNIQUE\s*\([^)]*\)/i, '') // eski UNIQUE kisitini at, assagida yenisi eklenir
+      .replace(/\)\s*$/, `, library TEXT NOT NULL DEFAULT 'ortak' COLLATE NOCASE, ${uniqueClause})`);
+
+    this.db.exec('BEGIN');
+    try {
+      this.db.exec(newSql);
+      this.db.exec(`INSERT INTO ${table}_new SELECT *, 'ortak' FROM ${table}`);
+      this.db.exec(`DROP TABLE ${table}`);
+      this.db.exec(`ALTER TABLE ${table}_new RENAME TO ${table}`);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   #tx(fn) {
@@ -188,8 +245,8 @@ export class LibraryDb {
 
   /* ------------------------------------------------------------------ programlar */
 
-  findProgram(customer, name) {
-    const r = this.db.prepare('SELECT * FROM programs WHERE customer = ? AND name = ?').get(customer, name);
+  findProgram(library, customer, name) {
+    const r = this.db.prepare('SELECT * FROM programs WHERE library = ? AND customer = ? AND name = ?').get(library, customer, name);
     return r ? programRow(r) : null;
   }
 
@@ -210,14 +267,14 @@ export class LibraryDb {
    * AYNIYSA (SHA-256) yeni surum acilmaz.
    * @returns {{program: object, version: object, created: boolean, newProgram: boolean}}
    */
-  addVersion({ customer, name, content, sha256, source, sourceMachine = null, originalName = null, note = null, createdBy = null }) {
+  addVersion({ library = 'ortak', customer, name, content, sha256, source, sourceMachine = null, originalName = null, note = null, createdBy = null }) {
     return this.#tx(() => {
-      let program = this.findProgram(customer, name);
+      let program = this.findProgram(library, customer, name);
       const newProgram = program === null;
       if (newProgram) {
         const ins = this.db
-          .prepare('INSERT INTO programs (customer, name, note, created_at) VALUES (?, ?, ?, ?)')
-          .run(customer, name, note, Date.now());
+          .prepare('INSERT INTO programs (library, customer, name, note, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(library, customer, name, note, Date.now());
         program = this.getProgram(Number(ins.lastInsertRowid));
       }
       const latest = this.latestVersion(program.id);
@@ -237,8 +294,11 @@ export class LibraryDb {
     });
   }
 
-  /** Liste: her programin en son surumuyle. `q` ad/musteri icinde arar. */
-  listPrograms({ customer = null, q = '' } = {}) {
+  /**
+   * Liste: her programin en son surumuyle. `library = null` -> TUM kutuphaneler (yalniz library.customers() gibi
+   * genel amacli yerlerde; ekranlar her zaman belirli bir kutuphane ister). `q` ad/musteri icinde arar.
+   */
+  listPrograms({ library = 'ortak', customer = null, q = '' } = {}) {
     const rows = this.db
       .prepare(
         `SELECT p.*, v.version_no, v.sha256, v.size, v.created_at AS v_created,
@@ -246,11 +306,12 @@ export class LibraryDb {
            FROM programs p
            JOIN program_versions v ON v.program_id = p.id
             AND v.version_no = (SELECT MAX(version_no) FROM program_versions WHERE program_id = p.id)
-          ORDER BY p.customer, p.name`,
+          ORDER BY p.library, p.customer, p.name`,
       )
       .all();
     const needle = q.trim().toLowerCase();
     return rows
+      .filter((r) => library === null || r.library.toLowerCase() === library.toLowerCase())
       .filter((r) => customer === null || r.customer.toLowerCase() === customer.toLowerCase())
       .filter((r) => needle === '' || r.name.toLowerCase().includes(needle) || r.customer.toLowerCase().includes(needle))
       .map((r) => ({
@@ -275,14 +336,15 @@ export class LibraryDb {
     return r ? { meta: versionMeta(r), content: toBuffer(r.content) } : null;
   }
 
-  /** Tum surumlerin (program, surum, sha, boyut) ozeti: karsilastirma icin, icerik yok. */
-  allVersionsIndex() {
+  /** Bir kutuphanenin tum surumlerinin (program, surum, sha, boyut) ozeti: karsilastirma icin, icerik yok. */
+  allVersionsIndex(library = 'ortak') {
     return this.db
       .prepare(
         `SELECT p.id AS program_id, p.customer, p.name, v.version_no, v.sha256, v.size
-           FROM programs p JOIN program_versions v ON v.program_id = p.id`,
+           FROM programs p JOIN program_versions v ON v.program_id = p.id
+          WHERE p.library = ?`,
       )
-      .all();
+      .all(library);
   }
 
   /**
@@ -298,13 +360,13 @@ export class LibraryDb {
       const program = this.getProgram(id);
       const oldName = program.name;
       this.db.prepare('UPDATE programs SET name = ? WHERE id = ?').run(newName, id);
-      this.db.prepare('UPDATE program_backups SET name = ? WHERE customer = ? AND name = ?').run(newName, program.customer, oldName);
+      this.db.prepare('UPDATE program_backups SET name = ? WHERE library = ? AND customer = ? AND name = ?').run(newName, program.library, program.customer, oldName);
       this.db
         .prepare(
-          `INSERT INTO library_log (at, action, program_id, customer, name, versions, detail, by_user, client_ip)
-           VALUES (?, 'program-yeniden-adlandirma', ?, ?, ?, NULL, ?, ?, ?)`,
+          `INSERT INTO library_log (at, action, program_id, library, customer, name, versions, detail, by_user, client_ip)
+           VALUES (?, 'program-yeniden-adlandirma', ?, ?, ?, ?, NULL, ?, ?, ?)`,
         )
-        .run(Date.now(), id, program.customer, newName, JSON.stringify({ from: oldName, to: newName }), by, clientIp);
+        .run(Date.now(), id, program.library, program.customer, newName, JSON.stringify({ from: oldName, to: newName }), by, clientIp);
       return this.getProgram(id);
     });
   }
@@ -320,8 +382,8 @@ export class LibraryDb {
       const delVersions = this.db.prepare('DELETE FROM program_versions WHERE program_id = ?');
       const delProgram = this.db.prepare('DELETE FROM programs WHERE id = ?');
       const log = this.db.prepare(
-        `INSERT INTO library_log (at, action, program_id, customer, name, versions, detail, by_user, client_ip)
-         VALUES (?, 'program-silme', ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO library_log (at, action, program_id, library, customer, name, versions, detail, by_user, client_ip)
+         VALUES (?, 'program-silme', ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const id of ids) {
         const program = this.getProgram(id);
@@ -329,7 +391,7 @@ export class LibraryDb {
         const versions = this.listVersions(id);
         delVersions.run(id);
         delProgram.run(id);
-        log.run(Date.now(), id, program.customer, program.name, versions.length,
+        log.run(Date.now(), id, program.library, program.customer, program.name, versions.length,
           JSON.stringify(versions.map((v) => ({ versionNo: v.versionNo, sha256: v.sha256, size: v.size, createdAt: v.createdAt, source: v.source }))),
           by, clientIp);
         out.push({ id, customer: program.customer, name: program.name, versions: versions.length });
@@ -344,20 +406,20 @@ export class LibraryDb {
    * Ezilen tornadaki eski hali saklar. Ayni (musteri, ad, SHA-256) ikinci kez saklanmaz (baska tornadan gelse bile).
    * @returns {{id: number, created: boolean}}
    */
-  addBackup({ customer, name, machineId, content, sha256, createdBy = null, transferId = null }) {
-    const found = this.db.prepare('SELECT id FROM program_backups WHERE customer = ? AND name = ? AND sha256 = ?').get(customer, name, sha256);
+  addBackup({ library = 'ortak', customer, name, machineId, content, sha256, createdBy = null, transferId = null }) {
+    const found = this.db.prepare('SELECT id FROM program_backups WHERE library = ? AND customer = ? AND name = ? AND sha256 = ?').get(library, customer, name, sha256);
     if (found) return { id: Number(found.id), created: false };
     const ins = this.db
-      .prepare('INSERT INTO program_backups (customer, name, machine_id, sha256, size, content, created_at, created_by, transfer_id) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(customer, name, machineId, sha256, content.length, content, Date.now(), createdBy, transferId);
+      .prepare('INSERT INTO program_backups (library, customer, name, machine_id, sha256, size, content, created_at, created_by, transfer_id) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(library, customer, name, machineId, sha256, content.length, content, Date.now(), createdBy, transferId);
     return { id: Number(ins.lastInsertRowid), created: true };
   }
 
   /** Bir programin yedekleri (en yeni uste), icerik yok. */
-  listBackups(customer, name) {
+  listBackups(library, customer, name) {
     return this.db
-      .prepare('SELECT id, customer, name, machine_id, sha256, size, created_at, created_by, transfer_id FROM program_backups WHERE customer = ? AND name = ? ORDER BY id DESC')
-      .all(customer, name)
+      .prepare('SELECT id, library, customer, name, machine_id, sha256, size, created_at, created_by, transfer_id FROM program_backups WHERE library = ? AND customer = ? AND name = ? ORDER BY id DESC')
+      .all(library, customer, name)
       .map(backupMeta);
   }
 
@@ -373,7 +435,7 @@ export class LibraryDb {
       .prepare('SELECT * FROM library_log ORDER BY id DESC LIMIT ?')
       .all(limit)
       .map((r) => ({
-        id: r.id, at: r.at, action: r.action, programId: r.program_id, customer: r.customer, name: r.name,
+        id: r.id, at: r.at, action: r.action, programId: r.program_id, library: r.library, customer: r.customer, name: r.name,
         versions: r.versions, by: r.by_user, clientIp: r.client_ip, detail: r.detail ? JSON.parse(r.detail) : [],
       }));
   }
@@ -519,10 +581,10 @@ export class LibraryDb {
   startTransfer(t) {
     const r = this.db
       .prepare(
-        `INSERT INTO transfers (kind, machine_id, program_id, version_id, customer, name, started_at, status, size, sha_sent, requested_by, client_ip, acks)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'basladi', ?, ?, ?, ?, ?)`,
+        `INSERT INTO transfers (kind, machine_id, library, program_id, version_id, customer, name, started_at, status, size, sha_sent, requested_by, client_ip, acks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'basladi', ?, ?, ?, ?, ?)`,
       )
-      .run(t.kind ?? 'gonderme', t.machineId, t.programId ?? null, t.versionId ?? null, t.customer ?? null, t.name ?? null, Date.now(), t.size ?? null, t.shaSent ?? null, t.requestedBy ?? null, t.clientIp ?? null, JSON.stringify(t.acks ?? []));
+      .run(t.kind ?? 'gonderme', t.machineId, t.library ?? null, t.programId ?? null, t.versionId ?? null, t.customer ?? null, t.name ?? null, Date.now(), t.size ?? null, t.shaSent ?? null, t.requestedBy ?? null, t.clientIp ?? null, JSON.stringify(t.acks ?? []));
     return Number(r.lastInsertRowid);
   }
 
@@ -534,7 +596,7 @@ export class LibraryDb {
 
   #transferRow(r) {
     return {
-      id: r.id, kind: r.kind, machineId: r.machine_id, programId: r.program_id, versionId: r.version_id,
+      id: r.id, kind: r.kind, machineId: r.machine_id, library: r.library, programId: r.program_id, versionId: r.version_id,
       customer: r.customer, name: r.name, startedAt: r.started_at, finishedAt: r.finished_at,
       status: r.status, size: r.size, shaSent: r.sha_sent, shaVerified: r.sha_verified,
       requestedBy: r.requested_by, clientIp: r.client_ip, error: r.error,

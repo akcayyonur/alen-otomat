@@ -114,6 +114,21 @@ export function validateNewFolderName(raw) {
 export const isSystemEntry = (customer, name) => customer === '' && SYSTEM_ROOT_FILES.has(name.toLowerCase());
 const keyOf = (customer, name) => `${customer.toLowerCase()}\u0000${name.toLowerCase()}`;
 
+export const DEFAULT_LIBRARY = 'ortak';
+const LIBRARY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+/**
+ * Kutuphane kimligi: 'ortak' (ORTAK kutuphane) ya da bir tezgah kimligiyle ayni bicimde bir metin (CNC-03 gibi -
+ * o tezgahin KENDI kutuphanesi). Gercekten var olan bir tezgah mi (yoksa 'ortak' mi) burada DENETLENMEZ - bunu
+ * tezgah listesine erisimi olan HTTP katmani yapar (bkz. routes.js `validLibrary`); burasi yalniz bicimi dogrular.
+ * @returns {string}
+ */
+export function validateLibrary(raw) {
+  const library = String(raw ?? '').trim() || DEFAULT_LIBRARY;
+  if (!LIBRARY_PATTERN.test(library)) throw new ValidationError(`Kütüphane kimliği geçersiz: "${library}".`);
+  return library;
+}
+
 /** Satir sonu bilgisi: tezgaha gidecek icerigin nasil oldugunu gostermek icin. */
 function lineEnding(text) {
   const crlf = (text.match(/\r\n/g) ?? []).length;
@@ -200,27 +215,27 @@ export class Library {
   }
 
   /** Surukle-birak yuklemesi. Ayni icerik zaten en son surumse yeni surum acilmaz. */
-  addUpload({ customer, name, content, note = null, createdBy = null, originalName = null }) {
-    return this.#add({ customer, name, content, note, createdBy, originalName, source: 'yukleme' });
+  addUpload({ library = DEFAULT_LIBRARY, customer, name, content, note = null, createdBy = null, originalName = null }) {
+    return this.#add({ library, customer, name, content, note, createdBy, originalName, source: 'yukleme' });
   }
 
   /**
    * Toplu gonderimde ezilen tornadaki eski hali kutuphaneye YENI SURUM olarak geri alir (yedek -> surum). Surum numaralari ileri gider;
-   * icerik zaten en son surumse yeni surum acilmaz.
+   * icerik zaten en son surumse yeni surum acilmaz. Yedegin AIT OLDUGU kutuphaneye geri doner (b.meta.library).
    */
   restoreBackup({ id, by = null }) {
     const b = this.db.getBackup(Number(id));
     if (!b) throw new ValidationError('Yedek bulunamadı.', 404);
     const day = new Date(b.meta.createdAt).toLocaleDateString('tr-TR');
     return this.#add({
-      customer: b.meta.customer, name: b.meta.name, content: b.content, note: `${b.meta.machineId} tornasından alınan yedek (${day})`,
+      library: b.meta.library, customer: b.meta.customer, name: b.meta.name, content: b.content, note: `${b.meta.machineId} tornasından alınan yedek (${day})`,
       createdBy: by, originalName: null, source: 'yedek', sourceMachine: b.meta.machineId,
     });
   }
 
   /** Tezgahtan iceri alma (taramada gorulen ve kutuphanede olmayan program; toplu alimda `note` yazilir). */
-  addFromMachine({ machineId, customer, name, content, createdBy = null, note = null }) {
-    return this.#add({ customer, name, content, note, createdBy, originalName: null, source: 'tezgah-tarama', sourceMachine: machineId });
+  addFromMachine({ machineId, library = DEFAULT_LIBRARY, customer, name, content, createdBy = null, note = null }) {
+    return this.#add({ library, customer, name, content, note, createdBy, originalName: null, source: 'tezgah-tarama', sourceMachine: machineId });
   }
 
   /**
@@ -230,8 +245,8 @@ export class Library {
    *   cakisma   AYNI AD, hicbir surumle tutmayan icerik. `eolOnlyVersion`: icerik yalniz satir sonu (CRLF/LF)
    *             farkiyla o surume esitse onun numarasi (cogu "cakisma" boyle cikar).
    */
-  classifyIncoming({ customer, name, sha256: sha, content }) {
-    const program = this.db.findProgram(customer, name);
+  classifyIncoming({ library = DEFAULT_LIBRARY, customer, name, sha256: sha, content }) {
+    const program = this.db.findProgram(library, customer, name);
     if (!program) return { kind: 'yeni' };
     const versions = this.db.listVersions(program.id); // yeniden eskiye
     const latest = versions[0];
@@ -265,7 +280,7 @@ export class Library {
     if (!program) throw new ValidationError('Program kütüphanede bulunamadı (başka biri silmiş olabilir). Listeyi yenileyin.', 404);
     const cleanName = validateProgramName(newName);
     if (cleanName.toLowerCase() === program.name.toLowerCase()) return { program, renamed: false };
-    const conflict = this.db.findProgram(program.customer, cleanName);
+    const conflict = this.db.findProgram(program.library, program.customer, cleanName);
     if (conflict) {
       throw new ValidationError(
         `"${program.customer === '' ? '' : `${program.customer}\\`}${cleanName}" kütüphanede zaten var. Başka bir ad seçin.`, 409,
@@ -298,11 +313,13 @@ export class Library {
     return { deleted, programs: deleted.length, versions: deleted.reduce((n, d) => n + d.versions, 0) };
   }
 
-  #add({ customer, name, content, note, createdBy, originalName, source, sourceMachine = null }) {
+  #add({ library = DEFAULT_LIBRARY, customer, name, content, note, createdBy, originalName, source, sourceMachine = null }) {
+    const cleanLibrary = validateLibrary(library);
     const cleanCustomer = validateCustomer(customer);
     const cleanName = validateProgramName(name);
     validateContent(content);
     return this.db.addVersion({
+      library: cleanLibrary,
       customer: cleanCustomer,
       name: cleanName,
       content,
@@ -324,7 +341,7 @@ export class Library {
    * Ayni icerik en son surumle ayniysa yeni surum acilmaz (created: false).
    */
   saveText({
-    programId = null, baseVersionNo = null, customer = '', name, text, lineEnding: ending = 'CRLF',
+    programId = null, baseVersionNo = null, library = DEFAULT_LIBRARY, customer = '', name, text, lineEnding: ending = 'CRLF',
     encoding = 'utf-8', bom = false, note = null, createdBy = null, acceptNewer = false,
   }) {
     let target;
@@ -344,10 +361,10 @@ export class Library {
         err.code = 'newer-version';
         throw err;
       }
-      target = { customer: program.customer, name: program.name };
+      target = { library: program.library, customer: program.customer, name: program.name };
     } else {
-      target = { customer: validateCustomer(customer), name: validateProgramName(name) };
-      const exists = this.db.findProgram(target.customer, target.name);
+      target = { library: validateLibrary(library), customer: validateCustomer(customer), name: validateProgramName(name) };
+      const exists = this.db.findProgram(target.library, target.customer, target.name);
       if (exists) {
         const err = new ValidationError(
           `"${target.customer === '' ? '' : `${target.customer}\\`}${target.name}" kütüphanede zaten var. ` +
@@ -395,10 +412,10 @@ export class Library {
     };
   }
 
-  /** (musteri, ad) -> surumler dizini; karsilastirma icin. */
-  #versionIndex() {
+  /** Bir kutuphanenin (musteri, ad) -> surumler dizini; karsilastirma icin. */
+  #versionIndex(library) {
     const idx = new Map();
-    for (const r of this.db.allVersionsIndex()) {
+    for (const r of this.db.allVersionsIndex(library)) {
       const k = keyOf(r.customer, r.name);
       if (!idx.has(k)) idx.set(k, { programId: r.program_id, versions: [] });
       idx.get(k).versions.push({ versionNo: r.version_no, sha256: r.sha256, size: r.size });
@@ -411,8 +428,8 @@ export class Library {
    * (musteri, ad) var ve boyut en az bir surumle tutuyor. Boyutu hicbir surumle
    * tutmayan dosya zaten kesin "farkli"; kutuphanede olmayan indirilmez.
    */
-  hashCandidates(entries) {
-    const idx = this.#versionIndex();
+  hashCandidates(entries, library = DEFAULT_LIBRARY) {
+    const idx = this.#versionIndex(library);
     return entries.filter((e) => {
       if (e.sha256 || e.size == null || isSystemEntry(e.customer, e.name)) return false;
       const hit = idx.get(keyOf(e.customer, e.name));
@@ -420,9 +437,9 @@ export class Library {
     });
   }
 
-  /** Bir tezgahin envanteri + her dosyanin kutuphaneye gore durumu. */
-  compareMachine(machineId) {
-    const idx = this.#versionIndex();
+  /** Bir tezgahin envanteri + her dosyanin (belirtilen kutuphaneye gore) durumu. */
+  compareMachine(machineId, library = DEFAULT_LIBRARY) {
+    const idx = this.#versionIndex(library);
     const scan = this.db.getScan(machineId);
     const inventory = this.db.getInventory(machineId);
     const onMachine = new Set();
@@ -437,20 +454,20 @@ export class Library {
         ...(system ? { status: 'sistem' } : compareEntry(e, hit?.versions)),
       };
     });
-    const missing = this.db.listPrograms()
+    const missing = this.db.listPrograms({ library })
       .filter((p) => !onMachine.has(keyOf(p.customer, p.name)))
       .map((p) => ({ programId: p.id, customer: p.customer, name: p.name, latestVersion: p.latest.versionNo, size: p.latest.size }));
     const counts = {};
     for (const e of entries) counts[e.status] = (counts[e.status] ?? 0) + 1;
-    return { machineId, scan, folders: this.db.getFolders(machineId), entries, missing, counts };
+    return { machineId, library, scan, folders: this.db.getFolders(machineId), entries, missing, counts };
   }
 
-  /** Program x tezgah dagilim matrisi (son taramalara gore). */
-  matrix(machines) {
-    const idx = this.#versionIndex();
+  /** Program x tezgah dagilim matrisi (son taramalara gore), bir kutuphanenin programlari icin. */
+  matrix(machines, library = DEFAULT_LIBRARY) {
+    const idx = this.#versionIndex(library);
     const scans = new Map(this.db.allScans().map((s) => [s.machineId, s]));
     const inv = new Map(machines.map((m) => [m.id, new Map(this.db.getInventory(m.id).map((e) => [keyOf(e.customer, e.name), e]))]));
-    const rows = this.db.listPrograms().map((p) => {
+    const rows = this.db.listPrograms({ library }).map((p) => {
       const versions = idx.get(keyOf(p.customer, p.name))?.versions ?? [];
       const cells = {};
       for (const m of machines) {
@@ -461,6 +478,7 @@ export class Library {
       return { programId: p.id, customer: p.customer, name: p.name, latestVersion: p.latest.versionNo, cells };
     });
     return {
+      library,
       machines: machines.map((m) => ({ id: m.id, name: m.name, scannedAt: scans.get(m.id)?.finishedAt ?? null, scanStatus: scans.get(m.id)?.status ?? null })),
       rows,
     };

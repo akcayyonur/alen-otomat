@@ -30,8 +30,8 @@ test('yeniden adlandirma: ad degisir, musteri/surumler/icerik dokunulmaz', () =>
   assert.equal(r.program.id, a);
   assert.equal(lib.db.listVersions(a).length, 1, 'surumler dokunulmadi');
   assert.equal(lib.db.getVersion(a, 1).meta.sha256, sha256(A1), 'icerik ayni');
-  assert.equal(lib.db.findProgram('MUSTERI_A', 'ALF-001'), null, 'eski adla artik bulunmuyor');
-  assert.ok(lib.db.findProgram('MUSTERI_A', 'ALF-001-REV2'), 'yeni adla bulunuyor');
+  assert.equal(lib.db.findProgram('ortak', 'MUSTERI_A', 'ALF-001'), null, 'eski adla artik bulunmuyor');
+  assert.ok(lib.db.findProgram('ortak', 'MUSTERI_A', 'ALF-001-REV2'), 'yeni adla bulunuyor');
   lib.close();
 });
 
@@ -90,11 +90,11 @@ test('denetim kaydi: eski/yeni ad, kim, ne zaman', () => {
 test('toplu-gonderim yedekleri yeni adla izlenebilir kalir (ayni musteri+ad anahtari)', () => {
   const { lib, a } = kur();
   lib.db.addBackup({ customer: 'MUSTERI_A', name: 'ALF-001', machineId: 'CNC-08', content: B1, sha256: sha256(B1), createdBy: 'ayse' });
-  assert.equal(lib.db.listBackups('MUSTERI_A', 'ALF-001').length, 1);
+  assert.equal(lib.db.listBackups('ortak', 'MUSTERI_A', 'ALF-001').length, 1);
 
   lib.renameProgram({ id: a, newName: 'ALF-001-REV2' });
-  assert.equal(lib.db.listBackups('MUSTERI_A', 'ALF-001').length, 0, 'eski adla artik bulunmuyor');
-  const after = lib.db.listBackups('MUSTERI_A', 'ALF-001-REV2');
+  assert.equal(lib.db.listBackups('ortak', 'MUSTERI_A', 'ALF-001').length, 0, 'eski adla artik bulunmuyor');
+  const after = lib.db.listBackups('ortak', 'MUSTERI_A', 'ALF-001-REV2');
   assert.equal(after.length, 1, 'yeni adla bulunuyor, kaybolmadi');
   assert.equal(after[0].machineId, 'CNC-08');
   lib.close();

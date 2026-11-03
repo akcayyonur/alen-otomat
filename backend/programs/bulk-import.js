@@ -51,7 +51,7 @@ export class ImportPlans {
     this.plans = new Map();
   }
 
-  create(machineId) {
+  create(machineId, library = 'ortak') {
     this.purge();
     // Ayni tezgahin onceki planlarini at (yenisi gecerli): bellek ve karisiklik azalir.
     for (const [id, p] of this.plans) if (p.machineId === machineId && p.status !== 'calisiyor' && !isApplying(p)) this.plans.delete(id);
@@ -63,6 +63,7 @@ export class ImportPlans {
     const plan = {
       id: randomBytes(9).toString('base64url'),
       machineId,
+      library,
       createdAt: this.now(),
       status: 'calisiyor',
       progress: { phase: 'baslangic', folder: null, done: 0, total: 0 },
@@ -104,6 +105,7 @@ export function publicPlan(plan) {
   return {
     planId: plan.id,
     machineId: plan.machineId,
+    library: plan.library,
     status: plan.status,
     createdAt: plan.createdAt,
     progress: plan.progress,

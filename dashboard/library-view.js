@@ -90,7 +90,21 @@ const lib = {
   preview: null, pending: [], seq: 0,
   // klasor gruplari: acik klasorler, toplu secim, silme kaydi
   openGroups: new Set(), groupsInit: false, selected: new Set(), log: [],
+  // kutuphane: 'ortak' ya da bir tezgah kimligi (o tezgahin kendi kutuphanesi); ustteki secici degistirir.
+  library: 'ortak',
 };
+
+/** Kutuphane secici icin secenekler: Ortak + verilen tezgah listesi (ayri bir uc gerekmez, `/api/library/config` zaten tezgahlari veriyor). */
+function libraryOptions(machines) {
+  return [{ id: 'ortak', name: 'Ortak' }, ...(machines ?? []).map((m) => ({ id: m.id, name: m.name }))];
+}
+function libraryLabel(id, machines) {
+  return id === 'ortak' ? 'Ortak' : (machines ?? []).find((m) => m.id === id)?.name ?? id;
+}
+/** `<select>` HTML'i: ortak secici cizimi (ana ekran ve tezgah paneli ayni bicimi kullanir). */
+function librarySelectHtml(current, machines) {
+  return libraryOptions(machines).map((o) => `<option value="${escapeHtml(o.id)}"${o.id === current ? ' selected' : ''}>${escapeHtml(o.id === 'ortak' ? 'Ortak' : `${o.id} · ${o.name}`)}</option>`).join('');
+}
 
 export function resetLibraryView() {
   lib.ready = false;
@@ -116,7 +130,10 @@ function buildLibrarySkeleton() {
     '<p class="dt-sub">Programlar merkezi bir kütüphanede tutulur, hangi programın hangi tezgahta ve ' +
     'hangi sürümde olduğu görünür, ve seçilen tezgahın müşteri klasörüne gönderilir. ' +
     '<b>Gönderilen program tezgahta aktif olmaz</b>: çalıştırmak için panelden seçilmesi gerekir.</p>' +
-    '</div></header>' +
+    '</div>' +
+    '<label class="fld-inline lib-library-pick"><span>Kütüphane</span><select data-role="library" aria-label="Kütüphane seç"></select></label>' +
+    '</header>' +
+    '<p class="hint" data-role="library-hint"></p>' +
     '<p data-role="msg" class="notice" hidden></p>' +
     '<div data-role="notices"></div>' +
 
@@ -155,25 +172,35 @@ function buildLibrarySkeleton() {
 
 async function loadLibrary() {
   try {
-    const [config, programs, matrix, customers, transfers, log] = await Promise.all([
-      api('/api/library/config'),
-      api('/api/library/programs'),
-      api('/api/library/matrix'),
+    const config = await api('/api/library/config');
+    Object.assign(lib, { config });
+    const [programs, matrix, customers, transfers, log] = await Promise.all([
+      api(`/api/library/programs?library=${encodeURIComponent(lib.library)}`),
+      api(`/api/library/matrix?library=${encodeURIComponent(lib.library)}`),
       api('/api/library/customers'),
       api('/api/transfers?limit=15'),
       api('/api/library/log?limit=15'),
     ]);
-    Object.assign(lib, { config, programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers, log: log.log });
+    Object.assign(lib, { programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers, log: log.log });
   } catch (err) {
     toast(lib.host, `Kütüphane yüklenemedi: ${err.message}`, false);
     return;
   }
+  renderLibrarySelect();
   renderNotices();
   renderPending();
   renderTable();
   renderHistory();
   renderLibLog();
   lib.host.querySelector('[data-role="max"]').textContent = maxLabel(lib.config.maxProgramBytes);
+}
+
+function renderLibrarySelect() {
+  const sel = lib.host.querySelector('[data-role="library"]');
+  sel.innerHTML = librarySelectHtml(lib.library, lib.config?.machines);
+  lib.host.querySelector('[data-role="library-hint"]').textContent = lib.library === 'ortak'
+    ? 'Ortak kütüphane: tüm tezgahlara gönderilebilir, "Toplu gönder" bununla çalışır.'
+    : `${libraryLabel(lib.library, lib.config?.machines)} tezgahına özel kütüphane: programlar yalnızca burada görünür, başka tezgaha göndermek istisnai bir durumdur.`;
 }
 
 // Bir gonderme/tarama/iceri alma bitince (baska ekranlardan da) kutuphane listeleri tazelenir.
@@ -184,7 +211,8 @@ document.addEventListener(CHANGED, () => {
 async function reloadLists() {
   try {
     const [programs, matrix, customers, transfers, log] = await Promise.all([
-      api('/api/library/programs'), api('/api/library/matrix'), api('/api/library/customers'), api('/api/transfers?limit=15'), api('/api/library/log?limit=15'),
+      api(`/api/library/programs?library=${encodeURIComponent(lib.library)}`), api(`/api/library/matrix?library=${encodeURIComponent(lib.library)}`),
+      api('/api/library/customers'), api('/api/transfers?limit=15'), api('/api/library/log?limit=15'),
     ]);
     Object.assign(lib, { programs: programs.programs, matrix, customers: customers.customers, transfers: transfers.transfers, log: log.log });
   } catch (err) {
@@ -193,6 +221,7 @@ async function reloadLists() {
   // Silinen / artik olmayan programlar secimden dusurulur.
   const alive = new Set(lib.programs.map((p) => p.id));
   for (const id of [...lib.selected]) if (!alive.has(id)) lib.selected.delete(id);
+  renderLibrarySelect();
   renderPending();
   renderTable();
   renderHistory();
@@ -269,7 +298,7 @@ async function uploadPending() {
     p.state = 'yukleniyor';
     renderPending();
     try {
-      const q = new URLSearchParams({ customer: p.customer.trim(), name: p.name.trim(), by, note: p.note.trim(), originalName: p.file.name });
+      const q = new URLSearchParams({ library: lib.library, customer: p.customer.trim(), name: p.name.trim(), by, note: p.note.trim(), originalName: p.file.name });
       const res = await api(`/api/library/programs?${q}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: await p.file.arrayBuffer() });
       p.state = 'tamam';
       p.msg = res.created ? (res.newProgram ? `Eklendi (v${res.version.versionNo})` : `Yeni sürüm v${res.version.versionNo}`) : `Aynı içerik zaten var (v${res.version.versionNo})`;
@@ -516,6 +545,12 @@ function wireLibrary() {
   host.querySelector('[data-role="user"]').addEventListener('input', (ev) => userName.set(ev.target.value.trim()));
   host.querySelector('[data-role="q"]').addEventListener('input', (ev) => { lib.query = ev.target.value; renderTable(); });
   host.querySelector('[data-role="cust"]').addEventListener('change', (ev) => { lib.customer = ev.target.value; renderTable(); });
+  host.querySelector('[data-role="library"]').addEventListener('change', async (ev) => {
+    lib.library = ev.target.value;
+    lib.customer = ''; lib.query = ''; lib.selected.clear(); lib.groupsInit = false; lib.openGroups.clear();
+    if (lib.selectedId != null) { lib.selectedId = null; location.hash = '#/programlar'; }
+    await reloadLists();
+  });
 
   // Asagidakiler `host` uzerine baglanir ve ekran her kuruldugunda (icerik yeniden
   // yazilsa da) host ayni kalir: BIR KEZ baglanmali, yoksa tiklama birden cok islenir.
@@ -600,16 +635,16 @@ function wireLibrary() {
         await selectProgram(lib.selectedId, true);
         announce();
       }
-      else if (act === 'send') { openSendDialog({ programId: Number(btn.dataset.program), machineId: btn.dataset.machine ?? null }); }
+      else if (act === 'send') { openSendDialog({ programId: Number(btn.dataset.program), machineId: btn.dataset.machine ?? null, library: lib.library }); }
       else if (act === 'new-program') {
         openEditor({
-          mode: 'new', customer: lib.customer && lib.customer !== '__root' ? lib.customer : '',
-          onSend: (programId) => openSendDialog({ programId }),
+          mode: 'new', customer: lib.customer && lib.customer !== '__root' ? lib.customer : '', library: lib.library,
+          onSend: (programId) => openSendDialog({ programId, library: lib.library }),
         });
       } else if (act === 'edit') {
         openEditor({
-          mode: 'version', programId: lib.selectedId, versionNo: Number(btn.dataset.no),
-          onSend: (programId) => openSendDialog({ programId }),
+          mode: 'version', programId: lib.selectedId, versionNo: Number(btn.dataset.no), library: lib.library,
+          onSend: (programId) => openSendDialog({ programId, library: lib.library }),
         });
       } else if (act === 'scan') {
         const id = btn.dataset.machine;
@@ -646,7 +681,9 @@ function wireLibrary() {
  * @param {{machineId: string, name?: string}} machine
  */
 export function renderMachinePrograms(host, machine) {
-  const st = { id: machine.machineId, data: null, cfg: null, filter: '', q: '', busy: false };
+  // library: varsayilan bu tezgahin KENDI kutuphanesi (en cok karsilasilan durum); 'ortak'a ya da baska
+  // bir tezgahin kutuphanesine de gecilebilir (ustteki secici).
+  const st = { id: machine.machineId, library: machine.machineId, data: null, cfg: null, filter: '', q: '', busy: false };
   host.innerHTML =
     '<div class="dt-block-head"><h3>Programlar</h3><div class="dt-actions" data-role="actions"></div></div>' +
     '<p data-role="msg" class="notice" hidden></p><div data-role="body"><p class="empty">Yükleniyor…</p></div>';
@@ -656,7 +693,7 @@ export function renderMachinePrograms(host, machine) {
 
   async function load() {
     try {
-      const [cfg, data] = await Promise.all([api('/api/library/config'), api(`/api/machines/${encodeURIComponent(st.id)}/programs`)]);
+      const [cfg, data] = await Promise.all([api('/api/library/config'), api(`/api/machines/${encodeURIComponent(st.id)}/programs?library=${encodeURIComponent(st.library)}`)]);
       st.cfg = cfg;
       st.data = data;
     } catch (err) {
@@ -691,6 +728,7 @@ export function renderMachinePrograms(host, machine) {
     }
     const blocked = sendBlocked();
     actions.innerHTML =
+      `<label class="fld-inline"><span>Kütüphane</span><select data-role="library" aria-label="Kütüphane seç">${librarySelectHtml(st.library, st.cfg.machines)}</select></label>` +
       '<button type="button" class="icon-btn" data-act="scan">Tezgahtaki programları tara</button>' +
       '<button type="button" class="icon-btn" data-act="bulk-import" title="Tornadaki tüm programları okuyup kütüphaneye alır (yalnızca okuma)">Tüm programları kütüphaneye al…</button>' +
       '<button type="button" class="icon-btn" data-act="new-program">Yeni program yaz…</button>' +
@@ -811,29 +849,32 @@ export function renderMachinePrograms(host, machine) {
   }
 
   host.addEventListener('toggle', (ev) => { if (ev.target.matches?.('details.grp') && ev.target.open) fillGroup(ev.target); }, true);
-  host.addEventListener('change', (ev) => { if (ev.target.matches('[data-role="filter"]')) { st.filter = ev.target.value; render(); } });
+  host.addEventListener('change', (ev) => {
+    if (ev.target.matches('[data-role="filter"]')) { st.filter = ev.target.value; render(); return; }
+    if (ev.target.matches('[data-role="library"]')) { st.library = ev.target.value; st.q = ''; st.filter = ''; load(); }
+  });
   host.addEventListener('input', (ev) => { if (ev.target.matches('[data-role="q"]')) { st.q = ev.target.value; renderGroups(); } });
   host.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-act]');
     if (!btn || st.busy) return;
     const act = btn.dataset.act;
-    if (act === 'send') { openSendDialog({ machineId: st.id, programId: btn.dataset.program ? Number(btn.dataset.program) : null }); return; }
+    if (act === 'send') { openSendDialog({ machineId: st.id, programId: btn.dataset.program ? Number(btn.dataset.program) : null, library: st.library }); return; }
     if (act === 'new-program') {
       // Yazılan program kütüphaneye girer; "Kaydet ve tezgaha gönder" bu tezgahı seçili açar.
-      openEditor({ mode: 'new', onSend: (programId) => openSendDialog({ machineId: st.id, programId }) });
+      openEditor({ mode: 'new', library: st.library, onSend: (programId) => openSendDialog({ machineId: st.id, programId, library: st.library }) });
       return;
     }
     if (act === 'new-folder') { openFolderDialog({ machineId: st.id, onDone: () => load() }); return; }
     if (act === 'bulk-push') {
-      openBulkPush({ machineId: st.id, machineName: machine.name ?? st.id, knownFolders: st.data?.folders ?? [], blockedReason: sendBlocked() });
+      openBulkPush({ machineId: st.id, machineName: machine.name ?? st.id, library: st.library, knownFolders: st.data?.folders ?? [], blockedReason: sendBlocked() });
       return;
     }
     if (act === 'bulk-import') {
-      openBulkImport({ machineId: st.id, machineName: machine.name ?? st.id, knownFolders: st.data?.folders ?? [] });
+      openBulkImport({ machineId: st.id, machineName: machine.name ?? st.id, library: st.library, knownFolders: st.data?.folders ?? [] });
       return;
     }
     if (act === 'delete') {
-      openDeleteDialog({ machineId: st.id, customer: btn.dataset.customer, name: btn.dataset.name, onDone: () => load() });
+      openDeleteDialog({ machineId: st.id, library: st.library, customer: btn.dataset.customer, name: btn.dataset.name, onDone: () => load() });
       return;
     }
     st.busy = true;
@@ -842,14 +883,14 @@ export function renderMachinePrograms(host, machine) {
       if (act === 'scan') {
         btn.textContent = 'Taranıyor…';
         toast(host, `Tornaya FTP ile bağlanılıp klasörler listeleniyor (yalnızca okuma)… birkaç saniye sürer.`);
-        const r = await post(`/api/machines/${encodeURIComponent(st.id)}/programs/scan`);
+        const r = await post(`/api/machines/${encodeURIComponent(st.id)}/programs/scan`, { library: st.library });
         toast(host, `Tarama bitti: ${num(r.entries)} program, ${num(r.folders)} klasör (${num(r.durationMs / 1000, 1)} sn)` +
           `${r.hashed ? ` · ${num(r.hashed)} dosya içerik karşılaştırması için okundu` : ''}` +
           `${r.warnings.length ? ` · ${r.warnings.length} uyarı: ${r.warnings.slice(0, 3).join('; ')}` : ''}.`);
         announce();
       } else if (act === 'import') {
-        const res = await post(`/api/machines/${encodeURIComponent(st.id)}/programs/import`, { customer: btn.dataset.customer, name: btn.dataset.name, by: userName.get() });
-        toast(host, `${programLabel(btn.dataset.customer, btn.dataset.name)} kütüphaneye alındı (v${res.version.versionNo}).`);
+        const res = await post(`/api/machines/${encodeURIComponent(st.id)}/programs/import`, { library: st.library, customer: btn.dataset.customer, name: btn.dataset.name, by: userName.get() });
+        toast(host, `${programLabel(btn.dataset.customer, btn.dataset.name)} ${st.library === 'ortak' ? 'Ortak' : st.library} kütüphanesine alındı (v${res.version.versionNo}).`);
         announce();
       }
     } catch (err) {
@@ -897,11 +938,11 @@ async function loadFolders() {
   } catch { /* bos kalir */ }
 }
 
-export async function openSendDialog({ machineId = null, programId = null } = {}) {
+export async function openSendDialog({ machineId = null, programId = null, library = 'ortak' } = {}) {
   ensureDialog();
-  Object.assign(sd, { pre: null, acks: new Set(), confirm: '', phase: 'form', busy: false, error: null, result: null, by: userName.get() });
+  Object.assign(sd, { library, pre: null, acks: new Set(), confirm: '', phase: 'form', busy: false, error: null, result: null, by: userName.get() });
   try {
-    const [cfg, progs] = await Promise.all([api('/api/library/config'), api('/api/library/programs')]);
+    const [cfg, progs] = await Promise.all([api('/api/library/config'), api(`/api/library/programs?library=${encodeURIComponent(library)}`)]);
     sd.capable = cfg.machines.filter((m) => m.capable);
     sd.programs = progs.programs;
     sd.transferEnabled = cfg.transferEnabled;
@@ -943,6 +984,7 @@ function renderDialog() {
     '<div class="modal-body">' +
     '<p class="notice">Program tezgaha <b>kopyalanır</b>; çalıştırmak için tezgah panelinden seçilmesi gerekir. ' +
     'Mevcut bir dosyanın <b>üzerine yazılmaz</b>. Dosya önce geçici adla yüklenir, doğrulanır, sonra asıl adına çevrilir.</p>' +
+    `<p class="hint">Program listesi: <b>${escapeHtml(sd.library === 'ortak' ? 'Ortak' : `${sd.library} kütüphanesi`)}</b>.</p>` +
     (sd.error ? `<p class="notice notice-sim">${escapeHtml(sd.error)}</p>` : '') +
     (sd.transferEnabled === false ? '<p class="notice notice-sim"><b>Gönderme kapalı</b> (TRANSFER_DISABLED=1).</p>' : '') +
 

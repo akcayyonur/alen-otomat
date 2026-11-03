@@ -130,7 +130,7 @@ test('silme: kutuphanede ayni icerikli kopya varsa SORUSUZ silinir; tek DELE; ka
     assert.ok(t.server.exists('MUSTERI_B/OLD-2'), 'baska dosyaya dokunulmadi');
     assert.deepEqual(yazma(t.server), ['DELE OLD-1'], 'tornaya YALNIZ tek DELE gitti');
     assert.ok(!t.library.db.getInventory('CNC-08').some((e) => e.name === 'OLD-1'), 'envanterden kalkti');
-    assert.equal(t.library.db.listVersions(t.library.db.findProgram('MUSTERI_B', 'OLD-1').id).length, 1, 'kutuphane kopyasi duruyor');
+    assert.equal(t.library.db.listVersions(t.library.db.findProgram('ortak', 'MUSTERI_B', 'OLD-1').id).length, 1, 'kutuphane kopyasi duruyor');
     assert.equal(t.library.db.listTransfers({}).filter((x) => x.kind === 'silme').length, 1);
   } finally { await t.kapat(); }
 });

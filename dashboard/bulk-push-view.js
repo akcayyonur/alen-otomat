@@ -30,8 +30,8 @@ const OUTCOME = Object.freeze({
   hata: { icon: '✕', label: 'hata', cls: 'bad' },
 });
 
-/** @param {{machineId: string, machineName?: string, knownFolders?: string[], blockedReason?: string|null}} opts */
-export function openBulkPush({ machineId, machineName = '', knownFolders = [], blockedReason = null }) {
+/** @param {{machineId: string, machineName?: string, library?: string, knownFolders?: string[], blockedReason?: string|null}} opts */
+export function openBulkPush({ machineId, machineName = '', library = machineId, knownFolders = [], blockedReason = null }) {
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.className = 'modal modal-wide';
@@ -42,7 +42,7 @@ export function openBulkPush({ machineId, machineName = '', knownFolders = [], b
   stopPolling();
   for (const k of Object.keys(bp)) delete bp[k];
   Object.assign(bp, {
-    machineId, machineName, blockedReason, folders: [...knownFolders].sort((a, b) => a.localeCompare(b, 'tr')), picked: new Set(knownFolders),
+    machineId, machineName, library, blockedReason, folders: [...knownFolders].sort((a, b) => a.localeCompare(b, 'tr')), picked: new Set(knownFolders),
     phase: 'intro', planId: null, progress: null, plan: null, apply: null, skipFolders: new Set(), ack: false, confirm: '', error: null, busy: false,
   });
   if (!dlg.open) dlg.showModal();
@@ -59,7 +59,7 @@ async function startPlan() {
   render();
   const allPicked = bp.folders.length === 0 || bp.picked.size === bp.folders.length;
   try {
-    const r = await post(`${base()}/push-plan`, allPicked ? {} : { folders: [...bp.picked] });
+    const r = await post(`${base()}/push-plan`, { library: bp.library, ...(allPicked ? {} : { folders: [...bp.picked] }) });
     bp.planId = r.planId;
     active.set(bp.machineId, r.planId);
     poll();
@@ -173,7 +173,9 @@ function refreshApply() {
 /* ----------------------------------------------------------------- çizim */
 
 function renderIntro() {
-  return '<p class="notice">Kütüphanedeki her programın <b>son sürümü</b> bu tornaya yazılır. Tornada <b>aynı adlı ama içeriği farklı</b> bir dosya varsa onun üzerine yazılır; ' +
+  return `<p class="hint">Kaynak kütüphane: <b>${escapeHtml(bp.library === 'ortak' ? 'Ortak' : `${bp.library} kütüphanesi`)}</b> ` +
+    '(tezgah panelindeki kütüphane seçiciyle değiştirilir).</p>' +
+    '<p class="notice">Kütüphanedeki her programın <b>son sürümü</b> bu tornaya yazılır. Tornada <b>aynı adlı ama içeriği farklı</b> bir dosya varsa onun üzerine yazılır; ' +
     '<b>ezilmeden önce tornadaki hâli kütüphaneye yedeklenir</b> (program sayfasında "Tornalardan alınan yedekler"). ' +
     'Tornada olup kütüphanede olmayan programlara, kök dizindeki ortak programlara (ör. O9001) ve şu an çalışan programa <b>dokunulmaz</b>. ' +
     'Müşteri klasörü tornada yoksa o program atlanır (klasör açılmaz).</p>' +

@@ -612,6 +612,48 @@ gönderilir; hangi program hangi tezgahta ve hangi sürümde görünür (matris 
 **İçerik yorumlanmaz**, dosya aynen taşınır. Gönderilen program tezgahta **aktif olmaz**
 (panelden seçilmesi gerekir).
 
+**Kütüphane bölünmesi: Ortak + makine başına (2026-11-03, kullanıcı isteği):** şimdiye kadar tek bir **ortak** kütüphane vardı; artık her tezgahın
+**kendi kütüphanesi** de olabiliyor (ör. `CNC-03` kütüphanesi), **ortak**la yan yana. Gerekçe: bir tornadaki tüm programlar toplu çekilip o tornaya
+özel saklanabilsin, ortak havuzu kirletmeden. **Varsayılan davranış DEĞİŞMEDİ** — her yeni parametre (`library`) `'ortak'`a düşer, yani eskiden
+hiç `library` bilmeyen her çağıran (eski istemci, eski test) tıpkı önceden olduğu gibi tek ortak kütüphaneyle çalışır.
+- **Kimlik:** bir programın kimliği artık `(kütüphane, müşteri klasörü, ad)` üçlüsü (`library-db.js`, `programs`/`program_backups` tablolarına
+  `library TEXT NOT NULL DEFAULT 'ortak'` eklendi). Aynı (müşteri, ad) **farklı kütüphanelerde bağımsız** var olabilir — `CNC-03`te `SR001.013`ün
+  bir sürümü, `ortak`ta aynı adın bambaşka bir sürümü olabilir, birbirine dokunmaz. `library` değeri `'ortak'` ya da **tam olarak bir tezgah
+  kimliği** (`routes.js` `validLibrary`: başka bir şey 400 — yazım hatası sessizce "görünmeyen" bir kütüphane açmasın).
+- **Ekran (üstten geçiş, her tezgah için):** Program kütüphanesi ekranının (`#/programlar`) başlığında bir **kütüphane seçici** (`<select>`:
+  Ortak + envanterdeki her tezgah). Değiştirince liste/arama/seçim sıfırlanır ve o kütüphaneye geçilir (`dashboard/library-view.js`
+  `renderLibrarySelect`/`wireLibrary`). **Tezgah detayındaki "Programlar" paneli de kendi, bağımsız seçiciye sahip** (varsayılan o tezgahın
+  KENDİ kütüphanesi): tarama, içeri alma, gönderme, toplu alım/gönderim, silme — hepsi o panelde seçili kütüphaneye göre çalışır.
+- **Toplu alım, kullanıcının asıl isteği — "soracak ortak kütüphaneye mi yoksa bu tezgahın kütüphanesine mi":** "Tüm programları kütüphaneye al…"
+  penceresi artık ilk adımda **radyo seçimiyle sorar** (`dashboard/bulk-import-view.js`): **"CNC-0X kütüphanesi (bu tezgaha özel)"** (varsayılan)
+  ya da **"Ortak kütüphane"**. Plan bu seçime göre o kütüphaneye yazılır; aynı pencere hem yeni/aynı/çakışma sınıflandırmasını hem de hedef
+  kütüphaneyi önceden gösterir.
+- **Toplu gönderme** (`bulk-push-view.js`): kütüphaneden tornaya yazdığı için hangi kütüphaneden gönderdiğini (varsayılan: o tezgahın kendi
+  kütüphanesi) salt-okunur bir bilgi satırıyla gösterir — gönderme kaynağı kafa karışıklığı olmasın.
+- **Editör, gönderme penceresi, tornadan silme, adını değiştirme** (`editor-view.js`, `library-view.js`'teki `openSendDialog`, `delete-view.js`)
+  hepsi `library` parametresini taşır; gönderme penceresi hedef kütüphaneyi bir ipucu satırıyla gösterir.
+- **Program eşleme (Planlama) TÜM kütüphaneleri görür** (`server.js` `listLibraryPrograms`: `library.db.listPrograms({library: null})` —
+  `library: null` tüm kütüphaneler demek, yalnız bu genel-amaçlı yerde kullanılır; ekranlar her zaman belirli bir kütüphane ister): bir program
+  hangi kütüphanede olursa olsun eşlenebilir, çünkü eşleme ada göre çalışır, kütüphaneye göre değil.
+- **Göç (var olan `data/library.db` için TEK SEFERLİK):** eski şemalı bir `programs`/`program_backups` tablosu görülürse `#migrateLibraryColumn`
+  tabloyu `auth-db.js`'teki `users_new` deseniyle yeniden kurar (yeni `library_new` tablo → eski kayıtları `library='ortak'` ile kopyala → eskiyi
+  sil → yeniden adlandır), ID'ler ve FK'ler korunur. **Göç sırasında bulunup düzeltilen iki gerçek hata** (sentetik eski-şema testiyle yakalandı,
+  canlıda ilk açılışta patlardı): (1) `program_backups`a `library` sütununu referans eden bir `CREATE INDEX IF NOT EXISTS` şema metninde göçten
+  ÖNCE duruyordu — eski tabloda sütun henüz yokken index kurulumu "no such column" ile patlıyordu (`CREATE TABLE IF NOT EXISTS` sessizce atlar
+  ama `CREATE INDEX` atlamaz); çözüm: index'i göçten SONRA, constructor'da ayrıca kur. (2) `programs` tablosunu `DROP` ederken `program_versions`
+  tablosunun FK'si (`program_id REFERENCES programs(id)`) reddediyordu; çözüm: göç `PRAGMA foreign_keys = OFF/ON` ile sarmalandı (aynı desen
+  `auth-db.js`'de zaten vardı).
+- **Testler:** `backend/programs/library-split.test.js` (8: kütüphaneler arası bağımsızlık, `findProgram`/`saveText`/`renameProgram` sınırlaması,
+  `library:null` davranışı, `compareMachine`/`matrix` kapsamı, HTTP `?library=` doğrulaması, sentetik eski-şema göç testi) + var olan 5 test
+  dosyasındaki (`bulk-import`, `delete`, `library-rename`, `library-rename-machine`, `push`) ~20 çağrı noktası yeni imzaya (`findProgram(library,
+  customer, name)`, `listBackups(library, customer, name)`) uyduruldu. `npm test` 595/595 yeşil.
+- **Tarayıcıda gerçek yerel `data/library.db`'ye karşı denendi:** kütüphane seçici her iki yerde de doğru veriyi getiriyor (ör. `CNC-03`
+  kütüphanesinde oluşturulan bir program `Ortak`a geçince görünmüyor — kütüphaneler arası yalıtım doğrulandı), toplu alım penceresindeki radyo
+  sorusu doğru şekilde çıkıyor. Test için oluşturulan geçici program (`TEST-SPLIT-01`) temizlendi.
+- **Henüz yapılmayanlar (kullanıcı "önce kütüphane bölünmesiyle başlayalım" dedi, bilerek kapsam dışı bırakıldı):** (1) bitmiş ürün depo akışı
+  (iş emri bitince Geçici depoya Mikro fişiyle aktarım, paketlemeden Merkez'e sevk) — henüz tasarlanmadı/yazılmadı; (2) bir tezgahın kütüphanesini
+  doğrudan bir USB/flash'a aktarma (ZIP indirme) — henüz yazılmadı, kullanıcı "bunu da ekleyelim" dedi ama sıradaki iş olarak bırakıldı.
+
 **Program editörü (2026-10-08):** yeni NC programı doğrudan üründe yazılır ("Yeni program yaz…") ya da var olan programın bir
 sürümü düzenlenir ("Düzenle…"); kaydedince kütüphanede **yeni sürüm** olur (eski sürümler aynen kalır), "Kaydet ve tezgaha gönder…"
 gönderme penceresini o programla açar (orada ayrı onay var). Genel amaçlı kod editörü DEĞİL: satır numarası, imleç konumu,
@@ -1409,18 +1451,18 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `GET /api/agent/machines?driver=&model=` | **Ajanın okuduğu tezgah listesi** — IP'si tanımlı olanlar; `model` (11TB / 22TB) verilirse yalnız o modeldekiler (her model kendi ajanıdır). Ajan bunu dakikada bir çeker. |
 | `GET /api/drivers` · `GET /api/config` · `PUT /api/config/machines` | Sürücüler ve yapılandırma. |
 | `POST /api/library/programs/delete` · `GET /api/library/log` | **Kütüphaneden silme** (admin; geri dönüşsüz): `ids`, `confirm` (tek programda adı, çoklu sayısı), `by`; yanıt `deleted[]`, `programs`, `versions` · silme kaydı (kim, ne zaman, sürüm SHA'ları). |
-| `GET /api/library/config` · `/customers` · `/matrix` | Özellik durumu (`transferEnabled`…), müşteri klasörleri, program × tezgah matrisi. |
-| `GET/POST /api/library/programs` | Liste (`?customer=&q=`); yükleme: gövde = ham dosya, `?customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik). |
-| `POST /api/library/programs/text` | **Editör kaydı** (JSON: `text`, `lineEnding`, `encoding`, `bom`, `by`, `note`; yeni program için `customer`+`name`, yeni sürüm için `programId`+`baseVersionNo`, `acceptNewer`). 201 yeni sürüm, 200 aynı içerik, 409 `code: exists` / `newer-version`. |
-| `GET /api/library/programs/:id` · `/versions/:no[?download=1\|full=1]` | Sürümler · önizleme (JSON; `full=1` kesmeden tam metin + `roundTrip`) ya da ham indirme. |
+| `GET /api/library/config` · `/customers` · `/matrix[?library=]` | Özellik durumu (`transferEnabled`…), müşteri klasörleri, program × tezgah matrisi (`library`: `ortak` ya da bir tezgah kimliği, vars. `ortak`, §6 "Kütüphane bölünmesi"). |
+| `GET/POST /api/library/programs` | Liste (`?library=&customer=&q=`); yükleme: gövde = ham dosya, `?library=&customer=&name=&by=&note=&originalName=` (201 yeni sürüm, 200 aynı içerik; `library` vars. `ortak`, §6 "Kütüphane bölünmesi"). |
+| `POST /api/library/programs/text` | **Editör kaydı** (JSON: `text`, `lineEnding`, `encoding`, `bom`, `by`, `note`, `library?`; yeni program için `customer`+`name`, yeni sürüm için `programId`+`baseVersionNo`, `acceptNewer`). 201 yeni sürüm, 200 aynı içerik, 409 `code: exists` / `newer-version`. |
+| `GET /api/library/programs/:id` · `/versions/:no[?download=1\|full=1]` | Sürümler (programın KENDİ kütüphanesindeki yedekleriyle) · önizleme (JSON; `full=1` kesmeden tam metin + `roundTrip`) ya da ham indirme. |
 | `POST /api/library/programs/:id/rename` | **Kütüphanede yeniden adlandırma** (§6): `{name}` → 200 (ayrı: `renamed:false` no-op); 400 geçersiz ad; 404; 409 aynı klasörde ad çakışması. |
 | `POST /api/library/programs/:id/rename-on-machines` | **Kopyası olan tezgahlarda da yeniden adlandırma** (gerçek FTP RNFR/RNTO, §6): `{customer, oldName, newName, machineIds, confirm}` (onay: 1 tezgahta kimlik, >1'de sayı) → `{machines, results[]}` (tezgah başına `outcome`: `degisti`/`atlandi`/`bulunamadi`/`hata`). `machineIds` boşsa 200 `{machines:0}`, hiç FTP'ye gidilmez. |
-| `POST /api/machines/:id/programs/import-plan` · `GET .../import-plan/:planId[/diff?key=]` · `POST .../import-apply` | **Toplu alım** (admin; tornaya yalnız okuma): plan başlat (202, arka plan) · durum/ilerleme + plan · bir çakışmanın iki yüzü (fark) · uygula (`decisions: {anahtar: 'al'|'atla'}`, `skipKeys`). |
-| `POST /api/machines/:id/programs/push-plan` · `GET .../push-plan/:planId` · `POST .../push-apply` · `POST .../push-stop` · `GET /api/library/backups/:id[?download=1]` · `POST /api/library/backups/:id/restore` | **Toplu gönderme** (admin; tornaya yazar ve ezer, §6): plan (yalnız okuma, 202) · plan + uygulama ilerlemesi · uygula (`confirm` = tezgah kimliği, `acks`, `skipKeys`; 202; 22TB'de 422) · durdur · ezilen eski hâllerin yedeği (indir / yeni sürüm olarak al). |
-| `POST /api/machines/:id/programs/delete-precheck` · `/delete` | **Tornadan silme** (admin; silme kapısı kapalıysa 422): ön kontrol (yazmaz) · sil (`confirm` = program adı, `acks`). Kayıt `kind: 'silme'`. |
+| `POST /api/machines/:id/programs/import-plan` · `GET .../import-plan/:planId[/diff?key=]` · `POST .../import-apply` | **Toplu alım** (admin; tornaya yalnız okuma): plan başlat (202, arka plan; gövdede `library?`, vars. `ortak`, §6 "Kütüphane bölünmesi") · durum/ilerleme + plan · bir çakışmanın iki yüzü (fark) · uygula (`decisions: {anahtar: 'al'|'atla'}`, `skipKeys`). |
+| `POST /api/machines/:id/programs/push-plan` · `GET .../push-plan/:planId` · `POST .../push-apply` · `POST .../push-stop` · `GET /api/library/backups/:id[?download=1]` · `POST /api/library/backups/:id/restore` | **Toplu gönderme** (admin; tornaya yazar ve ezer, §6): plan (yalnız okuma, 202; gövdede `library?`, vars. `ortak`) · plan + uygulama ilerlemesi · uygula (`confirm` = tezgah kimliği, `acks`, `skipKeys`; 202; 22TB'de 422) · durdur · ezilen eski hâllerin yedeği (indir / yeni sürüm olarak al). |
+| `POST /api/machines/:id/programs/delete-precheck` · `/delete` | **Tornadan silme** (admin; silme kapısı kapalıysa 422): ön kontrol (yazmaz) · sil (`confirm` = program adı, `acks`; gövdede `library?`, vars. `ortak`). Kayıt `kind: 'silme'`. |
 | `POST /api/machines/:id/folders` | **Tezgahta yeni müşteri klasörü** (JSON: `name`, `confirm` = tezgah kimliği, `by`). Kayıt döner (`kind: 'klasor'`); 400/403/404/409/422/502 gönderme ile aynı. |
-| `GET /api/machines/:id/programs` | Son taramanın envanteri + kütüphaneye göre durum. |
-| `POST /api/machines/:id/programs/scan` · `/import` | Tezgahı FTP ile tara (yalnız okuma) · tezgahtaki programı kütüphaneye al. |
+| `GET /api/machines/:id/programs[?library=]` | Son taramanın envanteri + kütüphaneye göre durum (`library` vars. o tezgahın kendi kütüphanesi değil, `ortak` — çağıran kütüphaneyi açıkça seçer, §6). |
+| `POST /api/machines/:id/programs/scan` · `/import` | Tezgahı FTP ile tara (yalnız okuma) · tezgahtaki programı kütüphaneye al. Gövdede `library?` (vars. `ortak`). |
 | `POST /api/transfers/precheck` · `POST /api/transfers` · `GET /api/transfers` | Ön kontrol (yazmaz) · gönder (`confirm` = tezgah kimliği, `acks`) · denetim kaydı. Hata kodları: 400 doğrulama, 403 kapalı, 404, 409 meşgul, 413 büyük, 422 desteklenmiyor, 502 tezgah/FTP. |
 
 `window`: `30m` · `8h` · `24h` · `7d`. Ya da `from`/`to` (epoch ms veya ISO).
@@ -1429,6 +1471,10 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 
 ## 10. Sıradaki işler
 
+- [x] ~~Program kütüphanesi bölünmesi (ortak + makine başına)~~ — yapıldı (2026-11-03), bkz. §6 "Kütüphane bölünmesi: Ortak + makine başına". **Fabrika PC'sinde gerçek kullanımda henüz denenmedi** (yalnız bu makinedeki geliştirme veritabanıyla).
+- [ ] **Aynı istekten gelen iki parça, henüz yapılmadı (kullanıcı kararı: önce kütüphane bölünmesi, sonra bunlar):**
+      (1) **Bitmiş ürün depo akışı** — iş emri bitince "Geçici depoya aktar?" onayı + Mikro'da `Merkez → Geçici` fişi (üretilen adet × ürün), Paketleme'de paketlenen kasalar `Geçici → Merkez` sevk fişiyle kapatılır. `material-reservations.js`'teki hammadde rezervasyonundan AYRI bir akış (o hammaddeyi, bu BİTMİŞ ÜRÜNÜ taşır). Henüz tasarlanmadı.
+      (2) **Bir tezgahın kütüphanesini flash/USB'ye aktarma** (ör. toplu çekilen `CNC-01` kütüphanesini ZIP olarak indirip bir flash belleğe kopyalamak) — kullanıcı "bunu da ekleyelim" dedi, henüz yazılmadı.
 - [x] ~~Installer'a MikroAPI ortam değişkenlerini GÖM~~ — yapıldı (2026-10-29), bkz. "MikroAPI kimlik bilgileri ve yazma artık installer'a gömülüyor".
 - [ ] **Çizelgeleme / optimizasyon (OR-Tools CP-SAT) — MVP + Setup.exe'ye Python gömme YAPILDI (2026-10-26), yalnız sentetik veriyle ve bu makinede derlenen pakette denendi.** Ayrıntı: §6 "Çizelgeleme / optimizasyon". Sıradaki: fabrika PC'sinde gerçek kurulum + gerçek iş emri verisiyle dene.
 - [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — yükseltilmiş

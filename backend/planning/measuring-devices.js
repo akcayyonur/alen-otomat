@@ -20,7 +20,7 @@
  * süresi geçmiş gibi görünmesin).
  */
 import { PlanningError } from './errors.js';
-import { foldTr, headerKey } from './normalize.js';
+import { findHeaderByKeys, foldTr } from './normalize.js';
 import { text, number, day } from './fields.js';
 import { XlsxError, readXlsx } from './xlsx-read.js';
 
@@ -90,13 +90,7 @@ const row = (r) => (r == null ? null : {
 
 /** EYS.LS.006 sayfasında başlık satırını bulur (form başlığı + lejant başlığın ÜSTÜNDE, ilk ~12 satırda aranır). */
 function findDeviceHeader(rows) {
-  for (let r = 0; r < Math.min(rows.length, 12); r += 1) {
-    const keys = rows[r].map(headerKey);
-    if (keys.includes('TAKIPNO') && keys.includes('CIHAZTANIMI') && keys.includes('GELECEKKALIBTARIHI')) {
-      return { index: new Map(keys.map((k, i) => [k, i]).filter(([k]) => k !== '').reverse()), headerRow: r };
-    }
-  }
-  return null;
+  return findHeaderByKeys(rows, ['TAKIPNO', 'CIHAZTANIMI', 'GELECEKKALIBTARIHI']);
 }
 
 export class MeasuringDevices {

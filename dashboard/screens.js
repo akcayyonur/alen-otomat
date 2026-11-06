@@ -16,6 +16,7 @@ export const SCREENS = Object.freeze([
   { id: 'olcucihazlari', label: 'Ölçüm cihazları takip', app: 'planlama', writable: true },
   { id: 'programlar', label: 'Program eşleme', app: 'planlama', writable: true },
   { id: 'urunler', label: 'Ürün kartları', app: 'planlama', writable: true },
+  { id: 'teknikresim', label: 'Teknik resim takip', app: 'planlama', writable: true },
   { id: 'siparisler', label: 'Siparişler', app: 'planlama', writable: false },
   { id: 'hammadde', label: 'Hammadde', app: 'planlama', writable: true },
   { id: 'verimlilik', label: 'Verimlilik', app: 'planlama', writable: false },

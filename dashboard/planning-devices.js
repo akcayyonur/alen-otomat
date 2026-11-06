@@ -10,7 +10,7 @@
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
-  put, del, cellText, fmtNum, dateText, debounce, openModal, chip, canWrite, isAdminRole, openListPrint, truncCell,
+  put, del, cellText, fmtNum, dateText, debounce, openModal, chip, canWrite, isAdminRole, openListPrint, truncCell, isoDate,
 } from './planning-common.js';
 
 const CAL_CHIP = Object.freeze({
@@ -22,7 +22,6 @@ const CAL_CHIP = Object.freeze({
 });
 const rowClass = (cal) => (cal === 'yesil' ? ' pl-done' : cal === 'sari' ? ' pl-waiting' : cal === 'kirmizi' ? ' pl-rejected' : cal === 'pasif' ? ' pl-cancelled' : '');
 const USABLE_LABEL = Object.freeze({ kullanilabilir: 'Kullanılabilir', kullanilamaz: 'Kullanılamaz' });
-const isoDate = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '');
 const CATEGORY_OPTIONS = ['Mastar', 'Kumpas', 'Mihengir', 'Kameralı Görüntüleme', 'Mikrometre', 'Terazi'];
 
 /* ============================================================================================== liste */

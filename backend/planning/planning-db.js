@@ -720,6 +720,20 @@ export class PlanningDb {
   }
 
   /**
+   * Bu urunun (codeKey) GECMISTEKI iptal edilmemis kartlarindan HERHANGI biri yikama/kurutma/tavlama'ya "gidecek"
+   * isaretlenmis mi (2026-11-06, kullanici isteği: "SR001.001 yikaniyorsa hep yikaniyor, o kutu hep tikli gelsin").
+   * Kart basma penceresinde ONERI olarak kullanilir (kullanici kapatabilir) - gecmis veri yoksa hepsi false doner.
+   */
+  cardStepDefaultsFor(codeKey) {
+    const r = this.db.prepare(
+      `SELECT MAX(c.wash_to) AS washTo, MAX(c.dry_to) AS dryTo, MAX(c.anneal_to) AS annealTo
+       FROM crates c JOIN work_orders w ON c.wo_no = w.no
+       WHERE w.code_key = ? AND c.voided_at IS NULL`,
+    ).get(codeKey);
+    return { washTo: !!r?.washTo, dryTo: !!r?.dryTo, annealTo: !!r?.annealTo };
+  }
+
+  /**
    * @param {{woNo?: string, machineId?: string, state?: string, limit?: number, offset?: number}} [f]
    *   state: 'acik' | 'kapali' (kapanmis, paketleme bekleyen; RET olanlar HARIC) | 'paketlendi' | 'ret' (kartta ret tikli, paketlemeye gitmez) | 'iptal' | 'aktif' (iptal haric, varsayilan) | 'tumu'
    */

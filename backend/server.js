@@ -183,6 +183,7 @@ const STATIC_FILES = {
   '/planning-numune.js': ['../dashboard/planning-numune.js', 'text/javascript; charset=utf-8'],
   '/planning-hurda.js': ['../dashboard/planning-hurda.js', 'text/javascript; charset=utf-8'],
   '/planning-devices.js': ['../dashboard/planning-devices.js', 'text/javascript; charset=utf-8'],
+  '/planning-drawing-tracking.js': ['../dashboard/planning-drawing-tracking.js', 'text/javascript; charset=utf-8'],
   '/planning-depot.js': ['../dashboard/planning-depot.js', 'text/javascript; charset=utf-8'],
   '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],
   '/planning-reports.js': ['../dashboard/planning-reports.js', 'text/javascript; charset=utf-8'],

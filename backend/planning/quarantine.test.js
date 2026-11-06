@@ -175,6 +175,11 @@ test('EYS.LS.018 alanlari (musteri, kodlar, tespit yeri, islem, miktarlar, maliy
   assert.throws(() => p.quarantine.create({ productLabel: 'x', issue: 'y', enteredBy: 'z', batchQty: -1 }), /Parti miktarı/);
   assert.throws(() => p.quarantine.create({ productLabel: 'x', issue: 'y', enteredBy: 'z', qualityCostTl: 'abc' }), /Kalitesizlik maliyeti/);
 
+  // regresyon (2026-11-06, review ile bulundu): nokta HER ZAMAN binlik ayracidir, virgulsuz da olsa ("12.500" = on iki bin
+  // bes yuz, EYS.LS.018'den kopyalanan tipik bir tutar) - eskiden virgul yoksa nokta ondalik sayilip 1000 kat kucuk ciktidi.
+  const c2 = p.quarantine.create({ productLabel: 'x', issue: 'y', enteredBy: 'z', qualityCostTl: '12.500' }, { now: at(12) });
+  assert.equal(c2.qualityCostTl, 12500, 'virgulsuz nokta binlik ayraci sayilmali, ondalik DEGIL');
+
   assert.deepEqual(p.quarantine.list({ q: 'ayvaz' }).items.map((x) => x.id), [a.id], 'musteri adiyla da aranabilir');
   assert.deepEqual(p.quarantine.list({ q: 'SR012.013' }).items.map((x) => x.id), [a.id], 'alen urun koduyla da aranabilir');
   p.close();

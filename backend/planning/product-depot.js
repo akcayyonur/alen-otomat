@@ -95,6 +95,14 @@ const rowOut = (r) => ({
 });
 
 export class ProductDepot {
+  /** İş emri başına eşzamanlı gönderimi engeller (`sources.js`/`mikro.js`/`doc-folder.js`'teki `this.busy` deseniyle aynı, yalnız global değil İŞ EMRİ başına):
+   * `addPackingRow`/`updatePackingRow` arka planda (await edilmeden) `sendPackingTransfer` tetikliyor; aynı iş emri için üst üste gelen iki çağrı
+   * (hızlı art arda satır ekleme, iki sekme, ya da elle "Merkeze sevk et…" ile aynı anda çakışan otomatik senkron) `await mikroStock.send(...)`
+   * noktasına kadar SENKRON aynı (eski) `#sentTotal`'i okur ve AYNI delta'yı iki kez Mikro'ya gönderebilirdi. Reddedilen çağrı veri KAYBETMEZ:
+   * delta hâlâ oradadır, bir sonraki çağrı (elle yeniden deneme ya da bir sonraki otomatik senkron) alır — `#send`'in zaten var olan
+   * "başarısız deneme geçmişe yazılır, bir sonraki çağrı farkı toplar" ilkesiyle aynı. */
+  #busy = new Set();
+
   /** @param {{planning: import('./planning.js').Planning, enabled?: () => boolean}} deps `enabled`: MIKRO_WRITE_ENABLED'dan AYRI, bu modüle özel kapı (bkz. dosya başı). */
   constructor({ planning, enabled = () => process.env.PRODUCT_DEPOT_ENABLED === '1' }) {
     this.planning = planning;
@@ -216,17 +224,26 @@ export class ProductDepot {
         409, 'mikro-write-disabled',
       );
     }
+    // Ayni is emri icin eszamanli gonderimi engelle (bkz. #busy alanindaki not): `qty` zaten SENKRON hesaplanmisti,
+    // asagidaki await'ten once; iki esanli cagri ayni (eski) sentTotal'i gorup ayni delta'yi iki kez gonderebilirdi.
+    if (this.#busy.has(woNo)) throw new PlanningError('Bu iş emri için Mikro gönderimi zaten sürüyor, bitmesini bekleyin.', 409, 'busy');
+    this.#busy.add(woNo);
     try {
       const result = await this.planning.mikroStock.send(preview);
       const evrak = result?.Data?.list?.[0] ?? {};
       this.#insert({ woNo, kind, stockCode, qty, fromDepot, toDepot, status: 'basarili', evrakSeri: evrak.evrakno_seri ?? null, evrakSira: evrak.evrakno_sira ?? null, by, now });
-      this.planning.db.addWorkOrderEvent(
-        woNo, eventType, `${qty} adet${evrak.evrakno_seri ? ` · Mikro ${evrak.evrakno_seri}-${evrak.evrakno_sira}` : ''}`, { by, now },
-      );
+      // evrakno_sira her zaman anlamlidir; evrakno_seri GIRIS'te BILEREK bos gelir (bkz. mikro-stock.js) - bu yuzden
+      // seri'nin DOLU olmasina degil, sira'nin VAR olmasina gore gosterilir (eskiden `evrak.evrakno_seri ?` ile
+      // GIRIS'in evrak numarasi geçmişten hiç görünmüyordu).
+      const evrakRef = evrak.evrakno_sira != null && evrak.evrakno_sira !== ''
+        ? ` · Mikro ${evrak.evrakno_seri ? `${evrak.evrakno_seri}-` : ''}${evrak.evrakno_sira}` : '';
+      this.planning.db.addWorkOrderEvent(woNo, eventType, `${qty} adet${evrakRef}`, { by, now });
       return this.statusFor(woNo);
     } catch (err) {
       this.#insert({ woNo, kind, stockCode, qty, fromDepot, toDepot, status: 'basarisiz', error: err.message, by, now });
       throw err;
+    } finally {
+      this.#busy.delete(woNo);
     }
   }
 }

@@ -14,7 +14,7 @@
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
-  put, del, cellText, fmtNum, dateText, debounce, openModal, chip, canWrite, isAdminRole, printModal, openListPrint, truncCell,
+  put, del, cellText, fmtNum, dateText, debounce, openModal, chip, canWrite, isAdminRole, printModal, openListPrint, truncCell, isoDate,
 } from './planning-common.js';
 
 const STATUS_CHIP = Object.freeze({
@@ -22,7 +22,6 @@ const STATUS_CHIP = Object.freeze({
   kapali: chip('ok', '✓', 'çıkış yapıldı'),
 });
 const rowClass = (status) => (status === 'kapali' ? ' pl-done' : ' pl-waiting');
-const isoDate = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '');
 const decInput = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
 
 /* ============================================================================================== liste */

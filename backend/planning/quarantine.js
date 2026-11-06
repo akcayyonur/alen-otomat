@@ -114,9 +114,11 @@ function intOptional(value, label, { max = 1_000_000 } = {}) {
 }
 function decOptional(value, label, { max = 10_000 } = {}) {
   if (value === undefined || value === null || value === '') return null;
-  // Turkce yazim: virgul varsa binlik noktalari at ("12.500,50" -> 12500.5); virgul yoksa nokta ondalik ("12.5" -> 12.5)
-  const s = String(value).trim();
-  const n = Number(s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s);
+  // Turkce yazim: nokta HER ZAMAN binlik ayracidir (atilir), virgul tek ondalik ayracidir (intOptional/intRequired
+  // ile ayni kural). Once "virgul varsa nokta binlik, yoksa nokta ondalik" idi: "12.500" (on iki bin bes yuz,
+  // EYS.LS.018'den kopyalanan tipik bir tutar) virgulsuz oldugu icin ondalik sayilip 12,5 olarak kaydediliyordu
+  // (1000 kat kucuk, SESSIZCE) - koda bir review atilinca bulundu, 2026-11-06.
+  const n = Number(String(value).trim().replace(/\./g, '').replace(',', '.'));
   if (!Number.isFinite(n) || n < 0 || n > max) throw new PlanningError(`${label} 0 ile ${max} arasında bir sayı olmalı.`);
   return n;
 }

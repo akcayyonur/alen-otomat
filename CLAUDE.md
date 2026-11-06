@@ -1064,6 +1064,21 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
   **İLK ONAY NO (2026-11-02, kullanıcı isteği):** iş emrinin `firstApprovalNo` alanından **salt gösterim** olarak gelir (bu pencereden değişmez; "İlk onay numarası al" akışıyla yazılır). `planning-db.js` `#crateSelect` artık `w.first_approval_no`'yu da join eder, `#crateOut` `firstApprovalNo` döner — GKK rapor no ile aynı desen
   (kartın alanı, kasaya özel donmuş bir değer DEĞİL; iş emrinin O ANKİ değeri, kart yeniden basılsa/görüntülense bile günceli gösterir). Testi `cards.test.js`. Tarayıcıda gerçek sunucuya karşı uçtan uca denendi (önizlemede ve gerçek `POST .../cards` yanıtında görünüyor).
 
+**"Ek işlem var mı?" zorunlu seçimi + ürün bazlı öğrenilen öneri (2026-11-06, kullanıcı isteği):** kart basma penceresine YIKAMA/KURUTMA/TAVLAMA kutularının ÜSTÜNE **"Ek işlem var mı?" (Var/Yok, zorunlu bir radyo çifti)** eklendi — **seçilmeden "Kartı oluştur ve yazdır" basılamaz** (buton devre dışı
+kalır, `st.ekIslem === null` iken). "Yok" seçilince alttaki 6 kutu (3 işlem × gidecek/yapıldı) devre dışı kalır ve sıfırlanır; "Var" seçilince normal şekilde işaretlenebilir. ÜRÜN RET kutusu bu seçimden BAĞIMSIZ, her zaman açık (kalite kararı, ek işlem rotasıyla ilgisi yok).
+- **Öğrenilen öneri — kullanıcının kendi gözlemi:** "SR001.001 ürününde yıkama yapılıyorsa hep yıkanıyor, o yüzden o kutu hep tikli gelsin, adam isterse kapatabilsin." Pencere açılınca bu ÜRÜNÜN (iş emrine değil, `work_orders.code_key`'e göre) **geçmişteki iptal edilmemiş kartlarından HERHANGİ biri**
+  yıkama/kurutma/tavlama'ya "gidecek" işaretlenmiş mi diye bakılır (`planning-db.js` `cardStepDefaultsFor(codeKey)`: `SELECT MAX(wash_to), MAX(dry_to), MAX(anneal_to) FROM crates JOIN work_orders ... WHERE code_key = ? AND voided_at IS NULL`; `getWorkOrder()`'a `cardStepDefaults` alanı olarak eklendi,
+  koli içi adet öğrenmesiyle — `packing.js` `setBoxQtyIfEmpty` — AYNI "bir kez görülürse öner" felsefesi). Geçmişte EVET görülmüşse pencere **"Ek işlem var mı?" otomatik "Var" ile ve o kutular TİKLİ açılır** (kullanıcı yine de kapatabilir — zorunlu seçim "boş kalamaz" demek, "değiştirilemez" demek değil);
+  hiç geçmiş yoksa (ürünün ilk kartı) hepsi boş başlar, bilinçli bir seçim zorunlu kılınır. **"Yapıldı" (done) kutuları ÖNERİLMEZ** (yalnız "gidecek" — yeni basılan kartın bu işlemi henüz GEÇİRMEDİĞİ, yalnız geçirmesi GEREKTİĞİ bilgisi anlamlı; "yapıldı" geçmişten bugüne taşınacak bir bilgi değil).
+- **Dosyalar:** `backend/planning/planning-db.js` (`cardStepDefaultsFor`), `planning.js` (`getWorkOrder()`'a ekleme), `dashboard/planning-card.js` (`openIssueCard`: `st.ekIslem`, `stepsBox()`'taki radyo çifti, `change` dinleyicisinde `ekIslem` özel dalı — tam yeniden çizim gerektirir, kutuların
+  devre dışı durumu da değişir). Yeni CSS GEREKMEDİ (`.pl-steps-row`'un var olan 3 sütunlu grid'i bir etiket + iki seçenek şeklini zaten karşılıyor).
+- **Doğrulama:** `backend/planning/cards.test.js`'e 2 test (ürünün ilk kartında öneri hepsi false; bir kartta `washTo` işaretlenince AYNI ürünün farklı bir iş emrinde öneri `washTo:true` gelir; **iptal edilen kart öneriye katılmaz**). `npm test` 659/659 yeşil. Tarayıcıda gerçek sunucuya karşı uçtan uca
+  denendi: yeni bir ürünün ilk kartında "Ek işlem var mı?" boş + kutular pasif + "Kartı oluştur" devre dışı → "Var" seçilince kutular açıldı → "Yıkamaya gidecek" işaretlenip kart basıldı → AYNI ürün için AÇILAN İKİNCİ iş emrinde pencere "Var" + "Yıkamaya gidecek" ÖN TİKLİ ve buton zaten etkin geldi.
+- **DENENMEDİ:** gerçek fabrika kullanımında birden çok ürünün gerçek yıkama/kurutma/tavlama geçmişiyle önerinin isabet oranı; "Yok" seçilip sonra "Var"a dönülünce önceki tikli kutuların (öneriden gelen) geri gelip gelmediği (şu anki davranış: "Yok" kutuları SIFIRLAR, "Var"a dönünce BOŞ başlar, öneri yeniden uygulanmaz — kasıtlı basit tutuldu, ayrıca sınanmadı).
+
+**Planlama yan menüsünde Tezgah başı ve Siparişler en üstte (2026-11-06, kullanıcı isteği):** `dashboard/planning-view.js` `NAV_LAYOUT`'ta `tezgahbasi` ve `siparisler` artık ayrı, tek başına girdiler olarak listenin EN BAŞINDA (`tezgahbasi` eskiden "Üretim" grubundaydı, `siparisler` eskiden "Ürünler" grubunun
+ALTINDA tek başına bir girdiydi — konumu değişti, grup yapısı değişmedi). Diğer gruplar (Depo, Üretim, Kalite, Ürünler, Analiz) ve içerikleri AYNEN kaldı. Tarayıcıda doğrulandı.
+
 **Numune kartı — aynı gün KALDIRILDI, yerine "Numune Takip" ekranı geldi (2026-11-02, kullanıcı kararı):** yukarıdaki satırda tarif edilen "ilk onay sonrası ayrı kart önizlemesi" fikri kullanıcının aynı oturumda verdiği ikinci bir talimatla terk edildi: onun yerine kendi listesi, durumu ve yazdırılabilir formu olan
 kapsamlı bir **Numune Takip** ekranı istendi (bkz. §6 "Numune Takip (EYS.FR.012)"). `dashboard/planning-approvals.js`'teki `numuneCardHtml` fonksiyonu ve `createFirstApproval`'ın kart gösteren sürümü SİLİNDİ; "İlk onay numarası al" penceresi eskisi gibi yalnızca numarayı veren, "Tamam" ile kapanan basit bir
 ekrana döndü. İlk onay akışı ile numune takibi artık tamamen ayrı iki ekrandır.
@@ -1621,6 +1636,82 @@ gibi **yeşil/sarı/kırmızı** boyalı, kalibrasyon durumuna göre.
   `usable: 'kullanilamaz'` (kullanılamaz/arızalı) alanı en yakın karşılığı, kalibrasyona gönderilmiş/geri bekleniyor
   diye ayrı bir durum yok (gerçek Excel'de de böyle bir sütun yoktu, yalnız Cihaz Durumu Kullanılabilir/Kullanılamaz).
 
+### Teknik Resim Takip (EYS.LS.007 "Seri Üretim Teknik Resim Takip Listesi") — 2026-11-06, kullanıcı isteği
+
+"Ürünler" grubunda yeni bir ekran: sistemdeki **HER ürünün** teknik resim durumu — var mı/yok mu, kaçıncı
+revizyonda, ne zaman değişti. Mevcut `doc-folder.js` (teknik resim klasörü → ürün kartına eşleme) dosyayı
+PDF olarak bağlıyordu ama **resmin ne zaman değiştiğini bir OLAY olarak kaydetmiyordu** — "update" dalı eski
+dosya satırını SİLİP yenisini EKLEDİĞİ için geçmiş iz bırakmadan kayboluyordu. Bu ekran o boşluğu dolduruyor.
+
+- **Kapsam (kullanıcı kararı, AskUserQuestion ile netleşti):** yalnız **kimlik + revizyon** alanları — müşteri,
+  resim no, kayıt tarihi, rev no, yayın tarihi, rev. tarihi, tutulduğu ortam, durumu, revizyon nedeni. Excel'in
+  dağıtım/toplama/arşiv bürokrasi bölümü (398 satırın TAMAMINDA boştu, salt okuma ile doğrulandı) **alınmadı**.
+  "Durumu" serbest metin kalır (gerçek veride `'İPTAL'`/`'revize edildi'`/`'REVİZE EDİLDİ'` gibi tutarsız
+  büyük/küçük harf örnekleri var; bir enum/kısıtlama UYGULANMAZ — Ölçüm Cihazları Takip'teki kategori gibi).
+- **REV NO ürün bazlı, SİSTEM tarafından otomatik artırılır** (kullanıcı kararı: "o rev no ürün bazlı bir ürüne
+  hiç rev gelmediyse 0 her dosya değiştiğinde sistem otomatik arttırsın"). Kritik ayrım (`recordDrawingChange`):
+  - **"Excel'den baseline'ı olan (ya da hiç izlenmeyen) bir ürüne İLK DEFA dijital resim eklenmesi"** rev_no'yu
+    ARTIRMAZ — Excel'deki mevcut rev_no/rev_tarihi KORUNUR (satır hiç yoksa 0'dan başlar); bu yalnız kâğıttaki
+    bilgiyi dijitale taşımak, gerçek bir revizyon değil. `yayin_tarihi` boşsa (Excel'den hiç gelmemişse) doldurulur.
+  - **"Zaten dijital resmi olan bir ürünün dosyası DEĞİŞMESİ"** (gerçek revizyon) rev_no'yu **+1 artırır** ve
+    rev_tarihi'ni günceller.
+  - Bu ayrım `doc-folder.js`'in `match()`'inde ZATEN hesaplanan `had` (üründe önceden cizim dosyası var mıydı)
+    sinyaline bağlanır — `quality.js`'in `addProductFile()`'ı içinde YENİDEN türetilmeye çalışılmadı, çünkü
+    "update" dalı eski satırı SİLDİKTEN SONRA ekliyor, `had` doğru hesaplandığı an orası (match()'in üstü).
+- **`products` ile bağlanmaz, ÜZERİNE YAZMAZ:** ürün adı/stok kodu/müşteri kodu `products`'tan gelir (burada
+  tekrar saklanmaz); Excel'deki "MÜŞTERİ" (müşteri ADI, `products`'ta karşılığı yok — yalnız müşteri KODU var)
+  kendi `musteri` kolonunda tutulur (Numune Takip/Hurda Girişi/Fiyat çalışması'yla aynı "ayrı kayıt" ilkesi).
+- **Küçük bir refactor, aynı oturumda:** `gkk.js`'in `findGkkHeader`'ı ve `measuring-devices.js`'in
+  `findDeviceHeader`'ı neredeyse birebir aynıydı; bu özellik ÜÇÜNCÜ bir kopyayı gerektirdiğinden, paylaşılan
+  `findHeaderByKeys(rows, requiredKeys, {maxRows})` yardımcısına çıkarıldı (`backend/planning/normalize.js`);
+  iki mevcut çağrı yeri de buna taşındı (davranış DEĞİŞMEDİ, yalnız tekilleştirme — ikisinin testleri de yeşil).
+- **Excel içeri aktarma:** Alen Otomat ürün koduyla (`products.code_key`'e karşı `foldTr`) eşlenir; eşleşmeyen
+  kod "ürün kartı yok" uyarısıyla atlanır. **Aynı Alen kodundan BİRDEN ÇOK satır** (gerçek dosyada 27-28/398
+  görüldü) en YENİ olan (rev. tarihi, yoksa yayın tarihi, yoksa kayıt tarihi) baz alınır, diğeri "yinelenen"
+  uyarısıyla atlanır — sessizce üzerine yazılmaz. Geçersiz tarih (gerçek veride çoğu satırda "-" placeholder)
+  satırı düşürmez, yalnız o alanı `null` bırakıp uyarır (gkk.js'in `badDate` deseniyle aynı, GKK/ölçüm cihazları
+  takibin "tüm satırı at" yaklaşımından farklı: burada diğer alanlar hâlâ değerli).
+- **Ekran** (`dashboard/planning-drawing-tracking.js`, `g-urunler` grubunda `programlar`/`urunler`'in yanında):
+  liste `planning-products.js`'in load-more sayfalama desenini izler (514 ürünün tamamı, `products.search_key`
+  ile aynı arama). **Satıra basınca** (resim VARSA) PDF doğrudan açılır — tek dosyaysa direkt yeni sekmede, birden
+  çoksa küçük bir seçim listesiyle (ürün detayı `GET /api/planning/products/:kod`'un zaten döndürdüğü `files`
+  listesi yeniden kullanılır, YENİ bir çoklu-dosya ucu YAZILMADI). Ayrı bir **"Düzenle"** düğmesi (satırda zaten
+  yüklü veriyle açılır, yeniden sorgulanmaz) Excel'in 9 alanını elle düzeltir — rev no da dahil (yanlış geldiyse).
+  Admin-only "Excel'den içeri aktar…" (Ölçüm Cihazları Takip'teki pencereyle aynı desen).
+- **Dosyalar:** `backend/planning/drawing-tracking.js` (`DrawingTracking` sınıfı, tablo `drawing_tracking`,
+  `planlama.db`'de kendi `CREATE TABLE IF NOT EXISTS`'i ile — diğer alt modüllerle aynı, hangi modülden önce
+  ilklenirse ilklensin bağımsız çalışır), `planning.js` (`this.drawingTracking`), `doc-folder.js` (`match()`'teki
+  tek satırlık kanca), `routes.js`, `dashboard/planning-drawing-tracking.js`, `dashboard/planning-view.js`
+  (NAV_LAYOUT/TABS girdisi), `dashboard/app.js` (hash yönlendirme deseni — Numune eklenirken BU adım bir kez
+  unutulmuştu, bu kez bilerek kontrol edildi).
+- **Ekran yetkisi** (esnek rol sistemi): `shared/screens.js`/`dashboard/screens.js`'e `teknikresim`
+  (`writable:true`, Ürünler grubunda `urunler`'in hemen ardında) eklendi; `backend/auth/policy.js`
+  `SCREEN_ROUTES`'a GET `/api/planning/drawing-tracking` ve PUT `.../:kod` (okuma/yazma); **Excel içeri aktarma
+  (`POST .../import`) kayıtsız bırakıldı** → varsayılan reddet, admin'e düşer (diğer Excel-içeri-alma
+  özellikleriyle aynı desen).
+- **Uçlar:** `GET /api/planning/drawing-tracking?q=&limit=&offset=` (liste) · `PUT .../:kod` (düzenle; satır yoksa
+  oluşturulur) · `POST .../import` (gövde = ham `.xlsx`, admin).
+- **Doğrulama:** `backend/planning/drawing-tracking.test.js` (12 test: `recordDrawingChange`'in üç senaryosu —
+  hiç izlenmeyen üründe ilk eşleme/revizyon, Excel baseline'ı koruma, gerçek revizyonda +1 — `update` kısmi
+  alan değişimi, `list`, Excel içeri aktarma — gerçekçi dosya, ürün kartı olmayan kod, yinelenen kod de-dup,
+  başlık bulunamama — uçtan uca HTTP) + `doc-folder.test.js`'e 3 assertion (ilk eşleme rev_no'yu artırmıyor,
+  içerik değişmeyince artmıyor, gerçek revizyonda +1 artıyor — mevcut "güncelleme" testinin içine eklendi).
+  `npm test` 671/671 yeşil (yeni ekran eklenince `apps.test.js`/`features.test.js`'teki sabit sekme sayısı/
+  listesi güncellendi, önceki ekranlarda olduğu gibi). **Tarayıcıda gerçek sunucuya (AUTH_DISABLED) karşı uçtan
+  uca denendi:** boş liste (514 gerçek ürün) → "Düzenle" ile alan kaydetme → "Teknik resimleri eşle…" ile gerçek
+  bir PDF'i bir ürüne bağlama (ilk eşleme, rev_no 0 kaldı, doğrulandı) → aynı üründe birden çok dosya varken
+  satıra basınca çoklu-dosya seçim penceresi doğru açıldı → **gerçek EYS.LS007 Excel dosyasının içeri aktarımı**
+  (`POST .../import`'a ham baytlarla, tarayıcının native dosya seçicisi bu oturumda sürülemedi — projedeki diğer
+  Excel içeri alma özellikleriyle aynı bilinen sınır): 389 satır okundu, **343 eşleşti, 28 yinelenen, 18 ürün
+  kartı yok**, 26 uyarı (çoğu "-" placeholder tarih); gerçek bir satır (`SR050.002`) alan alan doğrulandı (rev
+  no, yayın tarihi, müşteri birebir kaynak dosyayla tuttu). Test için eklenen sentetik PDF dosyası silindi,
+  gerçek 343 satırlık içeri aktarım dev veritabanında kaldı (önceki EYS.LS.006/EYS.LS.018 oturumlarındaki aynı
+  ilke: sentetik test verisi temizlenir, gerçek içeri aktarım kalır).
+- **DENENMEDİ:** gerçek yazıcıdan baskı (bu ekranın kâğıt karşılığı yok, yalnız ekran); tarayıcıdan native dosya
+  seçiciyle içeri aktarma; fabrika PC'sinde gerçek kullanım; admin'in bu ekranı hangi role açacağına karar
+  vermesi (göçle gelen İzleyici/Operatör rollerine otomatik eklenmedi — diğer yeni ekranlarla aynı, `Ayarlar >
+  Roller`den elle verilir); çok büyük (>1000) ürün listesinde arama performansı (514 ürünle sorunsuzdu).
+
 **Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
 `RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
 gönderme öncesi ve adlandırmadan hemen önce `LIST` ile ikinci çakışma denetimi var, yine de
@@ -1667,7 +1758,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `dashboard/format.js` | Alan tanımları ve etiketler — **arayüzün tek kaynağı**. |
 | `dashboard/config-view.js` | Ayarlar ekranı. |
 | `dashboard/production-view.js` | Tezgah detayındaki vardiya adetleri paneli ve "Üretim raporu" ekranı (makine / ürün / günlük görünümü). |
-| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`) · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
+| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`) · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Teknik resim takip (`planning-drawing-tracking.js`, `drawing-tracking.js`; her ürünün resim durumu/rev no/tarihleri, EYS.LS.007, §6 "Teknik Resim Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
 | `backend/planning/packing.js` · `dashboard/planning-packing-form.js` | Paketleme formu (EYS.FR.007): vardiya sayfası, satırlar, hava basıncı, koli içi adet öğrenme/öneri, yazdırma. Bkz. §6 "Paketleme formu". |
 | `backend/planning/doc-folder.js` · `dashboard/planning-docs.js` | Teknik resim klasörü ve etiket klasörü (iki ayrı `DocFolder`): dosyaları ürün koduna göre ürün kartlarına bağlama, eşle penceresi. Bkz. §6 "Teknik resim klasörü ve Etiket klasörü". |
 | `backend/planning/sources.js` · `dashboard/planning-sources.js` | Kaynak klasörü: Mikro/GKK Excel dosyalarını sabit klasörden okuyup değişenleri uygulama ("Kaynak dosyadan yenile"), klasör ayarı ve sonuç penceresi. Bkz. §6 "Kaynak klasörü". |
@@ -1723,6 +1814,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `/api/planning/samples` (GET/POST) · `samples/:id` (GET/PUT/DELETE) · `samples/:id/decide\|reopen` (POST) · `samples/sequence` (PUT) | **Numune takip** (EYS.FR.012, `products`'a bağlanmaz): liste (`?q=&status=`), yeni form (yalnız müşteri zorunlu), ayrıntı/düzenle, sil (admin), müşteriden gelen karar (`{status, decidedOn?, note?}`) ve geri al, numara tabanı (admin). `numune` ekranı: GET okuma, POST/PUT/decide/reopen yazma. |
 | `/api/planning/quarantine` (GET/POST) · `quarantine/:id` (GET/PUT/DELETE) · `quarantine/:id/exit\|reopen\|corrections` (POST) · `quarantine/corrections/:id` (DELETE) | **Hurda girişi** (karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, `products`'a bağlanmaz, §6 "Hurda Girişi"): liste (`?q=&status=`), yeni giriş kaydı, ayrıntı (tashih geçmişi + toplamlar) / düzenle, sil (admin), çıkış yap (`{exitReason, exitedOn?, exitedBy}`), geri al, tashih ekle (`{doneOn?, operator, description, qty, okQty?, scrapQty?, manHours?, note?}`), tashih sil (admin). `hurda` ekranı: GET okuma, POST/PUT/exit/reopen/corrections yazma. |
 | `/api/planning/devices` (GET/POST) · `devices/import` (POST) · `devices/:id` (GET/PUT/DELETE) | **Ölçüm cihazları takip** (EYS.LS.006, `products`'a bağlanmaz, §6 "Ölçüm Cihazları Takip"): liste (`?q=&active=&usable=&calibration=`, kalibrasyon durumu hesaplanır), yeni cihaz ekle, Excel'den ilk kurulum aktarımı (gövde = ham `.xlsx`, admin), ayrıntı/düzenle, sil (admin). `olcucihazlari` ekranı: GET okuma, POST/PUT yazma; `import` ve `DELETE` kayıtsız → admin. |
+| `GET /api/planning/drawing-tracking?q=&limit=&offset=` · `PUT drawing-tracking/:kod` · `POST drawing-tracking/import` | **Teknik resim takip** (EYS.LS.007, `products`'a bağlı okur ama ayrı tabloda tutar, §6 "Teknik Resim Takip"): sistemdeki her ürünün resim durumu (var/yok, dosya sayısı)/rev no (sistem otomatik artırır)/tarihleri, liste (ürün listesiyle aynı arama), düzenle (satır yoksa oluşturulur), Excel'den ilk/tekrar aktarım (gövde = ham `.xlsx`, admin; Alen koduyla eşler, yinelenen kod en yeniyi baz alır). `teknikresim` ekranı: GET okuma, PUT yazma; `import` kayıtsız → admin. |
 | `/api/planning/work-orders/:no/print.pdf` (GET) · `work-orders/:no/drawings.pdf` (GET) · `work-orders/:no/drawings?name=` (POST) · `work-orders/:no/drawings/:id` (DELETE) | **İş emri formu + teknik resimler**: `print.pdf` = form (ön sayfa) + resimler (arka sayfalar) TEK PDF (`application/pdf`, izleyici ve operatör dahil herkes; ekranda gösterilen ve basılan dosya) · `drawings.pdf` = yalnız birleşik resimler · yükle (gövde = ham PDF, yönetici) · kaldır (yönetici). |
 | `/api/planning/measure-reports` · `work-orders/:no/measure-report` · `products/:kod/measure-plan` (PUT) | **Ölçü raporları** (okuma herkes): ölçümü olan iş emirleri ve bir iş emrinin tüm ölçümleri · ürün kartının kalıcı ölçü planı (yönetici). |
 | `/api/planning/work-orders` (+ `/next`, `/sequence`, `/:no`, `/:no/cancel`, `/:no/start`, `/:no/finish`, `/:no/reopen`) | **İş emri** (yalnız admin): liste (`?q=&status=&machine=`), oluştur (POST: `lineId` ya da `stockCode`, `targetQty`, `machineId`, …), sıradaki numara, numara tabanı (PUT), ayrıntı + geçmiş + gerçekleşen üretim (`progress`), düzenle (PUT), iptal (POST, `reason`), **üretime başlat** (`machineId?, startAt?, person?, fields?`), **bitir** (`endAt?, person?`; sonuç dondurulur), **üretime geri al**. |
@@ -1767,6 +1859,10 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
       denendi (169/175 gerçek cihaz içeri aktarıldı, kalibrasyon renkleri doğru). **Sıradaki:** gerçek yazıcıdan baskı, fabrika PC'sinde
       Setup.exe sonrası gerçek ilk kurulum akışı (bu ekranın asıl amacı budur), admin'in bu ekranı hangi role açacağına karar vermesi.
       Yukarıdaki installer v1.0.2 yeniden derlemesi bu özelliği de kapsamalı.
+- [x] ~~Teknik Resim Takip (EYS.LS.007)~~ — yapıldı (2026-11-06), bkz. §6 "Teknik Resim Takip". Gerçek EYS.LS.007 dosyasıyla uçtan uca
+      denendi (343/389 satır eşleşti); `doc-folder.js` kancası ("ilk eşleme vs gerçek revizyon" ayrımı) gerçek bir PDF ile tarayıcıda da
+      doğrulandı. **Sıradaki:** gerçek fabrika kullanımı, admin'in bu ekranı hangi role açacağına karar vermesi. Installer yeniden derlemesi
+      bu özelliği de kapsamalı (yeni ekran, kod değişikliği yok ama güncel paket için).
 - [ ] **Çizelgeleme / optimizasyon (OR-Tools CP-SAT) — MVP + Setup.exe'ye Python gömme YAPILDI (2026-10-26), yalnız sentetik veriyle ve bu makinede derlenen pakette denendi.** Ayrıntı: §6 "Çizelgeleme / optimizasyon". Sıradaki: fabrika PC'sinde gerçek kurulum + gerçek iş emri verisiyle dene.
 - [ ] **`kurulum/kurulum.ps1`'i gerçek Windows'ta çalıştır** — yükseltilmiş
       oturumda hiç denenmedi. Artık en kolay yol: `installer/` ile üretilen

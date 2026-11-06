@@ -26,6 +26,7 @@ import { renderApprovals } from './planning-approvals.js';
 import { renderSamples } from './planning-numune.js';
 import { renderMeasureReports } from './planning-reports.js';
 import { renderDevices } from './planning-devices.js';
+import { renderDrawingTracking } from './planning-drawing-tracking.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
 import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
 import { openFolderDialog } from './planning-docs.js';
@@ -44,6 +45,7 @@ const TABS = Object.freeze([
   { key: 'olcucihazlari', label: 'Ölçüm cihazları takip', sub: 'mastar, kumpas, kalibrasyon (EYS.LS.006)', hint: 'Satır rengi kalibrasyon vaktine göre: yeşil/sarı/kırmızı.', plain: true, render: renderDevices },
   { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
   { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', render: renderProducts },
+  { key: 'teknikresim', label: 'Teknik resim takip', sub: 'resim no, rev no, tarihler (EYS.LS.007)', hint: 'Rev no sistem tarafından otomatik artırılır.', plain: true, render: renderDrawingTracking },
   { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', render: renderOrders },
   { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', plain: true, render: renderMaterial },
   { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Kazanılan süre ÷ ayrılan süre.', plain: true, render: renderEfficiency },
@@ -64,13 +66,17 @@ export const defaultPlanningTab = (user = userOf()) => defaultTabFor(user, close
  * acilir-kapanir gruplarda. Siparisler kasitli tek basina (`label:null`), grup sarmalayici almaz. Bir
  * rolun bir grupta YALNIZ 1 gorebildigi sekme varsa (ya da `label` yoksa) grup basligi hic gosterilmez,
  * dugme duz listelenir — tek elemanli bir grubu acip kapamanin anlami yok.
+ * **Tezgah başı ve Siparişler en üstte, tek başına (2026-11-06, kullanıcı isteği):** en sık açılan iki
+ * ekran — tezgah başı en çok kullanıcı tarafından, siparişler aranarak — artık grup içine gömülü değil,
+ * ilk ikisi. `tezgahbasi` `g-uretim` grubundan çıkarıldı.
  */
 const NAV_LAYOUT = Object.freeze([
-  { id: 'g-depo', label: 'Depo', keys: ['paketleme', 'hurda'] },
-  { id: 'g-uretim', label: 'Üretim', keys: ['tezgahbasi', 'isemirleri', 'numune', 'hammadde', 'fiyat'] },
-  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari'] },
-  { id: 'g-urunler', label: 'Ürünler', keys: ['programlar', 'urunler'] },
+  { id: null, label: null, keys: ['tezgahbasi'] },
   { id: null, label: null, keys: ['siparisler'] },
+  { id: 'g-depo', label: 'Depo', keys: ['paketleme', 'hurda'] },
+  { id: 'g-uretim', label: 'Üretim', keys: ['isemirleri', 'numune', 'hammadde', 'fiyat'] },
+  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari'] },
+  { id: 'g-urunler', label: 'Ürünler', keys: ['programlar', 'urunler', 'teknikresim'] },
   { id: 'g-analiz', label: 'Analiz', keys: ['verimlilik', 'cizelgeleme'] },
 ]);
 /** Hangi gruplar acik: modul seviyesinde hatirlanir (nav her sekme degisiminde yeniden cizilir, kapanmasin). */

@@ -47,6 +47,9 @@
  *   POST /api/planning/devices                            yeni olcum cihazi ekle (yalniz kategori+tanim zorunlu)
  *   POST /api/planning/devices/import                      Setup kurulumunda ILK SEFER icin EYS.LS.006 Excel'ini iceri aktar (govde = ham .xlsx)
  *   GET/PUT /api/planning/devices/:id                      ayrinti (kalibrasyon durumu hesaplanir) / duzenle;  DELETE .../:id  (yalniz yonetici)
+ *   GET  /api/planning/drawing-tracking?q=&limit=&offset=   TEKNIK RESIM TAKIP (EYS.LS.007): sistemdeki her urunun resim durumu/rev no/tarihleri
+ *   PUT  /api/planning/drawing-tracking/:kod                izleme alanlarini duzenle (yalniz gonderilen alanlar degisir)
+ *   POST /api/planning/drawing-tracking/import              gercek EYS.LS.007 Excel'ini ilk aktar (govde = ham .xlsx, yalniz yonetici)
  *   GET  /api/planning/downtime-codes                   durus nedeni kodlari (D1-D46, Z1-Z4) ve gruplari
  *   GET  /api/planning/shop/overview                    fabrika PC'si ana ekrani: tezgah basina durum, uretimdeki is emri, bekleyenler, nedeni sorulmamis duruslar
  *   GET  /api/planning/shop/stops?machine=&hours=       bir tezgahin OLCULMUS duruslari ve baglanmis nedenleri
@@ -364,6 +367,20 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         if (method === 'GET') return sendJson(res, 200, planning.measuringDevices.get(Number(m[1]))), true;
         if (method === 'PUT') return sendJson(res, 200, planning.measuringDevices.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
         if (method === 'DELETE') return sendJson(res, 200, planning.measuringDevices.delete(Number(m[1]))), true;
+      }
+
+      /* ---- teknik resim takip (EYS.LS.007) ---- */
+      if (method === 'GET' && path === '/api/planning/drawing-tracking') {
+        return sendJson(res, 200, planning.drawingTracking.list({
+          q: url.searchParams.get('q') ?? '', limit: intParam(url, 'limit', 200, { min: 1, max: 2000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+        })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/drawing-tracking/import') {
+        const body = await readBuffer(req, MAX_CSV_BYTES);
+        return sendJson(res, 200, planning.drawingTracking.importXlsx(body, { by: who(req) })), true;
+      }
+      if (method === 'PUT' && (m = /^\/api\/planning\/drawing-tracking\/([^/]+)$/.exec(path))) {
+        return sendJson(res, 200, planning.drawingTracking.update(decodeURIComponent(m[1]), await readJson(req), { by: who(req) })), true;
       }
 
       /* ---- siparisler ---- */

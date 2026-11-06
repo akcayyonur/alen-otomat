@@ -26,6 +26,7 @@ import { PriceStudies } from './price-studies.js';
 import { SampleTracking } from './sample-tracking.js';
 import { Quarantine } from './quarantine.js';
 import { MeasuringDevices } from './measuring-devices.js';
+import { DrawingTracking } from './drawing-tracking.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -103,6 +104,8 @@ export class Planning {
     /** Teknik resim (PDF) ve etiket (Word) klasorleri: dosyalar urun koduna gore urun kartlarina eslenir (doc-folder.js). Iki AYRI klasor. */
     this.drawingFolder = new DocFolder({ planning: this, kind: 'cizim', defaultDir: drawingsDir });
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });
+    /** Teknik resim TAKIBI (EYS.LS.007): her urunun resminin ne zaman kayda girdigi / revize oldugu (drawing-tracking.js); `drawingFolder`'in match()'i bunu cagirir. */
+    this.drawingTracking = new DrawingTracking({ planning: this });
     /** Paketleme formu (EYS.FR.007): urun kodu uzerinden satirlar, koli ici adet ogrenme/oneri (packing.js). */
     this.packing = new Packing({ planning: this });
     /** Bitmiş ürün depo akışı (product-depot.js): iş emri bitince Merkez->Geçici, paketlenince Geçici->Merkez; `mikroStock`'u kullanır. */
@@ -548,6 +551,8 @@ export class Planning {
       consumption: { ...c, fis: this.#fisOf(w) },
       // bitmis urun depo akisi (Merkez<->Gecici, Mikro): product-depot.js statusFor() getWorkOrder()'i TEKRAR CAGIRMAZ (sonsuz donguyu onlemek icin ham satirdan okur).
       depot: this.productDepot.statusFor(w.no),
+      // kart basma penceresindeki "ek islem" onerisi: bu urunun gecmis kartlarinda yikama/kurutma/tavlama'ya GIDECEK isaretlenmis mi (bkz. cardStepDefaultsFor).
+      cardStepDefaults: this.db.cardStepDefaultsFor(w.codeKey),
       reservation: this.db.getReservation(w.no),
       events: this.db.workOrderEvents(w.no),
       line: w.lineId == null ? null : this.db.getLine(w.lineId),

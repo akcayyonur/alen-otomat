@@ -19,6 +19,8 @@
  *   - Varsayilan: yalniz resmi / etiketi OLMAYAN urunler eslenir. Olana dokunulmaz (elle yuklenmis eski resimler ve is emri resimleri de "var" sayilir).
  *     `update`: klasorden eslenmis dosyalar yeniden okunur, icerik degistiyse (yeni revizyon) yenisiyle degistirilir; elle eklenenlere dokunulmaz.
  *   - Yeni baglanan teknik resimler, ayni urunun BITMEMIS (planlandi / uretimde) ve resimsiz is emirlerine de baglanir.
+ *   - 'cizim' dosyasi basariyla eklendiginde (yeni VEYA revizyon) `drawingTracking.recordDrawingChange()` cagrilir
+ *     (TEKNIK RESIM TAKIP, EYS.LS.007): ilk dijital esleme rev_no'yu artirmaz, gercek revizyon +1 artirir.
  *
  * Not: sunucu SYSTEM hesabiyla calisir; ag paylasimi ona kapali olabilir, YEREL klasor kullanin.
  */
@@ -302,6 +304,7 @@ export class DocFolder {
         } else { result.alreadyHad += 1; continue; }
 
         if (names.length === 0) continue;
+        if (kind === 'cizim') this.planning.drawingTracking.recordDrawingChange(key, { isRevision: had, now });
         result.products += 1;
         if (updated) result.updated += 1;
         const orders = kind === 'cizim' ? this.#quality.applyProductDrawingsToOpenOrders(key, { by, now }) : 0;

@@ -144,6 +144,26 @@ test('kart bas: uyarilar (hic parca sayilmadi, az once baska kart basildi, tezga
   assert.ok(k3.warnings.some((x) => /veri gelmiyor/.test(x)));
 });
 
+test('cardStepDefaults: urun ilk kez kart basiyorsa hepsi false (ekIslem zorunlu secim); gecmiste bir kart washTo isaretliyse SONRAKI is emrinde (AYNI urun) washTo onerisi true gelir', () => {
+  const { p, st } = kur();
+  const w1 = uretimde(p, st);
+  assert.deepEqual(p.getWorkOrder(w1.no, { now: NOW }).cardStepDefaults, { washTo: false, dryTo: false, annealTo: false }, 'daha once hic kart basilmadi: oneri yok');
+
+  p.issueCard(w1.no, { person: 'Ayşe', steps: { washTo: true } }, { now: day(9) });
+  // AYNI urun icin YENI bir is emri ac (farkli is emri no, ayni SR001.013) - oneri is emrine degil URUNE bagli olmali.
+  const w2 = uretimde(p, st, { machineId: 'CNC-03' });
+  assert.deepEqual(p.getWorkOrder(w2.no, { now: NOW }).cardStepDefaults, { washTo: true, dryTo: false, annealTo: false }, 'ayni urunun onceki kartinda washTo isaretliydi, yeni is emrinde oneri olarak gelmeli');
+});
+
+test('cardStepDefaults: IPTAL EDILEN kart oneriye KATILMAZ', () => {
+  const { p, st } = kur();
+  const w1 = uretimde(p, st);
+  const k = p.issueCard(w1.no, { person: 'Ayşe', steps: { dryTo: true } }, { now: day(9) });
+  p.voidCrate(k.id, { reason: 'yanlis basildi' }, { now: day(9, 5) });
+  const w2 = uretimde(p, st, { machineId: 'CNC-03' });
+  assert.deepEqual(p.getWorkOrder(w2.no, { now: NOW }).cardStepDefaults, { washTo: false, dryTo: false, annealTo: false }, 'iptal edilen kartin isaretleri oneriye yansimamali');
+});
+
 test('tezgah basi ozeti: basilan kart sayisi ve en son kart', () => {
   const { p, st } = kur();
   const w = uretimde(p, st);

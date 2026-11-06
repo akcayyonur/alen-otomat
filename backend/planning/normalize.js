@@ -33,6 +33,23 @@ export const headerKey = (value) => foldTr(value).replace(/[^A-Z0-9]/g, '');
 /** Siparis no gibi serbest kodlar icin: bosluklar da atilir ("sas 123" = "SAS123"). */
 export const looseKey = (value) => foldTr(value).replace(/\s+/g, '');
 
+/**
+ * Excel sayfasinda baslik satirini bulur: form basligi/lejant ustte olabilir, bu yuzden ilk `maxRows` satirda
+ * aranir (GKK/Olcum Cihazlari/Teknik Resim takip formlarinin ayni deseni; tek yerde tutulur).
+ * @param {string[][]} rows "[baslik, ...veri]" ya da dogrudan hucre dizisi; her satir hucre degerleri dizisi.
+ * @param {string[]} requiredKeys hepsi satirda bulunmali (headerKey ile karsilastirilir).
+ * @returns {{index: Map<string, number>, headerRow: number}|null}
+ */
+export function findHeaderByKeys(rows, requiredKeys, { maxRows = 12 } = {}) {
+  for (let r = 0; r < Math.min(rows.length, maxRows); r += 1) {
+    const keys = rows[r].map(headerKey);
+    if (requiredKeys.every((k) => keys.includes(k))) {
+      return { index: new Map(keys.map((k, i) => [k, i]).filter(([k]) => k !== '').reverse()), headerRow: r };
+    }
+  }
+  return null;
+}
+
 /** Excel'in sayi hucresinden yazdigi ".0" sonekini ve kenar bosluklarini temizler ("2400000001.0" -> "2400000001"). */
 export function cleanCode(value) {
   const t = String(value ?? '').replace(/ /g, ' ').trim();

@@ -154,6 +154,29 @@ test('sendFinishTransfer: Mikro hata dönerse BASARISIZ kaydedilir, pending hâl
   assert.equal(r2.bitis.history.length, 2, 'basarisiz deneme de tarihcede kalir');
 });
 
+// regresyon (2026-11-06, review ile bulundu): #sentTotal esitligi senkron, Mikro cagrisi asenkron - once busy kapisi
+// yoktu, ayni is emri icin eszamanli iki cagri ayni (eski) sentTotal'i gorup AYNI delta'yi iki kez gonderebilirdi.
+test('busy kapisi: ayni is emri icin eszamanli iki gonderim CIFT GONDERIM yapmaz - ikincisi 409 busy ile reddedilir, delta tek sefer gider', async () => {
+  const { p, calls } = kur({
+    call: async () => {
+      await new Promise((r) => setTimeout(r, 30)); // asil hatayi ortaya cikaran gecikme: ikinci cagri da #sentTotal'i bu sirada okur
+      return { Data: { list: [{ evrakno_seri: 'CNCT', evrakno_sira: '1' }] } };
+    },
+  });
+  const no = bitmisIsEmri(p, 100);
+  const [r1, r2] = await Promise.allSettled([p.productDepot.sendFinishTransfer(no), p.productDepot.sendFinishTransfer(no)]);
+  const basarili = [r1, r2].filter((r) => r.status === 'fulfilled');
+  const reddedilen = [r1, r2].filter((r) => r.status === 'rejected');
+  assert.equal(basarili.length, 1, 'yalniz biri basarili olmali (digeri esanli oldugu icin reddedilmeli)');
+  assert.equal(reddedilen.length, 1);
+  assert.equal(reddedilen[0].reason.code, 'busy');
+  assert.equal(calls.length, 1, 'Mikroya yalniz BIR cagri gitmeli - busy kapisi olmasaydi 2 giderdi (cift gonderim)');
+  assert.equal(p.productDepot.statusFor(no).bitis.sent, 100, '200 DEGIL - dogru miktar tam bir kez gonderilmis olmali');
+
+  // reddedilen cagri veri KAYBETMEZ: busy acilinca ayni delta'yi normal sekilde (elle yeniden deneme ile) yine gonderebilir.
+  await assert.rejects(() => p.productDepot.sendFinishTransfer(no), (e) => e.status === 409 && e.code === 'nothing-to-send', 'zaten tam gonderilmis, tekrar gonderilecek bir sey yok');
+});
+
 test('sendPackingTransfer: hiç paketlenmemişken 409 nothing-to-send', async () => {
   const { p } = kur();
   const no = bitmisIsEmri(p, 100);

@@ -12,7 +12,7 @@
  *   Kayıtta ölçünün ardından gelen EK sözcükler (ISIL İŞLEMLİ, HB, TAVLI, R430S ...) ayrı işlemi gösterir: aynı ölçü ama farklı malzeme, bu yüzden
  *   ek sözcükleri ERP koduyla birebir tutanlar "tam eşleşme", tutmayanlar "aynı ölçü, işlem farklı" diye ayrı sınıflanır (ustaya gösterilir, seçtirilir).
  */
-import { foldTr, headerKey, parseDate, sheetRow } from './normalize.js';
+import { findHeaderByKeys, foldTr, parseDate, sheetRow } from './normalize.js';
 
 export const ALLOY_ERP = Object.freeze({ 614: 'PB3', 617: 'PB2', 602: '602N', 603: 'CW603N', 3604: 'C3604BD' });
 const SHAPE_ORDER = ['YUV', 'AA', 'SK'];
@@ -115,13 +115,7 @@ export function compareMaterials(a, b) {
  */
 export function findGkkHeader(parsed) {
   const all = [parsed.headers, ...parsed.rows];
-  for (let r = 0; r < Math.min(all.length, 12); r += 1) {
-    const keys = all[r].map(headerKey);
-    if (keys.includes('RAPORNO') && keys.includes('URETICIRAPORTARIHI')) {
-      return { index: new Map(keys.map((k, i) => [k, i]).filter(([k]) => k !== '').reverse()), headerRow: r };
-    }
-  }
-  return null;
+  return findHeaderByKeys(all, ['RAPORNO', 'URETICIRAPORTARIHI']);
 }
 
 /**

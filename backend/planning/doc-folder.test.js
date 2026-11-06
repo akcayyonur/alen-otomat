@@ -145,15 +145,18 @@ test('guncelleme: klasorden eslenmis dosya degistiyse (yeni revizyon) yenisiyle 
   try {
     k.yaz(k.resim, 'SR001.001.pdf', pdf('REV-A'));
     k.p.drawingFolder.match({ now: NOW });
+    assert.equal(k.p.drawingTracking.list({ q: 'SR001.001' }).items[0].revNo, 0, 'teknik resim takip: ilk esleme rev_no artirmadi');
     k.p.quality.addProductFile('SR001.001', 'cizim', { name: 'elle-ek.pdf', data: pdf('EK'), source: 'elle' }, { now: NOW });
 
     const ayni = k.p.drawingFolder.match({ update: true, now: NOW });
     assert.deepEqual([ayni.updated, ayni.unchanged, ayni.products], [0, 1, 0]);
+    assert.equal(k.p.drawingTracking.list({ q: 'SR001.001' }).items[0].revNo, 0, 'icerik degismedi: rev_no hala 0');
 
     k.yaz(k.resim, 'SR001.001.pdf', pdf('REV-B'));
     const guncel = k.p.drawingFolder.match({ update: true, now: NOW });
     assert.deepEqual([guncel.updated, guncel.products], [1, 1]);
     assert.deepEqual(guncel.attached, [{ stockCode: 'SR001.001', files: ['SR001.001.pdf'], updated: true, orders: 0, via: ['ürün kodu'] }]);
+    assert.equal(k.p.drawingTracking.list({ q: 'SR001.001' }).items[0].revNo, 1, 'teknik resim takip: gercek revizyon rev_no +1 artti');
     const dosyalar = k.p.getProduct('SR001.001').files;
     assert.deepEqual(dosyalar.map((f) => [f.name, f.source]).sort(), [['SR001.001.pdf', 'klasor'], ['elle-ek.pdf', 'elle']]);
     // guncelleme istenmediyse (varsayilan) degisen dosya YENIDEN okunmaz

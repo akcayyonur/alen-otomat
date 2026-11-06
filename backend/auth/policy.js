@@ -81,6 +81,19 @@ export const SCREEN_ROUTES = Object.freeze([
   [['PUT'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'write'],
   [['POST'], /^\/api\/planning\/samples\/\d{1,12}\/(?:decide|reopen)$/, 'numune', 'write'],
 
+  // hurda girisi (karantina giris-cikis EYS.FR.043 + tashih EYS.FR.049): uretimde fark edilen hurda/uygunsuz parca; silme kayitsiz -> admin
+  [['GET'], /^\/api\/planning\/quarantine$/, 'hurda', 'read'],
+  [['POST'], /^\/api\/planning\/quarantine$/, 'hurda', 'write'],
+  [['GET'], /^\/api\/planning\/quarantine\/\d{1,12}$/, 'hurda', 'read'],
+  [['PUT'], /^\/api\/planning\/quarantine\/\d{1,12}$/, 'hurda', 'write'],
+  [['POST'], /^\/api\/planning\/quarantine\/\d{1,12}\/(?:exit|reopen|corrections)$/, 'hurda', 'write'],
+
+  // olcum cihazlari takip (EYS.LS.006): okuma/ekleme/duzenleme role'e; silme ve Excel'den toplu iceri aktarma kayitsiz -> admin
+  [['GET'], /^\/api\/planning\/devices$/, 'olcucihazlari', 'read'],
+  [['POST'], /^\/api\/planning\/devices$/, 'olcucihazlari', 'write'],
+  [['GET'], /^\/api\/planning\/devices\/\d{1,12}$/, 'olcucihazlari', 'read'],
+  [['PUT'], /^\/api\/planning\/devices\/\d{1,12}$/, 'olcucihazlari', 'write'],
+
   // olcu raporlari: HER ZAMAN salt okunur (girisler tezgah basindan / `tezgahbasi` ekranindan yapilir)
   [['GET'], /^\/api\/planning\/measure-reports$/, 'olcuraporlari', 'read'],
   [['GET'], /^\/api\/planning\/work-orders\/\d{10}\/measure-report$/, 'olcuraporlari', 'read'],

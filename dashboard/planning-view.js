@@ -1,5 +1,5 @@
 /**
- * Planlama uygulamasinin kabugu: #/planlama, #/planlama/tezgahbasi | paketleme | isemirleri | gkk | ilkonay | olcuraporlari | verimlilik | hammadde | urunler | siparisler | programlar.
+ * Planlama uygulamasinin kabugu: #/planlama, #/planlama/tezgahbasi | paketleme | hurda | isemirleri | gkk | ilkonay | olcuraporlari | verimlilik | hammadde | urunler | siparisler | programlar.
  * Roller: yonetici hepsini; operator (fabrika PC'si) tezgah basi, paketleme, GKK, ilk onay, olcu raporlari; izleyici (viewer) tezgah basi, is emirleri,
  * GKK, ilk onay ve olcu raporlarini YALNIZ OKUR (yetkiyi sunucu verir, burasi yalniz gorunum).
  * Planlama, Telemetri'den AYRI bir uygulamadir (apps.js): kendi yan menusu vardir (renderPlanningNav), tezgah listesi yoktur.
@@ -17,6 +17,7 @@ import { renderPrograms } from './planning-programs.js';
 import { renderWorkOrders } from './planning-workorders.js';
 import { renderShop } from './planning-shop.js';
 import { renderPacking } from './planning-packing.js';
+import { renderQuarantine } from './planning-hurda.js';
 import { renderMaterial } from './planning-material.js';
 import { renderEfficiency } from './planning-efficiency.js';
 import { renderSchedule } from './planning-schedule.js';
@@ -24,6 +25,7 @@ import { renderGkk } from './planning-gkk.js';
 import { renderApprovals } from './planning-approvals.js';
 import { renderSamples } from './planning-numune.js';
 import { renderMeasureReports } from './planning-reports.js';
+import { renderDevices } from './planning-devices.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
 import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
 import { openFolderDialog } from './planning-docs.js';
@@ -33,11 +35,13 @@ import { tabsForUser, defaultTabFor } from './planning-tabs.js';
 const TABS = Object.freeze([
   { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Duruş süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', plain: true, render: renderShop },
   { key: 'paketleme', label: 'Paketleme', sub: 'paketleme formu (EYS.FR.007)', hint: 'Koli içi adet ürün başına öğrenilir ve önerilir.', plain: true, render: renderPacking },
+  { key: 'hurda', label: 'Hurda girişi', sub: 'karantina giriş-çıkış (EYS.FR.043)', hint: 'Üretimde fark edilen hurda karantinaya çekilir; tashih EYS.FR.049 ile kaydedilir.', plain: true, render: renderQuarantine },
   { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca form açılır; "Düzenle" ile değiştirin.', render: renderWorkOrders },
   { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor no takibi (EYS.FR.011).', plain: true, importer: true, render: renderGkk },
   { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay listesi', hint: 'İlk baskı onay listesi (EYS.FR.013).', plain: true, importer: true, render: renderApprovals },
   { key: 'numune', label: 'Numune takip', sub: 'numune talep/takip formu', hint: 'Müşteriye numune üretilip gönderilmesi ve onay/ret takibi (EYS.FR.012).', plain: true, render: renderSamples },
   { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', plain: true, render: renderMeasureReports },
+  { key: 'olcucihazlari', label: 'Ölçüm cihazları takip', sub: 'mastar, kumpas, kalibrasyon (EYS.LS.006)', hint: 'Satır rengi kalibrasyon vaktine göre: yeşil/sarı/kırmızı.', plain: true, render: renderDevices },
   { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
   { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', render: renderProducts },
   { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', render: renderOrders },
@@ -55,16 +59,57 @@ export const planningTabsFor = (user = userOf()) => tabsForUser(user, closedSect
 /** Giriste acilan bolum: admin is emirlerini, digerleri gorebildiklerinden ilkini gorur. */
 export const defaultPlanningTab = (user = userOf()) => defaultTabFor(user, closedSections());
 
-/** Yan menu (app.js cagirir): bolum dugmeleri; secili bolum isaretlenir. Adresler #/planlama/<bolum>. */
+/**
+ * Yan menu duzeni (2026-11-04, kullanici karari — 15 sekme tek duz listede cok oldu): benzer bolumler
+ * acilir-kapanir gruplarda. Siparisler kasitli tek basina (`label:null`), grup sarmalayici almaz. Bir
+ * rolun bir grupta YALNIZ 1 gorebildigi sekme varsa (ya da `label` yoksa) grup basligi hic gosterilmez,
+ * dugme duz listelenir — tek elemanli bir grubu acip kapamanin anlami yok.
+ */
+const NAV_LAYOUT = Object.freeze([
+  { id: 'g-depo', label: 'Depo', keys: ['paketleme', 'hurda'] },
+  { id: 'g-uretim', label: 'Üretim', keys: ['tezgahbasi', 'isemirleri', 'numune', 'hammadde', 'fiyat'] },
+  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari'] },
+  { id: 'g-urunler', label: 'Ürünler', keys: ['programlar', 'urunler'] },
+  { id: null, label: null, keys: ['siparisler'] },
+  { id: 'g-analiz', label: 'Analiz', keys: ['verimlilik', 'cizelgeleme'] },
+]);
+/** Hangi gruplar acik: modul seviyesinde hatirlanir (nav her sekme degisiminde yeniden cizilir, kapanmasin). */
+const openGroups = new Set();
+
+/** Yan menu (app.js cagirir): bolum dugmeleri (gruplu); secili bolum isaretlenir. Adresler #/planlama/<bolum>. */
 export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
   const mine = visibleTabs();
   const current = mine.find((t) => t.key === tab) ?? mine[0];
+  const mineKeys = new Set(mine.map((t) => t.key));
+  const byKey = new Map(mine.map((t) => [t.key, t]));
   nav.hidden = mine.length < 2 && !userOf()?.isAdmin; // tek bolumlu rol: menu gereksiz
+
+  const btn = (t) =>
+    `<button class="mi${t.key === current.key ? ' is-active' : ''}" type="button" data-tab="${t.key}" aria-current="${t.key === current.key}">` +
+    `<span class="mi-main"><span class="mi-name">${escapeHtml(t.label)}</span><span class="mi-sub">${escapeHtml(t.sub)}</span></span></button>`;
+
   nav.innerHTML =
     '<p class="sidebar-label">Planlama</p>' +
-    mine.map((t) =>
-      `<button class="mi${t.key === current.key ? ' is-active' : ''}" type="button" data-tab="${t.key}" aria-current="${t.key === current.key}">` +
-      `<span class="mi-main"><span class="mi-name">${escapeHtml(t.label)}</span><span class="mi-sub">${escapeHtml(t.sub)}</span></span></button>`).join('');
+    NAV_LAYOUT.map((g) => {
+      const visible = g.keys.filter((k) => mineKeys.has(k));
+      if (visible.length === 0) return '';
+      if (!g.label || visible.length === 1) return visible.map((k) => btn(byKey.get(k))).join('');
+      if (visible.includes(current.key)) openGroups.add(g.id); // aktif sekmenin grubu hep acik kalir
+      const open = openGroups.has(g.id);
+      return `<details class="mi-grp" data-group="${g.id}"${open ? ' open' : ''}>` +
+        `<summary class="mi-grp-h">${escapeHtml(g.label)}</summary>` +
+        `<div class="mi-grp-b">${visible.map((k) => btn(byKey.get(k))).join('')}</div></details>`;
+    }).join('');
+
+  if (!nav.dataset.wired) {
+    nav.dataset.wired = '1';
+    // acik/kapali durumu hatirlanir (details'in kendi `toggle` olayi kabarmaz, yakalama asamasinda dinlenir).
+    nav.addEventListener('toggle', (ev) => {
+      const d = ev.target;
+      if (!d.matches?.('details.mi-grp')) return;
+      if (d.open) openGroups.add(d.dataset.group); else openGroups.delete(d.dataset.group);
+    }, true);
+  }
 }
 const KIND_LABEL = Object.freeze({ isemri: 'iş emirleri listesi', siparis: 'sipariş dosyası', gkk: 'GKK rapor numaraları (EYS.FR.011)', ilkonay: 'ilk baskı onay listesi (EYS.FR.013)' });
 const MAX_UPLOAD = 64 * 1024 * 1024;

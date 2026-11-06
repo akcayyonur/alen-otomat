@@ -24,6 +24,8 @@ import { Packing } from './packing.js';
 import { Schedule } from './schedule.js';
 import { PriceStudies } from './price-studies.js';
 import { SampleTracking } from './sample-tracking.js';
+import { Quarantine } from './quarantine.js';
+import { MeasuringDevices } from './measuring-devices.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -88,6 +90,10 @@ export class Planning {
     /** Fiyat çalışması: ürün kartı açılmadan önceki teknik resim + hammadde/süre ön çalışması (price-studies.js). `products` ile BAĞLANMAZ. */
     this.priceStudies = new PriceStudies({ planning: this });
     this.samples = new SampleTracking({ planning: this });
+    /** Hurda girişi: üretimde fark edilen hurda/uygunsuz parçanın karantina giriş-çıkış süreci (EYS.FR.043 + tashih EYS.FR.049). `products` ile BAĞLANMAZ. */
+    this.quarantine = new Quarantine({ planning: this });
+    /** Ölçüm cihazları takip (EYS.LS.006): mastar/kumpas/mihengir vb. envanteri + kalibrasyon zamanlaması. `products`/ölçü planıyla BAĞLANMAZ. */
+    this.measuringDevices = new MeasuringDevices({ planning: this });
     /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
     /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */
@@ -115,6 +121,38 @@ export class Planning {
     this.downtimeGroups = downtimeConfig.groups ?? [];
     this.downtimeMinMs = downtimeMinMs;
     if ((downtimeConfig.codes ?? []).length > 0) this.db.syncDowntimeCodes(downtimeConfig.codes);
+  }
+
+  /* -------------------------------------------------------------- paketleme + Mikro deposu (otomatik senkron) */
+
+  /**
+   * `packing.addRow`'u sarar: satır bir iş emrine bağlıysa, paketlenen DELTA'yı Geçici->Merkez transferiyle
+   * OTOMATİK Mikro'ya göndermeyi DENER (kullanıcı kararı, 2026-11-04 — önceden "Merkeze sevk et…" ELLE
+   * tıklanıyordu). Satır eklemeyi ASLA beklemez/engellemez: Mikro isteği arka planda (await edilmeden) atılır,
+   * hatası (kapalı/ulaşılamadı/vs) yalnız `product_depot_transfers` geçmişine yazılır (bkz. product-depot.js
+   * `#send`) — kullanıcı "Bitmiş ürün depo akışı" panelinden görür, "Merkeze sevk et…" düğmesi hâlâ orada
+   * ve elle yeniden deneme için çalışır durumda kalır (bu otomasyon onu DEĞİŞTİRMEZ, yalnız önceden tetikler).
+   * "Geçici'de kalan fark"ı temizlemek (`clearRemaining`) BİLEREK buraya BAĞLANMADI: paketleme o iş emri için
+   * GÜNLER sonra bile devam edebilir, otomatik temizlemek henüz paketlenmemiş gerçek stoğu "hurda" sanıp
+   * silebilir — kullanıcı kararı: bu adım ELLE kalsın (paketlemenin GERÇEKTEN bittiğinden yalnız admin emin olabilir).
+   */
+  addPackingRow(input, opts) {
+    const row = this.packing.addRow(input, opts);
+    this.#syncPackingDepot(row.woNo, opts);
+    return row;
+  }
+
+  /** `packing.updateRow`'u aynı otomatik Mikro senkronuyla sarar (bkz. `addPackingRow`) — adet artışı/azalışı da DELTA'ya yansır. */
+  updatePackingRow(id, input, opts) {
+    const row = this.packing.updateRow(id, input, opts);
+    this.#syncPackingDepot(row.woNo, opts);
+    return row;
+  }
+
+  /** İş emrine bağlı değilse (`woNo` yok) hiçbir şey yapmaz. Hata yutulur: `sendPackingTransfer` zaten kendi başarısızlığını kaydeder. */
+  #syncPackingDepot(woNo, { by } = {}) {
+    if (!woNo) return;
+    this.productDepot.sendPackingTransfer(woNo, { by }).catch(() => { /* gecmise zaten yazildi; "Merkeze sevk et..." ile elle yeniden denenebilir */ });
   }
 
   summary() {
@@ -417,7 +455,10 @@ export class Planning {
       this.db.insertWorkOrder({
         no, year, seq: info.next, machineId: f.machineId ?? null, codeKey: product.codeKey, stockCode: product.stockCode,
         lineId: line?.id ?? null, docNo: line?.docNo ?? '', custOrderNo: line?.custOrderNo ?? '', customer: line?.customer ?? '',
-        targetQty: f.targetQty, dueDate, sampleQty: f.sampleQty ?? null, productName: product.name, customerCode: product.customerCode,
+        // Mamul adi: siparis satirindan aciliyorsa o SATIRIN (Mikro'dan taze gelen) adi tercih edilir - urun kartinin adi
+        // bayatlamis olabilir (gercek ornek: kart "PIRINC SOMUN G1 SW37..." tutuyordu, siparis satiri "1050100107 1235-963
+        // PIRINC SOMUN G1 SW37..." idi, musteri kodlari eksik basiliyordu). Siparissiz acilista kart adina dusulur.
+        targetQty: f.targetQty, dueDate, sampleQty: f.sampleQty ?? null, productName: line?.itemName || product.name, customerCode: product.customerCode,
         ...snap, usedMaterial: f.usedMaterial ?? null, gkkReportNo: f.gkkReportNo ?? null,
         firstApprovalNo: f.firstApprovalNo ?? null, measuredNetKg: f.measuredNetKg ?? null, note: f.note ?? null, now, by,
       });

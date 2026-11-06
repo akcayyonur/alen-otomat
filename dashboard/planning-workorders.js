@@ -33,6 +33,7 @@ const EVENT_LABEL = Object.freeze({
   'fis-girildi': 'Mikro fişi girildi', 'fis-geri-alindi': 'Mikro fişi işareti geri alındı',
   'cizim-eklendi': 'teknik resim eklendi', 'cizim-silindi': 'teknik resim kaldırıldı',
   'hammadde-ayrildi': 'hammadde ayrıldı', 'hammadde-tuketildi': 'hammadde tüketildi', 'hammadde-serbest-birakildi': 'hammadde serbest bırakıldı', 'hammadde-tekrar-ayrildi': 'hammadde yeniden ayrıldı',
+  'gecici-depoya-aktarildi': 'Geçici depoya aktarıldı (Mikro)', 'merkez-depoya-sevk-edildi': 'Merkez depoya sevk edildi (Mikro)', 'gecici-depo-farki-temizlendi': 'Geçici depoda kalan fark temizlendi (Mikro)',
 });
 
 /** Ölçü satırlarının tek satırlık özeti ("3 ölçü: Ø34,2 · Boy 14 · Ø30,8"). */
@@ -244,7 +245,10 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
     m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`;
     return;
   }
-  const st = { mode: 'siparis', openOnly: true, orders: [], lines: null, orderTitle: '', line, stockCode: line?.stockCode ?? null, product: null, seq: 0 };
+  // st.order: secili siparis (varsa) - "Geri" ve olusturma sonrasi "Kapat" buraya DONER (yeniden aranmaz).
+  // Yalniz "Yeni is emri" dugmesinden (siparis secerek) girildiginde dolar; Siparisler sekmesindeki tek-satir
+  // "Is emri ac" kisayolunda (line hazir verilmis) bos kalir - o zaten arka planda kendi gorunumunu tutuyor.
+  const st = { mode: 'siparis', openOnly: true, orders: [], lines: null, orderTitle: '', order: null, line, stockCode: line?.stockCode ?? null, product: null, seq: 0 };
 
   /* ---- 1. adim: siparis / urun sec ---- */
   function drawPick() {
@@ -260,6 +264,9 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
       sequenceNotice(meta);
     m.body.querySelector('[data-role="pq"]').focus();
     runSearch();
+    // Daha once bir siparis secilip satirlari acilmissa (Geri ya da olusturma sonrasi buraya donusse), o siparisin
+    // satirlarini (TAZE - sayaclar degismis olabilir) hemen yeniden goster; kullanici yeniden aramak zorunda kalmasin.
+    if (st.mode === 'siparis' && st.order) showLines(st.order);
   }
 
   async function runSearch() {
@@ -290,6 +297,7 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
   }
 
   async function showLines(o) {
+    st.order = o;
     const box = m.body.querySelector('[data-role="lines"]');
     box.innerHTML = '<p class="empty">Satırlar yükleniyor…</p>';
     try {
@@ -388,16 +396,20 @@ export async function openNewWorkOrder({ line = null } = {}, onDone = () => {}) 
     m.body.innerHTML =
       `<div class="notice"><b>İş emri oluşturuldu: <span class="mono">${escapeHtml(w.no)}</span></b> · ${escapeHtml(w.stockCode)} · ${fmtNum(w.targetQty)} adet · ${w.machineId ? escapeHtml(w.machineId) : 'tezgah atanmadı (başlatırken seçilir)'}</div>` +
       (w.warnings?.length ? `<ul class="checks">${w.warnings.map((x) => `<li class="check check-warn"><span class="check-ic" aria-hidden="true">▲</span><div>${escapeHtml(x)}</div></li>`).join('')}</ul>` : '') +
-      '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="open-form">Formu aç / yazdır</button><button type="button" class="icon-btn" data-act="close">Kapat</button></div>';
+      // "Kapat" burada modalin kendi ust-sag "Kapat"ina (genel data-act="close") kasten AYNI isim ama FARKLI
+      // davranis: bir siparis icinden gelindiyse o siparisin satirlarina (TAZE) doner, modali kapatmaz; yoksa
+      // (Siparisler sekmesinden tek satirla girildiyse, arka plan zaten kendi gorunumunu tazeliyor) modali kapatir.
+      '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="open-form">Formu aç / yazdır</button><button type="button" class="icon-btn" data-act="done-back">Kapat</button></div>';
     m.body.querySelector('[data-act="open-form"]').addEventListener('click', () => { m.close(); openWorkOrderForm(w.no, { onEdit: () => openWorkOrderDialog(w.no, onDone) }); });
   }
 
   /* ---- olaylar ---- */
   m.body.addEventListener('click', async (ev) => {
     const mode = ev.target.closest('[data-mode]')?.dataset.mode;
-    if (mode && mode !== st.mode) { st.mode = mode; st.lines = null; drawPick(); return; }
+    if (mode && mode !== st.mode) { st.mode = mode; st.lines = null; st.order = null; drawPick(); return; }
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (act === 'back') { st.line = null; st.stockCode = null; drawPick(); return; }
+    if (act === 'done-back') { if (st.order) drawPick(); else m.close(); return; }
     if (act === 'card') { openProductDialog(st.stockCode, () => drawForm()); return; }
     if (act === 'seq-set') {
       const last = m.body.querySelector('[data-role="seq-last"]').value.trim();
@@ -653,6 +665,18 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       btn.disabled = true;
       try {
         const r = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/depot/${act === 'depot-finish-send' ? 'finish-transfer' : 'packing-transfer'}`, {});
+        w.depot = r;
+        onChanged();
+        draw();
+      } catch (e) { btn.disabled = false; window.alert(e.message); }
+    }
+    else if (act === 'depot-clear-ask') { const box = m.body.querySelector('[data-role="depot-clear-box"]'); if (box) box.hidden = false; }
+    else if (act === 'depot-clear-no') { const box = m.body.querySelector('[data-role="depot-clear-box"]'); if (box) box.hidden = true; }
+    else if (act === 'depot-clear-yes') {
+      const btn = ev.target.closest('[data-act]');
+      btn.disabled = true;
+      try {
+        const r = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/depot/clear-remaining`, {});
         w.depot = r;
         onChanged();
         draw();

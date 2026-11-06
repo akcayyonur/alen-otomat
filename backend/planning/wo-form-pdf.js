@@ -135,10 +135,11 @@ const f2 = (n) => (Math.round(n * 100) / 100).toString();
 class Canvas {
   constructor() { this.ops = []; }
 
-  /** @param {number} x soldan @param {number} top sayfa üstünden aşağı mesafe (taban çizgisi) */
-  text(x, top, str, { size = 9, bold = false, gray = 0, spacing = 0 } = {}) {
+  /** @param {number} x soldan @param {number} top sayfa üstünden aşağı mesafe (taban çizgisi) @param {[number,number,number]} [o.color] RGB 0..1 (verilirse `gray` yerine geçer) */
+  text(x, top, str, { size = 9, bold = false, gray = 0, color = null, spacing = 0 } = {}) {
     if (str === '' || str == null) return;
-    this.ops.push(`BT /${bold ? 'F2' : 'F1'} ${f2(size)} Tf ${f2(spacing)} Tc ${f2(gray)} g ${f2(x)} ${f2(PAGE_H - top)} Td ${hex(str)} Tj ET`);
+    const fill = color ? `${f2(color[0])} ${f2(color[1])} ${f2(color[2])} rg` : `${f2(gray)} g`;
+    this.ops.push(`BT /${bold ? 'F2' : 'F1'} ${f2(size)} Tf ${f2(spacing)} Tc ${fill} ${f2(x)} ${f2(PAGE_H - top)} Td ${hex(str)} Tj ET`);
   }
 
   textRight(xRight, top, str, o) { this.text(xRight - textWidth(str, o.size ?? 9, o.bold ?? false, o.spacing ?? 0), top, str, o); }
@@ -169,6 +170,7 @@ const dayShort = (key) => { const [y, m, d] = String(key).split('-').map(Number)
 const dec = (v, d = 2) => (v === null || v === undefined ? '' : new Intl.NumberFormat('tr-TR', { maximumFractionDigits: d }).format(v));
 const gram = (kg) => (kg === null || kg === undefined ? '' : dec(kg * 1000, 2));
 
+const ACCENT_RED = [0.78, 0.06, 0.18]; // "İŞ EMRİ" başlığı ve TERMİN SÜRESİ değeri: kırmızı, kullanıcı isteği (2026-11-04)
 const LABEL = { size: 6.5, bold: true, gray: 0.2 };
 const VALUE = { size: 9.5, bold: true };
 const VALUE_LINE = 11.5;
@@ -184,7 +186,7 @@ function fieldsOf(w) {
   const net = gram(w.netKg ?? null);
   const gross = gram(w.grossKg ?? null);
   return [
-    { label: 'MAMUL ADI :', value: w.productName }, { label: 'TERMİN SÜRESİ:', value: date(w.dueDate) },
+    { label: 'MAMUL ADI :', value: w.productName }, { label: 'TERMİN SÜRESİ:', value: date(w.dueDate), color: ACCENT_RED },
     { label: 'ALEN OTOMAT ÜRÜN KODU', value: w.stockCode }, { label: 'SİPARİŞ NO', value: w.custOrderNo },
     { label: 'MÜŞTERİ ÜRÜN KODU', value: w.customerCode }, { label: 'HEDEF ADET', value: `${new Intl.NumberFormat('tr-TR').format(w.targetQty)} AD` },
     { label: 'HAMMADDE ADI', value: w.usedMaterial ?? w.material }, { label: 'ALTERNATİF HAMMADDE ADI :', value: w.altMaterial },
@@ -214,12 +216,11 @@ function layoutCell(field, width) {
 function drawForm(c, w, now) {
   let top = MARGIN;
 
-  // başlık: logo (varsa) solda, "İŞ EMRİ" yanında; sağda iş emri no / tarih
+  // başlık: logo (varsa) solda; "İŞ EMRİ" başlık satırının TAM ORTASINDA, kırmızı (kullanıcı isteği); sağda iş emri no / tarih
   const right = MARGIN + CONTENT_W;
   const logoH = LOGO ? (LOGO_W * LOGO.height) / LOGO.width : 0;
   if (LOGO) c.image(MARGIN, top, LOGO_W, logoH, 'Im1');
-  const titleX = LOGO ? MARGIN + LOGO_W + 12 : MARGIN;
-  c.text(titleX, top + Math.max(17, logoH / 2 + 6), 'İŞ EMRİ', { size: 17, bold: true, spacing: 2.4 });
+  c.textCenter(MARGIN + CONTENT_W / 2, top + Math.max(17, logoH / 2 + 6), 'İŞ EMRİ', { size: 18, bold: true, spacing: 2.4, color: ACCENT_RED });
   const noLabel = 'İŞ EMRİ NO:';
   const dateLabel = 'TARİH:';
   const no = String(w.no);
@@ -285,7 +286,8 @@ function drawForm(c, w, now) {
 function drawCell(c, x, top, width, cell) {
   c.box(x, top, width, cell.h);
   c.text(x + CELL_PAD_X, top + 3 + 5.2, cell.label, LABEL);
-  cell.lines.forEach((line, n) => c.text(x + CELL_PAD_X, top + 3 + 7.5 + 1.5 + 8 + n * VALUE_LINE, line, VALUE));
+  const valueStyle = cell.color ? { ...VALUE, color: cell.color } : VALUE;
+  cell.lines.forEach((line, n) => c.text(x + CELL_PAD_X, top + 3 + 7.5 + 1.5 + 8 + n * VALUE_LINE, line, valueStyle));
 }
 
 /* ===================================================================== PDF dosyası */

@@ -14,11 +14,19 @@
  * deneme tek seferlik bir betikle, `writeEnabled` yalnız o betik için enjekte edilerek yapıldı, sunucu config'i
  * hiç değişmedi (bkz. CLAUDE.md "G aşaması").
  *
+ * GİRİŞ (tip=0) YÖNÜ DE GERÇEK YAZMAYLA DOĞRULANDI (2026-11-04, SR040.013, bitmiş ürün depo akışının "iş emri
+ * bitince Geçici'ye GİRİŞ" adımını denerken, bkz. product-depot.js): önce 3 kez aynı genel hatayla ("Stok
+ * Hareketi Kaydedilemedi") reddedildi; kullanıcı Mikro ekranından ELLE bir GİRİŞ virmanı yapıp sonucu salt
+ * okuma ile karşılaştırınca kök neden bulundu — GİRİŞ'te `sth_evrakno_seri` BOŞ olmalı ("CNCT" ÇIKAN/TRANSFER'de
+ * çalışıyor ama GİRİŞ'te reddediliyordu); `sth_miktar2`/`sth_birim_pntr` de eklendi (gerçek satırlarda hep var,
+ * zararsız). Düzeltilince İLK denemede kabul edildi (bkz. `baseSatir` ve `previewVirman`/`previewProductVirman`
+ * içindeki notlar). Artık her iki yön (GİRİŞ + ÇIKAN) ve hem hammadde hem bitmiş ürün gerçek yazmayla doğrulandı.
+ *
  * Depo listesi ve hammadde arama CANLI Mikro okumasıdır (SqlVeriOkuV2, salt okuma, risksiz — zaten doğrulanmış
  * yöntem, bkz. mikro.js). Yazılacak fişin alan DEĞERLERİ (sth_evraktip/sth_tip/sth_cins, evrak serisi) gerçek
- * geçmiş STOK_HAREKETLERI kayıtlarından GÖZLENEN bir örüntüye dayanıyor VE artık en azından transfer için
- * gerçek bir yazmayla da doğrulandı; `assumed` alanı hâlâ `sth_tutar`'ı işaretliyor (maliyet muhasebesi etkisi
- * netleşmedi, 0 kabul edildi ama doğru değer bu mu bilmiyoruz).
+ * geçmiş STOK_HAREKETLERI kayıtlarından GÖZLENEN bir örüntüye dayanıyor VE artık transfer + her iki virman yönü
+ * için de gerçek bir yazmayla doğrulandı; `assumed` alanı hâlâ `sth_tutar`'ı işaretliyor (maliyet muhasebesi
+ * etkisi netleşmedi, 0 kabul edildi ama doğru değer bu mu bilmiyoruz).
  */
 import { PlanningError } from './errors.js';
 
@@ -64,14 +72,34 @@ function noteOf(v) {
   return s || null;
 }
 
-/** DahiliStokHareketKaydetV2'nin bir tek satırı (ortak alanlar; evraktip/tip/cins çağıran ekler). `miktar`: hammaddede kg, bitmiş üründe adet. */
-function baseSatir({ stockCode, miktar, cikisDepoNo, girisDepoNo, now }) {
+/**
+ * DahiliStokHareketKaydetV2'nin bir tek satırı (ortak alanlar; evraktip/tip/cins çağıran ekler). `miktar`: hammaddede kg, bitmiş üründe adet.
+ *
+ * `sth_tutar: 0`, `sth_miktar2` (= miktar), `sth_birim_pntr: '1'` ARTIK AÇIKÇA gönderiliyor (2026-11-04, SR040.013
+ * GİRİŞ denemesi — gerçek, kullanıcının Mikro ekranından elle girdiği bir GİRİŞ virmanı satırıyla karşılaştırılarak
+ * bulundu, bkz. product-depot.js başındaki not): ÇIKAN/TRANSFER bu alanlar OLMADAN da kabul ediliyordu (Mikro
+ * örtük varsayıyor gibiydi) ama bunları eklemek onları BOZMAZ (gerçek satırların hepsinde zaten bu değerlerle
+ * duruyorlar) — üç yöne de (GİRİŞ/ÇIKAN/TRANSFER) eklendi.
+ *
+ * `evrakSeri` (varsayılan `EVRAK_SERI`="CNCT"): GİRİŞ (tip=0) virman için BOŞ ("") olmak ZORUNDA — bu asıl kök
+ * nedendi. "CNCT" ÇIKAN/TRANSFER'de sorunsuz kabul ediliyor (2026-10-29'da gerçek yazmayla doğrulandı) ama
+ * GİRİŞ'te hep aynı genel "Stok Hareketi Kaydedilemedi" hatasıyla reddediliyordu; kullanıcının Mikro ekranından
+ * elle girdiği GİRİŞ satırında `sth_evrakno_seri=""` idi (ekran boş bırakılınca otomatik numaralıyor), "CNCT"
+ * ile DENENMEDEN aynen kopyalanıp denenince İLK seferde kabul edildi (2026-11-04, SR040.013, evrak sıra 236,
+ * salt okuma ile doğrulandı). Neden yalnız GİRİŞ'in böyle davrandığı bilinmiyor (muhtemelen Mikro'nun evrak-seri
+ * tanım listesi evrak tipine/yönüne göre ayrı tutuluyor) — yalnız GİRİŞ için boş gönderiliyor, ÇIKAN/TRANSFER
+ * kanıtlanmış "CNCT"yi korur (kendi yazdığımız kayıtları ayırt etmeye yarıyor).
+ */
+function baseSatir({ stockCode, miktar, cikisDepoNo, girisDepoNo, now, evrakSeri = EVRAK_SERI }) {
   return {
     sth_stok_kod: stockCode,
     sth_miktar: miktar,
+    sth_miktar2: miktar,
+    sth_birim_pntr: '1',
+    sth_tutar: 0,
     sth_cikis_depo_no: cikisDepoNo,
     sth_giris_depo_no: girisDepoNo,
-    sth_evrakno_seri: EVRAK_SERI,
+    sth_evrakno_seri: evrakSeri,
     sth_tarih: isoDate(now),
   };
 }
@@ -148,16 +176,34 @@ export class MikroStock {
    * başına "Giren Çıkan" seçimi kullanıyor, bkz. CLAUDE.md "Mikro arayüz pencereleri görüldü") — `direction`
    * kullanıcı seçimi, varsayılan `'cikan'` (asıl kullanım alanı sarfiyat) ama `'giren'` de seçilebilmeli.
    * RESMİ DOĞRULANDI (Mikro "Tablo Alan Yapıları", 2026-10-29): evraktip=6 "Stok Virman Fişi", tip 0=Giriş/1=Çıkış,
-   * cins=3 "Stok Virman". ÇIKAN (tip=1) GERÇEK bir yazmayla da doğrulandı (2026-10-29, bkz. yukarıdaki not) —
-   * GİREN (tip=0) henüz gerçek yazmayla denenmedi, yalnız resmi alan listesinden ve 570 hammadde satırından 1
-   * tanesinin bu değeri taşımasından biliniyor. `sth_tutar` (maliyet) HÂLÂ doğrulanmadı.
+   * cins=3 "Stok Virman". ÇIKAN (tip=1) GERÇEK bir yazmayla doğrulandı (2026-10-29). GİREN (tip=0) de artık GERÇEK
+   * yazmayla doğrulandı (2026-11-04, bitmiş ürün stok koduyla — `previewProductVirman`, bkz. dosya başı ve
+   * `baseSatir`): GİREN'de evrak serisi BOŞ olmalı, bu fonksiyon da aynı kuralı uygular. `sth_tutar` (maliyet)
+   * HÂLÂ doğrulanmadı (0 kabul ediliyor, "doğru" değer bu mu bilinmiyor).
    */
   previewVirman({ depotNo, stockCode, kg, note, direction = 'cikan' } = {}, { now = Date.now() } = {}) {
     const dep = positiveInt(depotNo, 'Depo');
     if (direction !== 'cikan' && direction !== 'giren') throw new PlanningError('Yön "çıkan" ya da "giren" olmalı.', 400, 'bad-direction');
-    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), miktar: kgAmount(kg), cikisDepoNo: dep, girisDepoNo: dep, now }), sth_evraktip: 6, sth_tip: direction === 'cikan' ? 1 : 0, sth_cins: 3 };
+    // GIRIS'te evrak serisi BOS olmali (bkz. baseSatir'deki not, 2026-11-04 kok neden bulgusu); CIKAN kanitlanmis "CNCT"yi korur.
+    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), miktar: kgAmount(kg), cikisDepoNo: dep, girisDepoNo: dep, now, evrakSeri: direction === 'giren' ? '' : undefined }), sth_evraktip: 6, sth_tip: direction === 'cikan' ? 1 : 0, sth_cins: 3 };
     const body = wrapEvrak(satir, noteOf(note));
     return { kind: 'virman', direction, endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
+  }
+
+  /**
+   * Bitmiş ürün için stok virman fişi — `previewVirman` ile AYNI evrak türü, yalnız adet (tam sayı). İKİ kullanım
+   * alanı: GİREN — iş emri bitince üretilen adet Geçici depoda "doğar" (`product-depot.js` `sendFinishTransfer`,
+   * GERÇEK yazmayla doğrulandı: 2026-11-04, SR040.013, 1 adet, evrak sıra 236); ÇIKAN — paketleme formuna HİÇ
+   * yansımayacak kalan farkı (sayım/hurda) Geçici depodan düşmek (`clearRemaining`, henüz gerçek üründe
+   * denenmedi ama hammaddede 2026-10-29'da ÇIKAN yönüyle doğrulanmış AYNI mekanizma).
+   */
+  previewProductVirman({ depotNo, stockCode, qty, note, direction = 'cikan' } = {}, { now = Date.now() } = {}) {
+    const dep = positiveInt(depotNo, 'Depo');
+    if (direction !== 'cikan' && direction !== 'giren') throw new PlanningError('Yön "çıkan" ya da "giren" olmalı.', 400, 'bad-direction');
+    // GIRIS'te evrak serisi BOS olmali (bkz. baseSatir'deki not, 2026-11-04 kok neden bulgusu, SR040.013 ile GERCEK yazmayla dogrulandi).
+    const satir = { ...baseSatir({ stockCode: stockCodeOf(stockCode), miktar: pieceCount(qty), cikisDepoNo: dep, girisDepoNo: dep, now, evrakSeri: direction === 'giren' ? '' : undefined }), sth_evraktip: 6, sth_tip: direction === 'cikan' ? 1 : 0, sth_cins: 3 };
+    const body = wrapEvrak(satir, noteOf(note));
+    return { kind: 'urun-virman', direction, endpoint: 'DahiliStokHareketKaydetV2', body, writeEnabled: this.writeEnabled(), assumed: ['sth_tutar'] };
   }
 
   /** Önceden kurulmuş bir önizlemeyi GERÇEKTEN Mikro'ya yazar — yalnız `MIKRO_WRITE_ENABLED=1` iken (anlık kontrol, önizleme anındaki değil). */

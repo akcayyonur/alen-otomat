@@ -43,6 +43,15 @@
     -MikroWriteEnabled: verilirse embedded mikro.env'e MIKRO_WRITE_ENABLED=1 satiri eklenir - Depolar arasi
     sevkiyat / sarfiyat (virman) fisi GERCEKTEN Mikro'ya yazar (varsayilan KAPALI kalir, yalniz onizler).
 
+    -ProductDepotEnabled: verilirse embedded mikro.env'e PRODUCT_DEPOT_ENABLED=1 satiri eklenir - "Bitmis urun
+    depo akisi" (is emri bitince Gecici'de GIRIS, paketlenince Merkez'e TRANSFER, kalan farki ELLE temizleme)
+    acilir. MIKRO_WRITE_ENABLED'DAN AYRI, DAHA DAR bir kapi: hammaddenin kendi Mikro akisini (Hammadde ekrani)
+    ETKILEMEZ. Varsayilan KAPALI (2026-11-04, kullanici karari, v1.0.2): fabrika PC'si henuz uretim sahasina
+    inmedi, paketleme orada kullanilmiyor - acik kalirsa is emirleri bitirildikce Gecici depoda paketlenmeyi hic
+    bekleyen bir "hayalet stok" birikir. Panel/ekran GIZLENMEZ (kullanici karari: "kapali ekran olmasin") -
+    yalniz butonlar devre disi, nedeni gorunur. Fabrika PC'si kurulup paketleme sahada basladiktan SONRA bir
+    sonraki pakette acilacak.
+
     Gereken: Inno Setup 6 (winget install JRSoftware.InnoSetup), Node 22.5+ (x64),
              .NET Framework 4.0 derleyicisi (Windows'ta hazir gelir).
 #>
@@ -67,6 +76,10 @@ param(
 
     # Gomulu mikro.env'e MIKRO_WRITE_ENABLED=1 ekler (gercek Mikro yazmasi acik gelir). Varsayilan KAPALI.
     [switch]$MikroWriteEnabled,
+
+    # Gomulu mikro.env'e PRODUCT_DEPOT_ENABLED=1 ekler ("Bitmis urun depo akisi" acilir). Varsayilan KAPALI
+    # (2026-11-04, kullanici karari: fabrika PC'si henuz sahada degil, bkz. yukaridaki yardim metni).
+    [switch]$ProductDepotEnabled,
 
     # Duman testini atla (onerilmez).
     [switch]$TestAtla
@@ -317,12 +330,13 @@ if (-not $MikroEnvFile) {
 }
 if ($MikroEnvFile) {
     if (-not (Test-Path $MikroEnvFile)) { Vazgec "MikroEnvFile yok: $MikroEnvFile" }
-    $satirlar = [System.Collections.Generic.List[string]](Get-Content $MikroEnvFile | Where-Object { $_ -notmatch '^\s*MIKRO_WRITE_ENABLED=' })
+    $satirlar = [System.Collections.Generic.List[string]](Get-Content $MikroEnvFile | Where-Object { $_ -notmatch '^\s*(MIKRO_WRITE_ENABLED|PRODUCT_DEPOT_ENABLED)=' })
     if ($MikroWriteEnabled) { $satirlar.Add('MIKRO_WRITE_ENABLED=1') }
+    if ($ProductDepotEnabled) { $satirlar.Add('PRODUCT_DEPOT_ENABLED=1') }
     # BOM'suz UTF-8 ZORUNLU: Set-Content -Encoding utf8 BOM ekler, Node --env-file dosyanin ILK satirini/anahtarini
     # okuyamaz hale gelir (2026-10-28'de fabrika PC'sinde ayni hatayla karsilasildi, bkz. CLAUDE.md "MikroAPI").
     [System.IO.File]::WriteAllText((Join-Path $Payload 'kurulum\mikro.env.govde'), (($satirlar -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
-    Tamam "MikroAPI kimlik bilgileri gomuldu ($MikroEnvFile) - yazma: $(if ($MikroWriteEnabled) { 'ACIK' } else { 'kapali (onizleme)' })"
+    Tamam "MikroAPI kimlik bilgileri gomuldu ($MikroEnvFile) - yazma: $(if ($MikroWriteEnabled) { 'ACIK' } else { 'kapali (onizleme)' }) - bitmis urun depo akisi: $(if ($ProductDepotEnabled) { 'ACIK' } else { 'KAPALI (fabrika PC henuz sahada degil)' })"
 } else {
     Bilgi 'MikroAPI kimlik bilgileri gomulmedi (-MikroEnvFile verilmedi, .claude\mikro.env de yok): kurulumda bos data\mikro.env olusur, elle doldurulmali'
 }

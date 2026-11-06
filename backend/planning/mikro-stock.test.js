@@ -63,9 +63,52 @@ test('previewVirman: yon secilebilir - "giren" -> tip=0', () => {
   assert.equal(p.direction, 'giren');
 });
 
+test('previewVirman: GIREN evrak serisi BOS olmali, CIKAN kanitlanmis "CNCT"yi korur (2026-11-04 kok neden bulgusu, SR040.013 ile GERCEK yazmayla dogrulandi)', () => {
+  const { s } = kur();
+  const giren = s.previewVirman({ depotNo: 4, stockCode: 'HM1', kg: 1, direction: 'giren' });
+  const cikan = s.previewVirman({ depotNo: 4, stockCode: 'HM1', kg: 1, direction: 'cikan' });
+  assert.equal(giren.body.evraklar[0].satirlar[0].sth_evrakno_seri, '', 'GIREN: Mikro "CNCT" ile hep reddediyordu, bos (otomatik numaralanan) seri kabul etti');
+  assert.equal(cikan.body.evraklar[0].satirlar[0].sth_evrakno_seri, 'CNCT', 'CIKAN: 2026-10-29da "CNCT" ile GERCEKTEN yazilmisti, degismedi');
+});
+
+test('previewVirman: sth_miktar2 ve sth_birim_pntr artik aciklca gonderiliyor (gercek Mikro satirlarinda hep var)', () => {
+  const { s } = kur();
+  const satir = s.previewVirman({ depotNo: 4, stockCode: 'HM1', kg: 2.5 }).body.evraklar[0].satirlar[0];
+  assert.deepEqual([satir.sth_miktar2, satir.sth_birim_pntr, satir.sth_tutar], [2.5, '1', 0]);
+});
+
 test('previewVirman: gecersiz yon reddedilir', () => {
   const { s } = kur();
   assert.throws(() => s.previewVirman({ depotNo: 4, stockCode: 'HM1', kg: 1, direction: 'yana' }), (e) => e.code === 'bad-direction');
+});
+
+test('previewProductVirman: previewVirman ile AYNI evrak turu, miktar ADET (tam sayi); cikis=giris=depotNo', () => {
+  const { s } = kur();
+  const p = s.previewProductVirman({ depotNo: 2, stockCode: 'SR001.013', qty: 200, note: 'is emri 2026000001: paketlenmeyen fark' }, { now: Date.now() });
+  const satir = p.body.evraklar[0].satirlar[0];
+  assert.deepEqual(
+    [satir.sth_stok_kod, satir.sth_miktar, satir.sth_cikis_depo_no, satir.sth_giris_depo_no, satir.sth_evraktip, satir.sth_tip, satir.sth_cins],
+    ['SR001.013', 200, 2, 2, 6, 1, 3],
+  );
+  assert.deepEqual([p.kind, p.direction], ['urun-virman', 'cikan']);
+});
+
+test('previewProductVirman: GIREN yonu (is emri bitince Gecici\'de "dogar") evrak serisi BOS gonderir - 2026-11-04, SR040.013, 1 adet, evrak sira 236 ile GERCEK Mikroya karsi dogrulandi', () => {
+  const { s } = kur();
+  const giren = s.previewProductVirman({ depotNo: 2, stockCode: 'SR040.013', qty: 1, direction: 'giren' });
+  const satir = giren.body.evraklar[0].satirlar[0];
+  assert.deepEqual(
+    [satir.sth_evrakno_seri, satir.sth_tip, satir.sth_miktar2, satir.sth_birim_pntr, satir.sth_tutar],
+    ['', 0, 1, '1', 0],
+  );
+  assert.equal(giren.direction, 'giren');
+});
+
+test('previewProductVirman: adet kesirli/sifir/negatif olamaz (hammaddenin kg\'sinden farkli, hep tam sayi)', () => {
+  const { s } = kur();
+  assert.throws(() => s.previewProductVirman({ depotNo: 2, stockCode: 'SR1', qty: 0 }), (e) => e.code === 'bad-qty');
+  assert.throws(() => s.previewProductVirman({ depotNo: 2, stockCode: 'SR1', qty: -5 }), (e) => e.code === 'bad-qty');
+  assert.throws(() => s.previewProductVirman({ depotNo: 2, stockCode: 'SR1', qty: 1.5 }), (e) => e.code === 'bad-qty');
 });
 
 test('send: yazma KAPALIYKEN client.call ASLA cagrilmaz, 409 mikro-write-disabled firlar', async () => {

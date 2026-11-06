@@ -36,6 +36,17 @@
  *   POST .../samples/:id/decide {status:'onaylandi'|'reddedildi', decidedOn?, note?}   musteriden gelen karar (e-posta ile gelir, elle girilir)
  *   POST .../samples/:id/reopen                            yanlis isaretlenen karari geri al ('bekliyor'a doner)
  *   PUT  /api/planning/samples/sequence {last}              numara tabani (kagittaki SERI NO ile cakismasin; yalniz yonetici)
+ *   GET  /api/planning/quarantine?q=&status=             HURDA GIRISI listesi (karantina giris-cikis, EYS.FR.043; `products` ile baglanmaz)
+ *   POST /api/planning/quarantine                         yeni giris-cikis kaydi ac (urun tanimi, uygunsuzluk tanimi, giris tarihi/personeli)
+ *   GET/PUT /api/planning/quarantine/:id                   ayrinti (tashih gecmisi + toplamlar) / duzenle;  DELETE .../:id  (yalniz yonetici)
+ *   POST .../quarantine/:id/exit {exitReason, exitedOn?, exitedBy}   cikis yap (yalniz acik kayitta)
+ *   POST .../quarantine/:id/reopen                         yanlislikla yapilan cikisi geri al ('acik'a doner)
+ *   POST .../quarantine/:id/corrections {doneOn?, operator, description, qty, okQty?, scrapQty?, manHours?, note?}  TASHIH ekle (EYS.FR.049; yalniz acik kayitta)
+ *   DELETE /api/planning/quarantine/corrections/:id         yanlis tashih satirini sil (yalniz yonetici)
+ *   GET  /api/planning/devices?q=&active=&usable=&calibration=   OLCUM CIHAZLARI TAKIP listesi (EYS.LS.006)
+ *   POST /api/planning/devices                            yeni olcum cihazi ekle (yalniz kategori+tanim zorunlu)
+ *   POST /api/planning/devices/import                      Setup kurulumunda ILK SEFER icin EYS.LS.006 Excel'ini iceri aktar (govde = ham .xlsx)
+ *   GET/PUT /api/planning/devices/:id                      ayrinti (kalibrasyon durumu hesaplanir) / duzenle;  DELETE .../:id  (yalniz yonetici)
  *   GET  /api/planning/downtime-codes                   durus nedeni kodlari (D1-D46, Z1-Z4) ve gruplari
  *   GET  /api/planning/shop/overview                    fabrika PC'si ana ekrani: tezgah basina durum, uretimdeki is emri, bekleyenler, nedeni sorulmamis duruslar
  *   GET  /api/planning/shop/stops?machine=&hours=       bir tezgahin OLCULMUS duruslari ve baglanmis nedenleri
@@ -55,9 +66,10 @@
  *   GET  /api/planning/material/mikro/materials?q=       hammadde (HM%) arama (canli okuma, salt SELECT)
  *   POST /api/planning/material/mikro/transfer-preview|transfer-send {fromDepotNo, toDepotNo, stockCode, kg, note?}   DEPOLAR ARASI SEVKIYAT fisi: onizle (govde kurulur, GONDERILMEZ) / gonder (yalniz MIKRO_WRITE_ENABLED=1 ise; yoksa 409 mikro-write-disabled)
  *   POST /api/planning/material/mikro/virman-preview|virman-send {depotNo, stockCode, kg, note?}   SARFIYAT (stok virman) fisi: ayni kurallar
- *   GET  /api/planning/work-orders/:no/depot-status      BITMIS URUN DEPO AKISI durumu (uretilen/Gecici'ye aktarilan, paketlenen/Merkez'e sevk edilen; yalniz yonetici)
+ *   GET  /api/planning/work-orders/:no/depot-status      BITMIS URUN DEPO AKISI durumu (uretilen/Gecici'ye aktarilan, paketlenen/Merkez'e sevk edilen, Gecici'de kalan fark; yalniz yonetici)
  *   POST /api/planning/work-orders/:no/depot/finish-transfer    is emri BITINCE: uretilen adedin gonderilmemis kismi Merkez->Gecici (ayni MIKRO_WRITE_ENABLED kurali)
  *   POST /api/planning/work-orders/:no/depot/packing-transfer   PAKETLENINCE: paketlenen adedin gonderilmemis kismi (delta) Gecici->Merkez
+ *   POST /api/planning/work-orders/:no/depot/clear-remaining     ELLE (geri alinamaz): uretim-paketleme farkini Gecici depodan CIKAN virmanla temizler; yalniz bitti durumunda
  *   GET  /api/planning/efficiency?from=&to=&machine=    verimlilik raporu (is emri x vardiya; yalniz yonetici);  .../efficiency.csv?...&view=gunluk|matris|urun|tezgah
  *   GET  /api/planning/downtime-report?from=&to=&machine=    durus raporu (neden kodu dakikalari, nedeni belirsiz);  .../downtime-report.csv?...&view=durus|durus-kod-gun
  *   GET  /api/planning/programs                         tornalarda gorulen programlar + esleme durumu (operator + yonetici; esleme yazma uclari da)
@@ -243,9 +255,9 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       }
       if (method === 'PUT' && path === '/api/planning/packing/sheet/air') return sendJson(res, 200, planning.packing.setAirBar(await readJson(req), { by: who(req) })), true;
       if (method === 'GET' && path === '/api/planning/packing/suggest') return sendJson(res, 200, planning.packing.suggest(url.searchParams.get('stockCode') ?? '')), true;
-      if (method === 'POST' && path === '/api/planning/packing/rows') return sendJson(res, 201, planning.packing.addRow(await readJson(req), { by: who(req) })), true;
+      if (method === 'POST' && path === '/api/planning/packing/rows') return sendJson(res, 201, planning.addPackingRow(await readJson(req), { by: who(req) })), true;
       if ((m = /^\/api\/planning\/packing\/rows\/(\d{1,12})$/.exec(path))) {
-        if (method === 'PUT') return sendJson(res, 200, planning.packing.updateRow(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'PUT') return sendJson(res, 200, planning.updatePackingRow(Number(m[1]), await readJson(req), { by: who(req) })), true;
         if (method === 'DELETE') return sendJson(res, 200, planning.packing.voidRow(Number(m[1]), { reason: url.searchParams.get('reason') ?? '' }, { by: who(req) })), true;
       }
 
@@ -303,6 +315,55 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       }
       if (method === 'POST' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/reopen$/.exec(path))) {
         return sendJson(res, 200, planning.samples.reopen(Number(m[1]), { by: who(req) })), true;
+      }
+
+      /* ---- hurda girisi (karantina giris-cikis EYS.FR.043 + tashih EYS.FR.049) ---- */
+      if (path === '/api/planning/quarantine') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.quarantine.list({
+            q: url.searchParams.get('q') ?? '', status: url.searchParams.get('status') ?? '',
+            limit: intParam(url, 'limit', 200, { min: 1, max: 1000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') return sendJson(res, 201, planning.quarantine.create(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'DELETE' && (m = /^\/api\/planning\/quarantine\/corrections\/(\d{1,12})$/.exec(path))) {
+        return sendJson(res, 200, planning.quarantine.deleteCorrection(Number(m[1]))), true;
+      }
+      if ((m = /^\/api\/planning\/quarantine\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, planning.quarantine.get(Number(m[1]))), true;
+        if (method === 'PUT') return sendJson(res, 200, planning.quarantine.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.quarantine.delete(Number(m[1]))), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/quarantine\/(\d{1,12})\/exit$/.exec(path))) {
+        return sendJson(res, 200, planning.quarantine.exit(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/quarantine\/(\d{1,12})\/reopen$/.exec(path))) {
+        return sendJson(res, 200, planning.quarantine.reopen(Number(m[1]), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/quarantine\/(\d{1,12})\/corrections$/.exec(path))) {
+        return sendJson(res, 200, planning.quarantine.addCorrection(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+
+      /* ---- olcum cihazlari takip (EYS.LS.006) ---- */
+      if (path === '/api/planning/devices') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.measuringDevices.list({
+            q: url.searchParams.get('q') ?? '', active: url.searchParams.get('active') ?? '',
+            usable: url.searchParams.get('usable') ?? '', calibration: url.searchParams.get('calibration') ?? '',
+            limit: intParam(url, 'limit', 500, { min: 1, max: 2000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') return sendJson(res, 201, planning.measuringDevices.create(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/devices/import') {
+        const body = await readBuffer(req, MAX_CSV_BYTES);
+        return sendJson(res, 200, planning.measuringDevices.importXlsx(body, { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/devices\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, planning.measuringDevices.get(Number(m[1]))), true;
+        if (method === 'PUT') return sendJson(res, 200, planning.measuringDevices.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.measuringDevices.delete(Number(m[1]))), true;
       }
 
       /* ---- siparisler ---- */
@@ -365,9 +426,11 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/depot-status$/.exec(path))) {
         return sendJson(res, 200, planning.productDepot.statusFor(m[1])), true;
       }
-      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/depot\/(finish-transfer|packing-transfer)$/.exec(path))) {
+      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/depot\/(finish-transfer|packing-transfer|clear-remaining)$/.exec(path))) {
         const by = who(req);
-        const result = m[2] === 'finish-transfer' ? await planning.productDepot.sendFinishTransfer(m[1], { by }) : await planning.productDepot.sendPackingTransfer(m[1], { by });
+        const result = m[2] === 'finish-transfer' ? await planning.productDepot.sendFinishTransfer(m[1], { by })
+          : m[2] === 'packing-transfer' ? await planning.productDepot.sendPackingTransfer(m[1], { by })
+          : await planning.productDepot.clearRemaining(m[1], { by });
         return sendJson(res, 200, result), true;
       }
       /* ---- olcu kontrolu (EYS.FR.005): operator + yonetici ---- */

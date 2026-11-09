@@ -52,10 +52,23 @@ export function depotPanelHtml(w) {
 
   const KIND_LABEL = { bitis: 'Geçici depoya aktarım', paketleme: 'Merkez depoya sevk', temizle: 'Kalan farkı temizleme' };
   const lastError = [...d.bitis.history, ...d.paketleme.history, ...(t?.history ?? [])].filter((x) => x.status === 'basarisiz').sort((a, b) => b.at - a.at)[0];
+  // Karantina (Hurda Girişi) bağlantısı: bu is emrine bagli karantina kaydi varsa, karantinada bekleyen (tashih
+  // sonucu belirlenmemis) ve uretimdeyken OK cikip ertelenmis (henuz Mikroya gonderilmemis) miktarlar - salt bilgi,
+  // tetikleme tamamen otomatik (bkz. quarantine-depot.js).
+  const pendingQuarantine = d.bitis.pendingQuarantine ?? 0;
+  const pendingOk = w.karantina?.pendingOk ?? 0;
+  const karantinaLine = pendingQuarantine > 0 || pendingOk > 0
+    ? '<p class="hint">' +
+      (pendingQuarantine > 0 ? `${chip('warn', '◔', `${fmtNum(pendingQuarantine)} adet karantinada`)} (tashih sonucu henüz belirlenmedi, Geçici'ye dahil edilmedi)` : '') +
+      (pendingQuarantine > 0 && pendingOk > 0 ? ' · ' : '') +
+      (pendingOk > 0 ? `${chip('ok', '✓', `${fmtNum(pendingOk)} adet OK`)} (iş emri bitince Geçici'ye aktarılacak)` : '') +
+      '</p>'
+    : '';
   return (
     '<section class="pl-prog" data-role="depot">' +
     '<h4 class="sub">Bitmiş ürün depo akışı (Mikro)</h4>' +
     '<p class="hint">İş emri bitince üretilen adet Geçici depoda GİRİŞ virmanıyla oluşur, paketlenince (paketleme formu toplamı) Geçici\'den Merkez depoya Depolar Arası Sevk Fişiyle aktarılır.</p>' +
+    karantinaLine +
     '<div class="pl-kpis">' +
     line('Geçici depoya aktarım', d.bitis, 'depot-finish-send', 'Geçici depoya aktar…') +
     line('Merkez depoya sevk', d.paketleme, 'depot-pack-send', 'Merkeze sevk et…') +

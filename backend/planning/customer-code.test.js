@@ -133,17 +133,21 @@ const A = (br = '0,0200', sn = 30) => `FIRMA X;SR010.001;111222333 PARCA A;SPR-1
 const B = (br = '0,0300') => `FIRMA X;SR010.002;111222334 PARCA B;SPR-1;13.09.2025;100;0;100;MS-1;${br};0,0150;30;HM1;40`;
 const C = (br = '0,0400') => `FIRMA X;SR010.003;111222335 PARCA C;SPR-1;13.09.2025;100;0;100;MS-1;${br};0,0200;30;HM1;40`;
 
-test('Mikro dosyasi: ilk iceri alma karttaki degerleri ezmez; sonra YALNIZ Mikro\'da degisen alanlar uygulanir; elle duzenlenmis kart korunur ve bildirilir', () => {
+test('Mikro dosyasi: ilk siparis senkronu karttaki FARKLI degeri hemen Mikro\'ya uydurur (elle duzenlenmemisse); sonraki senkronlarda Mikro GERCEKTEN degisen alanlar uygulanir, elle duzenlenmis kart korunur ve bildirilir', () => {
   const p = yeni();
-  // A karti planlama Excel'inden geldi (planlanan sure 25, brut 0,021: Mikro'dakinden farkli ve "ayarlanmis" olabilir)
+  // A karti planlama Excel'inden geldi (planlanan sure 25, brut 0,021: Mikro'dakinden (0,02) farkli, muhtemelen eski/yanlis deger)
   p.importFile(Buffer.from([
     'ÜRETİM EMRİ NO;TARİH;MAMÜL ADI;ALEN KOD;MÜŞTERİ KODU;MAKİNA NO;ADET;HAMMADDE;ALTERNATİF HM;ÜRETİM SN;HM TOPLAM;BRÜT GR;NET GR',
     '2026000009;02.01.2026;PARCA A;SR010.001;;CNC;100;HM1;;25;2;0,021;0,01', '',
   ].join('\r\n'), 'utf8'));
 
+  // Kart ilk kez Mikro/siparis senkronuyla karsilasiyor (hic anlik goruntusu yok): Mikro'dan farkli olan planlanan
+  // sure VE brut agirlik hemen Mikro'nun degerine gecer (kullanici karari, 2026-11-09 - bkz. importers.js yorumu:
+  // eskiden bu ilk temasta SESSIZCE korunuyordu, anlik goruntu yine de Mikro'ya yetisiyordu ve kart bir daha hic
+  // duzelmiyordu - gercek ornek Nİ178.002'de brut/net ters kilitlenmisti).
   const ilk = p.importFile(siparis([A(), B(), C()]));
-  assert.equal(p.getProduct('SR010.001').plannedSec, 25, 'ilk Mikro iceri almasi karttaki degeri ezmez');
-  assert.equal(p.getProduct('SR010.001').grossKg, 0.021);
+  assert.equal(p.getProduct('SR010.001').plannedSec, 30, "ilk Mikro senkronu farkli degeri hemen uygular");
+  assert.equal(p.getProduct('SR010.001').grossKg, 0.02);
   assert.equal(p.getProduct('SR010.001').customerCode, '111222333', 'bos kod adin basindan dolar');
   assert.equal(p.getProduct('SR010.002').grossKg, 0.03, 'yeni kart Mikro degerleriyle acilir');
   assert.deepEqual(ilk.changes.products.added.map((x) => x.stockCode), ['SR010.002', 'SR010.003']);
@@ -158,7 +162,7 @@ test('Mikro dosyasi: ilk iceri alma karttaki degerleri ezmez; sonra YALNIZ Mikro
   const ikinci = p.importFile(siparis([A('0,0200', 28), B('0,0310'), C('0,0410'), yeniSatir]));
   const a = p.getProduct('SR010.001');
   assert.equal(a.plannedSec, 28, "Mikro'da degisen alan uygulandi");
-  assert.equal(a.grossKg, 0.021, "Mikro'da DEGISMEYEN alan karttaki degeri korur");
+  assert.equal(a.grossKg, 0.02, "Mikro'da GERCEKTEN degismeyen alan (ilk senkrondan beri 0,02) tekrar yazilmaz");
   assert.equal(p.getProduct('SR010.002').grossKg, 0.031);
   assert.equal(p.getProduct('SR010.003').grossKg, 0.04, 'elle duzenlenmis kart: dokunulmadi');
   assert.deepEqual(ikinci.changes.products.updated, [

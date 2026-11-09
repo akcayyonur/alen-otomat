@@ -229,11 +229,24 @@ function importSiparis(db, parsed, ctx) {
     });
   });
 
-  // Urun kartlari. Kural: bos alan dolar; DOLU alan yalniz Mikro'da DEGISTIYSE (bu dosyadaki deger, Mikro'dan en son gelen degerden (anlik goruntu) farkliysa)
-  // ve kart elle duzenlenmemisse guncellenir. Mikro'da degismemis alan karttaki degeri (planlama Excel'inden ya da elle gelmis olsa da) EZMEZ;
-  // elle duzenlenmis karta dokunulmaz, ama Mikro'daki fark "korunan" olarak bildirilir. Tam boy eskisi gibi duzenlenmemis kartta her zaman Mikro'dan gelir.
+  // Urun kartlari. Kural (2026-11-09, kullanici karari - MIKRO HER ZAMAN ANA VERI KAYNAGI): bos alan dolar; DOLU
+  // alan, Mikro'nunkinden FARKLIYSA ve kart elle duzenlenmemisse HER SENKRONDA uygulanir - "Mikro'da degisti mi"
+  // diye ayrica sorulmaz, yalniz "kartla Mikro simdi ayni mi" sorulur. Elle duzenlenmis (edited=true) karta
+  // dokunulmaz, fark varsa "korunan" olarak bildirilir.
+  //
+  // ONCEKI IKI TASARIM (ikisi de terk edildi, gercek veride bulunan Nİ178.002 hatasinin ardindan): (1) "anlik
+  // goruntu" (`src_snapshot`) ile "Mikro'nun SON gonderdigi deger" saklanip yalniz O degerden FARKLI yeni bir
+  // Mikro degeri geldiginde uygulaniyordu - amac planlanan sure gibi elle ayarlanmis degerlerin Mikro devreye
+  // girince TOPLU degismesini onlemekti. (2) anlik goruntu YOKSA (kart ilk kez eski "is emri CSV" iceri
+  // almasindan gelmisse) ilk temasta dogrudan Mikro'ya gecme - ama bu GERIYE DONUK calismiyordu: Nİ178.002'de
+  // oldugu gibi anlik goruntu GECMISTE sessizce Mikro'nun degerine yetismis (kart yanlis olsa bile) kartlar
+  // "Mikro degismedi" sayilip hic duzelmiyordu. Kullanicinin net karari: "Mikro ana kaynak, bir farklilik varsa
+  // Mikro ile arasında degismeli, elle duzeltmekle ugrasmayalim" - yani anlik goruntu mekanizmasi TAMAMEN
+  // KALDIRILDI (`getSnapshot`/`setSnapshot`, `src_snapshot` sutunu artik kullanilmiyor); kural artik yalniz
+  // "kart != Mikro + elle duzenlenmemis -> uygula" (tipki bos alan dolmasi gibi, TEK kural). Bu, Nİ178.002 gibi
+  // onceden kilitlenmis kartlari da bir dahaki "Mikro'dan yenile"de KENDILIGINDEN duzeltir (elle mudahale gerekmez).
   const products = { added: 0, updated: 0, unchanged: 0 };
-  let protectedCards = 0; // Mikro'da degisen ama elle duzenlenmis oldugu icin dokunulmayan kart sayisi
+  let protectedCards = 0; // Mikro'da farkli ama elle duzenlenmis oldugu icin dokunulmayan kart sayisi
   const productChanges = { added: [], updated: [], protected: [] };
   db.tx(() => {
     for (const [key, h] of hints) {
@@ -248,15 +261,12 @@ function importSiparis(db, parsed, ctx) {
         outcome = 'added';
         pushCapped(productChanges.added, { stockCode: h.stock });
       } else {
-        const snap = db.getSnapshot(key);
         const fields = {};
         const kept = [];
         for (const [f, v] of Object.entries(known)) {
-          if (same(cur[f], v)) continue;
+          if (same(cur[f], v)) continue; // kart zaten Mikro ile ayni
           if (cur[f] === null || cur[f] === undefined) { fields[f] = v; continue; } // bos alan dolar
-          const mikroChanged = snap !== null && Object.hasOwn(snap, f) && !same(snap[f], v);
-          if (f === 'lengthMm' && !cur.edited) fields[f] = v;
-          else if (mikroChanged) { if (cur.edited) kept.push(f); else fields[f] = v; }
+          if (cur.edited) kept.push(f); else fields[f] = v; // Mikro ana kaynak: elle duzenlenmemisse HER ZAMAN uygulanir
         }
         const names = Object.keys(fields);
         if (names.length > 0) {
@@ -266,7 +276,6 @@ function importSiparis(db, parsed, ctx) {
         if (kept.length > 0) { protectedCards += 1; pushCapped(productChanges.protected, { stockCode: h.stock, fields: kept.map((f) => FIELD_LABEL[f] ?? f) }); }
         outcome = names.length > 0 ? 'updated' : 'unchanged';
       }
-      db.setSnapshot(key, { ...(db.getSnapshot(key) ?? {}), ...known });
       products[outcome] += 1;
     }
   });

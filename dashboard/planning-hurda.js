@@ -26,8 +26,43 @@ const decInput = (v) => (v === null || v === undefined ? '' : String(v).replace(
 
 /* ============================================================================================== liste */
 
-/** @param {HTMLElement} host */
+/** Hurda girişi sekmesi: "Kayıtlar" (varsayılan) ve "Hurda deposu" (Mikro Karantina->Hurda transferleri) görünümleri arasında geçiş. @param {HTMLElement} host */
 export async function renderQuarantine(host) {
+  host.innerHTML =
+    '<div class="seg pl-tabs" role="group" aria-label="Hurda girişi görünümü" data-role="views">' +
+    '<button type="button" data-view="kayitlar">Kayıtlar</button><button type="button" data-view="hurda-deposu">Hurda deposu</button></div>' +
+    '<div data-role="slot"></div>';
+  const show = (view) => {
+    for (const b of host.querySelectorAll('[data-view]')) { const on = b.dataset.view === view; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(on)); }
+    const body = document.createElement('div');
+    host.querySelector('[data-role="slot"]').replaceChildren(body);
+    return view === 'hurda-deposu' ? renderHurdaDeposu(body) : renderQuarantineList(body);
+  };
+  host.querySelector('[data-role="views"]').addEventListener('click', (ev) => { const b = ev.target.closest('[data-view]'); if (b) show(b.dataset.view); });
+  await show('kayitlar');
+}
+
+/** "Hurda deposu" (Mikro KARANTİNA DEPO dep_no=5 -> HURDA DEPO dep_no=3): tashih sonucu hurdaya aktarılanların dökümü. @param {HTMLElement} host */
+async function renderHurdaDeposu(host) {
+  host.innerHTML = '<p class="hint">Tashih sonucu hurda çıkıp Mikro\'da Karantina depodan Hurda depoya (dep_no=3) gerçekten aktarılmış kayıtlar — iş emrine bağlı karantina kayıtları için otomatik gönderilir.</p>' +
+    '<p class="hint" data-role="count"></p><div class="table-wrap table-wrap-tall" data-role="list"></div>';
+  const $ = (r) => host.querySelector(`[data-role="${r}"]`);
+  try {
+    const { items } = await api('/api/planning/quarantine/hurda-deposu');
+    $('count').textContent = items.length === 0 ? 'Henüz hurda depoya aktarım yok.' : `${fmtNum(items.length)} aktarım`;
+    $('list').innerHTML = items.length === 0 ? '' :
+      '<table class="tbl tbl-pl"><thead><tr><th>Tarih</th><th>Karantina kaydı</th><th>Ürün</th><th>İş emri</th><th class="num">Adet</th><th>Mikro evrak</th></tr></thead><tbody>' +
+      items.map((x) => `<tr><td>${dateText(x.at)}</td><td class="mono">H${String(x.quarantineId).padStart(6, '0')}</td>` +
+        `<td class="trunc"${truncCell(x.stockCode)}>${cellText(x.stockCode)}</td><td class="mono">${cellText(x.woNo)}</td>` +
+        `<td class="num">${fmtNum(x.qty)}</td><td class="mono">${cellText(x.evrakSira != null ? `${x.evrakSeri ? `${x.evrakSeri}-` : ''}${x.evrakSira}` : null)}</td></tr>`).join('') +
+      '</tbody></table>';
+  } catch (err) {
+    $('count').textContent = `Hurda deposu alınamadı: ${err.message}`;
+  }
+}
+
+/** @param {HTMLElement} host */
+async function renderQuarantineList(host) {
   const canEdit = canWrite('hurda');
   const st = { q: '', status: '', items: [], total: 0, seq: 0 };
   host.innerHTML =
@@ -105,8 +140,10 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
   }
   let error = null;
   let mode = null; // null | 'exit' | 'correction'
+  let woNo = q ? q.woNo : null; // iliskili is emri (secici ile doldurulur): karantina miktari netlesince Mikro Karantina deposuna GIRIS'i otomatik tetikler
+  const autoFill = {}; // is emri secilince BOS alanlara onerilen degerler (henuz kaydedilmedi): draw() her seferinde TUM HTML'i yeniden kurdugu icin dogrudan DOM mutasyonu kalici olmaz, v() buradan okur
 
-  const v = (key) => (q ? q[key] : null);
+  const v = (key) => (Object.hasOwn(autoFill, key) ? autoFill[key] : (q ? q[key] : null));
   const txt = (key, label, max, extra = '') => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${key}" value="${escapeHtml(v(key) ?? '')}" maxlength="${max}" autocomplete="off"${editable ? '' : ' readonly'}${extra}></label>`;
   const num = (key, label) => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${key}" value="${decInput(v(key))}" inputmode="decimal" autocomplete="off"${editable ? '' : ' readonly'}></label>`;
   const ta = (key, label, max, rows = 2) => `<label class="fld"><span>${escapeHtml(label)}</span><textarea name="${key}" rows="${rows}" maxlength="${max}"${editable ? '' : ' disabled'}>${escapeHtml(v(key) ?? '')}</textarea></label>`;
@@ -128,10 +165,38 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
     );
   }
 
+  /** Mikro Karantina deposu (GİRİŞ/OK/Hurda) özeti: yalnız bir iş emrine bağlı kayıtlarda anlamlı. */
+  function depotBlock() {
+    if (!q || !q.woNo || !q.depot) return '';
+    const d = q.depot;
+    const row = (label, h) => {
+      const parts = [];
+      if (h.sent > 0) parts.push(chip('ok', '✓', `${fmtNum(h.sent)} adet gönderildi`));
+      if (h.pending > 0) parts.push(chip('warn', '◔', `${fmtNum(h.pending)} adet bekliyor`));
+      if (parts.length === 0) parts.push('<span class="is-null">—</span>');
+      return `<div class="pl-kpi"><span class="pl-kpi-l">${escapeHtml(label)}</span><span class="pl-kpi-v">${parts.join(' ')}</span></div>`;
+    };
+    const lastGirisError = d.giris.history.filter((x) => x.status === 'basarisiz').sort((a, b) => b.at - a.at)[0];
+    return (
+      '<h4 class="sub">Mikro karantina deposu</h4><div class="pl-kpis">' +
+      row('Karantina girişi', d.giris) +
+      (d.ok.sent > 0 ? `<div class="pl-kpi"><span class="pl-kpi-l">Geçici'ye aktarılan (OK)</span><span class="pl-kpi-v">${chip('ok', '✓', `${fmtNum(d.ok.sent)} adet`)}</span></div>` : '') +
+      (d.hurda.sent > 0 ? `<div class="pl-kpi"><span class="pl-kpi-l">Hurda depoya aktarılan</span><span class="pl-kpi-v">${chip('bad', '✕', `${fmtNum(d.hurda.sent)} adet`)}</span></div>` : '') +
+      '</div>' +
+      (lastGirisError && d.giris.pending > 0
+        ? `<p class="notice notice-sim">Karantina girişi başarısız oldu: ${escapeHtml(lastGirisError.error ?? '')} ` +
+          `${editable ? '<button type="button" class="icon-btn icon-btn-sm" data-act="depot-retry-giris">Yeniden dene…</button>' : ''}</p>`
+        : '')
+    );
+  }
+
   function draw() {
     m.body.innerHTML =
       (q ? `<p class="pl-wohead"><b class="mono">${escapeHtml(q.code)}</b> · ${dateText(q.enteredOn)} · ${STATUS_CHIP[q.status]}</p>` : '') +
       '<form autocomplete="off"><h4 class="sub">Karantina giriş bilgileri</h4><div class="fld-grid">' +
+      `<label class="fld"><span>İş emri</span><span class="fld-row"><input value="${escapeHtml(woNo ?? '')}" readonly placeholder="(bağlı değil)">` +
+      (editable ? `<button type="button" class="icon-btn icon-btn-sm" data-act="pick-wo">${woNo ? 'Değiştir…' : 'Seç…'}</button>` : '') +
+      (editable && woNo ? '<button type="button" class="icon-btn icon-btn-sm" data-act="unlink-wo">Bağlantıyı kaldır</button>' : '') + '</span></label>' +
       txt('productLabel', 'Ürün tanımı (stok kodu/tanımı) *', 200, ' required') + txt('cardNo', 'Ürün tanıtım form numarası', 40) +
       txt('issue', 'Uygunsuzluk tanımı *', 500, ' required') + dt('enteredOn', 'Giriş tarihi') + txt('enteredBy', 'Giriş yapan personel *', 100, ' required') +
       '</div>' +
@@ -139,7 +204,10 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
       txt('customer', 'Müşteri', 120) + txt('customerCode', 'Müşteri ürün kodu', 60) +
       txt('stockCode', 'Alen ürün kodu', 40) + txt('detectedAt', 'Uygunsuzluk tespit yeri', 60) +
       num('batchQty', 'Parti miktarı') + num('scrapQty', 'Hurda miktarı') + num('qualityCostTl', 'Kalitesizlik maliyeti (TL)') +
-      '</div>' + ta('action', 'Yapılacak işlem', 500) + ta('note', 'Açıklama', 1000) +
+      '</div>' +
+      (woNo ? '<p class="hint">Parti miktarı bilinmiyorsa boş bırakılabilir; kasa tartılınca buraya girilip kaydedilince Mikro Karantina deposuna GİRİŞ otomatik gönderilir.</p>' : '') +
+      ta('action', 'Yapılacak işlem', 500) + ta('note', 'Açıklama', 1000) +
+      depotBlock() +
       (q && q.status === 'kapali'
         ? '<h4 class="sub">Çıkış bilgileri</h4><div class="fld-grid">' + txt('exitReason', 'Çıkış nedeni', 300) + dt('exitedOn', 'Çıkış tarihi') + txt('exitedBy', 'Çıkış yapan personel', 100) + '</div>'
         : '') +
@@ -188,6 +256,21 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
     if (ev.target.closest('[data-act="corr-cancel"]')) { mode = null; error = null; draw(); return; }
     if (ev.target.closest('[data-act="exit"]')) { mode = 'exit'; error = null; draw(); return; }
     if (ev.target.closest('[data-act="exit-cancel"]')) { mode = null; error = null; draw(); return; }
+    if (ev.target.closest('[data-act="pick-wo"]')) {
+      openWorkOrderPicker((picked) => {
+        woNo = picked.no;
+        if (!v('productLabel')) autoFill.productLabel = `${picked.stockCode} ${picked.productName ?? ''}`.trim();
+        if (!v('stockCode')) autoFill.stockCode = picked.stockCode;
+        if (!v('customerCode') && picked.customerCode) autoFill.customerCode = picked.customerCode;
+        draw();
+      });
+      return;
+    }
+    if (ev.target.closest('[data-act="unlink-wo"]')) { woNo = null; draw(); return; }
+    if (ev.target.closest('[data-act="depot-retry-giris"]')) {
+      post(`/api/planning/quarantine/${q.id}/depot/retry-giris`).then((r) => { q = r; draw(); }).catch((e) => { error = e.message; draw(); });
+      return;
+    }
     if (ev.target.closest('[data-act="reopen"]')) {
       post(`/api/planning/quarantine/${q.id}/reopen`).then((r) => { q = r; onDone(); draw(); }).catch((e) => { error = e.message; draw(); });
       return;
@@ -222,7 +305,7 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
         mode = null;
       } else {
         const body = {
-          productLabel: f.elements.productLabel.value, cardNo: f.elements.cardNo.value, issue: f.elements.issue.value,
+          woNo: woNo ?? '', productLabel: f.elements.productLabel.value, cardNo: f.elements.cardNo.value, issue: f.elements.issue.value,
           customer: f.elements.customer.value, customerCode: f.elements.customerCode.value, stockCode: f.elements.stockCode.value,
           detectedAt: f.elements.detectedAt.value, action: f.elements.action.value,
           batchQty: f.elements.batchQty.value || null, scrapQty: f.elements.scrapQty.value || null, qualityCostTl: f.elements.qualityCostTl.value || null,
@@ -239,6 +322,50 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
       draw();
     }
   });
+}
+
+/* ============================================================================================== is emri secici */
+
+/** Karantina kaydını bir iş emrine bağlamak için arama/seç penceresi (planning-shop.js'teki "Başka iş emri başlat…" seçicisiyle AYNI desen). @param {(w: object) => void} onPick */
+function openWorkOrderPicker(onPick) {
+  const m = openModal({ title: 'Karantinaya çekilen ürünün iş emri', wide: true });
+  m.body.innerHTML =
+    '<p class="hint">Üretimdeki ya da yakın zamanda bitmiş iş emirleri aranır.</p>' +
+    '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="İş emri no, ürün ya da müşteri sipariş no…" aria-label="İş emri ara" autocomplete="off"></div>' +
+    '<div class="table-wrap" data-role="list"></div>';
+  const list = m.body.querySelector('[data-role="list"]');
+  let seq = 0;
+  let items = []; // picker'in secimi DOM'dan degil (cellText DASH'i ayirt etmek gerekir), bu dizinin KENDISINDEN okur
+  async function load() {
+    const my = ++seq;
+    const q = m.body.querySelector('[data-role="q"]').value.trim();
+    try {
+      const r = await api(`/api/planning/work-orders?${new URLSearchParams({ status: 'uretimde-bitti', q, limit: 50 })}`);
+      if (my !== seq) return;
+      items = r.items;
+      list.innerHTML = items.length === 0 ? '<p class="empty">Eşleşen iş emri yok.</p>' :
+        '<table class="tbl tbl-pl"><thead><tr><th>İş emri no</th><th>Ürün kodu</th><th>Ürün adı</th><th>Müşteri kodu</th><th>Tezgah</th><th>Durum</th></tr></thead><tbody>' + items.map((w) =>
+          `<tr class="pl-row" data-no="${escapeHtml(w.no)}" tabindex="0"><td class="mono"><b>${escapeHtml(w.no)}</b></td><td class="mono">${escapeHtml(w.stockCode)}</td>` +
+          `<td class="trunc"${truncCell(w.productName)}>${cellText(w.productName)}</td><td class="mono">${cellText(w.customerCode)}</td><td class="mono">${escapeHtml(w.machineId)}</td>` +
+          `<td>${w.status === 'uretimde' ? chip('info', '▶', 'üretimde') : chip('ok', '✓', 'bitti')}</td></tr>`).join('') + '</tbody></table>';
+    } catch (err) {
+      list.innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;
+    }
+  }
+  const search = debounce(load, 250);
+  m.body.addEventListener('input', (ev) => { if (ev.target.dataset?.role === 'q') search(); });
+  const pick = (ev) => {
+    const row = ev.target.closest('.pl-row');
+    if (!row) return;
+    const w = items.find((x) => x.no === row.dataset.no);
+    if (!w) return;
+    m.close();
+    onPick(w);
+  };
+  list.addEventListener('click', pick);
+  list.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') pick(ev); });
+  m.body.querySelector('[data-role="q"]').focus();
+  load();
 }
 
 /* ============================================================================================== basilan form */

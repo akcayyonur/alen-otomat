@@ -38,6 +38,7 @@
  *   POST .../samples/:id/decide {status:'onaylandi'|'reddedildi', decidedOn?, note?}   musteriden gelen karar (e-posta ile gelir, elle girilir)
  *   POST .../samples/:id/reopen                            yanlis isaretlenen karari geri al ('bekliyor'a doner)
  *   PUT  /api/planning/samples/sequence {last}              numara tabani (kagittaki SERI NO ile cakismasin; yalniz yonetici)
+ *   GET  /api/planning/samples/stats?from=&to=             ret analizi: karar tarihine gore onay/ret dagilimi + ret orani, ayni aralikta talep edilen/bekleyen sayisi (vars. aralik bu ayin basindan bugune)
  *   GET  /api/planning/quarantine?q=&status=             HURDA GIRISI listesi (karantina giris-cikis, EYS.FR.043; `products` ile baglanmaz)
  *   POST /api/planning/quarantine                         yeni giris-cikis kaydi ac (urun tanimi, uygunsuzluk tanimi, giris tarihi/personeli)
  *   GET/PUT /api/planning/quarantine/:id                   ayrinti (tashih gecmisi + toplamlar) / duzenle;  DELETE .../:id  (yalniz yonetici)
@@ -45,6 +46,8 @@
  *   POST .../quarantine/:id/reopen                         yanlislikla yapilan cikisi geri al ('acik'a doner)
  *   POST .../quarantine/:id/corrections {doneOn?, operator, description, qty, okQty?, scrapQty?, manHours?, note?}  TASHIH ekle (EYS.FR.049; yalniz acik kayitta)
  *   DELETE /api/planning/quarantine/corrections/:id         yanlis tashih satirini sil (yalniz yonetici)
+ *   GET  /api/planning/quarantine/hurda-deposu?from=&to=    KARANTINA DEPOSU (Mikro dep_no=5): "Hurda deposu" sekmesi, Karantina->Hurda(3) basarili transferleri
+ *   POST .../quarantine/:id/depot/retry-giris                basarisiz Karantina GIRIS'ini elle yeniden dener (normalde batchQty guncellenince kendiliginden tetiklenir)
  *   GET  /api/planning/devices?q=&active=&usable=&calibration=   OLCUM CIHAZLARI TAKIP listesi (EYS.LS.006)
  *   POST /api/planning/devices                            yeni olcum cihazi ekle (yalniz kategori+tanim zorunlu)
  *   POST /api/planning/devices/import                      Setup kurulumunda ILK SEFER icin EYS.LS.006 Excel'ini iceri aktar (govde = ham .xlsx)
@@ -324,6 +327,9 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         if (method === 'POST') return sendJson(res, 201, planning.samples.create(await readJson(req), { by: who(req) })), true;
       }
       if (method === 'PUT' && path === '/api/planning/samples/sequence') return sendJson(res, 200, planning.samples.setSequence((await readJson(req)).last)), true;
+      if (method === 'GET' && path === '/api/planning/samples/stats') {
+        return sendJson(res, 200, planning.samples.rejectionStats({ from: url.searchParams.get('from') ?? '', to: url.searchParams.get('to') ?? '' })), true;
+      }
       if ((m = /^\/api\/planning\/samples\/(\d{1,12})$/.exec(path))) {
         if (method === 'GET') return sendJson(res, 200, planning.samples.get(Number(m[1]))), true;
         if (method === 'PUT') return sendJson(res, 200, planning.samples.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
@@ -346,6 +352,12 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         }
         if (method === 'POST') return sendJson(res, 201, planning.quarantine.create(await readJson(req), { by: who(req) })), true;
       }
+      // Karantina deposu (Mikro, dep_no=5): "Hurda deposu" sekmesi - /corrections ya da /(\d+) ile CAKISMAZ ("hurda-deposu" rakam degil).
+      if (method === 'GET' && path === '/api/planning/quarantine/hurda-deposu') {
+        return sendJson(res, 200, { items: planning.quarantineDepot.listHurda({
+          from: url.searchParams.get('from') ?? '', to: url.searchParams.get('to') ?? '', limit: intParam(url, 'limit', 300, { min: 1, max: 1000 }),
+        }) }), true;
+      }
       if (method === 'DELETE' && (m = /^\/api\/planning\/quarantine\/corrections\/(\d{1,12})$/.exec(path))) {
         return sendJson(res, 200, planning.quarantine.deleteCorrection(Number(m[1]))), true;
       }
@@ -362,6 +374,11 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       }
       if (method === 'POST' && (m = /^\/api\/planning\/quarantine\/(\d{1,12})\/corrections$/.exec(path))) {
         return sendJson(res, 200, planning.quarantine.addCorrection(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+      // Basarisiz GIRIS'i elle yeniden dene (fire-and-forget'in tek kurtarma yolu - normalde batchQty guncellenince kendiliginden tetiklenir).
+      if (method === 'POST' && (m = /^\/api\/planning\/quarantine\/(\d{1,12})\/depot\/retry-giris$/.exec(path))) {
+        await planning.quarantineDepot.sendGiris(Number(m[1]), { by: who(req) });
+        return sendJson(res, 200, planning.quarantine.get(Number(m[1]))), true;
       }
 
       /* ---- olcum cihazlari takip (EYS.LS.006) ---- */

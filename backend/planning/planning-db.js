@@ -351,9 +351,6 @@ export class PlanningDb {
     const haveP = new Set(this.db.prepare('PRAGMA table_info(products)').all().map((c) => c.name));
     for (const [name, type] of [['measure_plan', 'TEXT'], ['measure_plan_at', 'INTEGER'], ['box_qty', 'INTEGER']]) if (!haveP.has(name)) this.db.exec(`ALTER TABLE products ADD COLUMN ${name} ${type}`);
 
-    // urun karti: Mikro'dan (siparis dosyasi) SON gelen degerlerin anlik goruntusu. Mikro'da DEGISEN alanlari bulmak icin (yeni deger onceki Mikro
-    // degerinden farkliysa karta uygulanir; ayni kaldiysa karttaki deger, planlama Excel'inden ya da elle gelmis olsa da, korunur).
-    if (!haveP.has('src_snapshot')) this.db.exec('ALTER TABLE products ADD COLUMN src_snapshot TEXT');
     this.#backfillCustomerCodes();
 
     // kasa/kart: yikama, kurutma, tavlama isaretleri (eski veritabanlari bos = hicbiri isaretli degil)
@@ -413,16 +410,6 @@ export class PlanningDb {
       `INSERT INTO source_files (path, size, mtime_ms, sha256, imported_at, summary) VALUES (?,?,?,?,?,?)
        ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms, sha256 = excluded.sha256, imported_at = excluded.imported_at, summary = excluded.summary`,
     ).run(path, size, mtimeMs, sha256, importedAt, summary === null ? null : JSON.stringify(summary));
-  }
-
-  /** Urun kartinin Mikro anlik goruntusu ({alan: deger}) ya da null (hic gelmemis). */
-  getSnapshot(codeKey) {
-    const r = this.db.prepare('SELECT src_snapshot FROM products WHERE code_key = ?').get(codeKey);
-    return r?.src_snapshot ? JSON.parse(r.src_snapshot) : null;
-  }
-
-  setSnapshot(codeKey, snapshot) {
-    this.db.prepare('UPDATE products SET src_snapshot = ? WHERE code_key = ?').run(JSON.stringify(snapshot), codeKey);
   }
 
   /** Standart koli ici adedi YOKSA yazar (paketleme ilk koliyi yapinca ogrenir); kart "elle duzenlendi" sayilmaz. @returns {boolean} yazildi mi */
@@ -937,12 +924,15 @@ export class PlanningDb {
 
   /**
    * @param {{q?: string, status?: string, machineId?: string, limit?: number, offset?: number}} [f]
-   *   status: 'aktif' (planlandi + uretimde) | 'uretimde' | 'bitti' | 'planlandi' | 'iptal' | 'tumu'. Uretimde olanlar listede en uste gelir.
+   *   status: 'aktif' (planlandi + uretimde) | 'uretimde-bitti' (karantina baglamak icin - henuz tashih/sevk
+   *   edilmemis is emirleri, bkz. planning-hurda.js is emri secici) | 'uretimde' | 'bitti' | 'planlandi' | 'iptal' | 'tumu'.
+   *   Uretimde olanlar listede en uste gelir.
    */
   listWorkOrders({ q = '', status = 'aktif', machineId = '', limit = 100, offset = 0 } = {}) {
     const conds = [];
     const args = [];
     if (status === 'aktif') conds.push("status IN ('planlandi', 'uretimde')");
+    else if (status === 'uretimde-bitti') conds.push("status IN ('uretimde', 'bitti')");
     else if (['planlandi', 'uretimde', 'bitti', 'iptal'].includes(status)) conds.push(`status = '${status}'`);
     if (machineId !== '') { conds.push('machine_id = ?'); args.push(machineId); }
     const key = foldTr(q);

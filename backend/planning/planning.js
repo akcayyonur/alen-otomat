@@ -26,6 +26,7 @@ import { Schedule } from './schedule.js';
 import { PriceStudies } from './price-studies.js';
 import { SampleTracking } from './sample-tracking.js';
 import { Quarantine } from './quarantine.js';
+import { QuarantineDepot } from './quarantine-depot.js';
 import { MeasuringDevices } from './measuring-devices.js';
 import { DrawingTracking } from './drawing-tracking.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
@@ -113,6 +114,8 @@ export class Planning {
     this.packingSpecs = new PackingSpecs({ planning: this });
     /** Bitmiş ürün depo akışı (product-depot.js): iş emri bitince Merkez->Geçici, paketlenince Geçici->Merkez; `mikroStock`'u kullanır. */
     this.productDepot = new ProductDepot({ planning: this });
+    /** Karantina deposu (quarantine-depot.js): hurda girişi bir iş emrine bağlıysa Karantina<->Geçici/Hurda Mikro hareketleri. `productDepot`'un KARDEŞİ, aynı kapı (PRODUCT_DEPOT_ENABLED). */
+    this.quarantineDepot = new QuarantineDepot({ planning: this });
     /** Cizelgeleme / optimizasyon (OR-Tools CP-SAT, ayri Python sureci): bekleyen is emirlerini tezgahlara ONERIR (schedule.js). ASLA otomatik uygulamaz. */
     this.schedule = new Schedule({ planning: this });
     this.listSeenPrograms = listSeenPrograms;
@@ -553,7 +556,10 @@ export class Planning {
       // hammadde sarfiyati (D/F): alan adi `material` is emrinin kendi hammadde metni oldugu icin `consumption`
       consumption: { ...c, fis: this.#fisOf(w) },
       // bitmis urun depo akisi (Merkez<->Gecici, Mikro): product-depot.js statusFor() getWorkOrder()'i TEKRAR CAGIRMAZ (sonsuz donguyu onlemek icin ham satirdan okur).
+      // depot.bitis.pendingQuarantine zaten "karantinada bekleyen" sayisini tasir; burada yalniz quarantineDepot'a
+      // OZEL olan "uretimdeyken OK cikip ertelenmis, Mikroya henuz gonderilmemis" miktar eklenir (ayni sebeple: sonsuz donguyu onlemek icin quarantineDepot de ham satirdan okur).
       depot: this.productDepot.statusFor(w.no),
+      karantina: { pendingOk: this.quarantineDepot.pendingOkForWorkOrder(w.no) },
       // kart basma penceresindeki "ek islem" onerisi: bu urunun gecmis kartlarinda yikama/kurutma/tavlama'ya GIDECEK isaretlenmis mi (bkz. cardStepDefaultsFor).
       cardStepDefaults: this.db.cardStepDefaultsFor(w.codeKey),
       reservation: this.db.getReservation(w.no),
@@ -849,6 +855,10 @@ export class Planning {
         this.db.addWorkOrderEvent(cur.no, 'hammadde-tuketildi', `${real.kg ?? '—'} kg (${packing.rows > 0 ? 'paketleme' : 'teorik'})`, { by, now });
       }
     });
+    // Karantina deposu: uretimdeyken OK cikip ertelenmis (Mikro'ya henuz gonderilmemis) kisim varsa, is emri
+    // bitti diye simdi gonderilir (bkz. quarantine-depot.js). Fire-and-forget: Mikro kapali/ulasilamaz olsa
+    // da finish BASARILI doner, hata gecmise zaten yazilir, bir sonraki tashih/senkron farki toplar.
+    this.quarantineDepot.flushPendingOk(cur.no, { by, now }).catch(() => {});
     return { ...this.getWorkOrder(cur.no, { now }), warnings };
   }
 

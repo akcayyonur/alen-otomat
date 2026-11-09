@@ -14,7 +14,7 @@
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
-  put, del, cellText, fmtNum, dateText, debounce, openModal, chip, canWrite, isAdminRole, printModal, openListPrint, truncCell,
+  put, del, cellText, fmtNum, fmtDec, dateKey, dateText, debounce, openModal, chip, canWrite, isAdminRole, printModal, openListPrint, truncCell,
 } from './planning-common.js';
 import { openGkkPicker } from './planning-gkk.js';
 
@@ -27,21 +27,74 @@ const rowClass = (status) => (status === 'onaylandi' ? ' pl-done' : status === '
 const isoDate = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '');
 const decInput = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
 
+/* Analiz (ret oranı) için aralık hazır seçimleri: "Bu ay" güncel ayın başından bugüne; "Son N ay" N-1 önceki ayın
+   başından bugüne (bu ay dahil N ay) - RANGE_PRESETS'teki (bugun/ay/gecenay/30gun) ile AYNI amaç değil, farklı
+   kümeleme, bu yüzden kendi listesi. */
+const STATS_PRESETS = Object.freeze([
+  { key: 'ay', label: 'Bu ay', range: (n) => [dateKey(new Date(n.getFullYear(), n.getMonth(), 1)), dateKey(n)] },
+  { key: '3ay', label: 'Son 3 ay', range: (n) => [dateKey(new Date(n.getFullYear(), n.getMonth() - 2, 1)), dateKey(n)] },
+  { key: '6ay', label: 'Son 6 ay', range: (n) => [dateKey(new Date(n.getFullYear(), n.getMonth() - 5, 1)), dateKey(n)] },
+  { key: 'yil', label: 'Bu yıl', range: (n) => [dateKey(new Date(n.getFullYear(), 0, 1)), dateKey(n)] },
+]);
+const pct = (v) => (v == null ? '<span class="is-null">—</span>' : `%${fmtDec(v * 100, 1)}`);
+
 /* ============================================================================================== liste */
 
 /** @param {HTMLElement} host */
 export async function renderSamples(host) {
   const canEdit = canWrite('numune');
+  const now = new Date();
   const st = { q: '', status: '', items: [], total: 0, seq: 0 };
+  const stStats = { preset: 'ay', from: STATS_PRESETS[0].range(now)[0], to: STATS_PRESETS[0].range(now)[1], data: null, error: null, seq: 0 };
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="Kod, müşteri, müşteri numune/ürün kodu, Alen kodu ara…" aria-label="Numune ara">' +
     '<label class="fld-inline">Durum <select data-role="status"><option value="">Tümü</option><option value="bekliyor">Karar bekliyor</option><option value="onaylandi">Onaylandı</option><option value="reddedildi">Onaylanmadı</option></select></label>' +
     '<button type="button" class="icon-btn" data-act="print">Listeyi yazdır</button>' +
     (canEdit ? '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni numune formu aç</button>' : '') + '</div>' +
+    '<h4 class="sub">Analiz · ret oranı</h4>' +
+    '<div data-role="stats-panel"></div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>' +
     (isAdminRole() ? '<div data-role="seq-box"></div>' : '');
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
+
+  /* --------------------------------------------------------------------------- analiz (ret orani) */
+
+  function drawStats() {
+    const bar =
+      '<div class="pl-bar"><div class="seg" role="group" aria-label="Analiz aralığı">' +
+      STATS_PRESETS.map((p) => `<button type="button" data-stats-preset="${p.key}" class="${stStats.preset === p.key ? 'is-on' : ''}">${escapeHtml(p.label)}</button>`).join('') +
+      '</div>' +
+      `<label class="fld-inline">Başlangıç <input type="date" data-role="stats-from" value="${escapeHtml(stStats.from)}"></label>` +
+      `<label class="fld-inline">Bitiş <input type="date" data-role="stats-to" value="${escapeHtml(stStats.to)}"></label></div>`;
+    const d = stStats.data;
+    $('stats-panel').innerHTML = bar +
+      (stStats.error ? `<p class="notice notice-sim">Analiz alınamadı: ${escapeHtml(stStats.error)}</p>` :
+        !d ? '<p class="hint">Yükleniyor…</p>' :
+        '<div class="pl-kpis">' +
+        `<div class="pl-kpi"><span class="pl-kpi-l">Ret oranı</span><span class="pl-kpi-v">${pct(d.rejectionRate)}</span>` +
+        `<small class="hint">${d.decided > 0 ? `${fmtNum(d.decided)} karar · ${fmtNum(d.approved)} onay · ${fmtNum(d.rejected)} ret` : 'bu aralıkta karar verilmiş kayıt yok'}</small></div>` +
+        `<div class="pl-kpi"><span class="pl-kpi-l">Talep edilen</span><span class="pl-kpi-v">${fmtNum(d.requested)}</span>` +
+        `<small class="hint">${fmtNum(d.pending)} hâlâ karar bekliyor</small></div>` +
+        '</div>' +
+        '<p class="hint">Ret oranı, <b>karar tarihi</b> (müşteriden onay/ret geldiği tarih) bu aralıkta olan kayıtlardan hesaplanır. "Talep edilen" ise bu aralıkta açılan numune formu sayısıdır (farklı tarih alanı — talebi bu aralıkta ama kararı henüz gelmemiş kayıtlar olabilir).</p>');
+  }
+
+  async function loadStats() {
+    const seq = ++stStats.seq;
+    stStats.error = null;
+    drawStats();
+    try {
+      const d = await api(`/api/planning/samples/stats?${new URLSearchParams({ from: stStats.from, to: stStats.to })}`);
+      if (seq !== stStats.seq) return;
+      stStats.data = d;
+      drawStats();
+    } catch (err) {
+      if (seq !== stStats.seq) return;
+      stStats.error = err.message;
+      drawStats();
+    }
+  }
 
   function draw() {
     $('count').textContent = st.total === 0
@@ -87,8 +140,24 @@ export async function renderSamples(host) {
 
   const search = debounce((value) => { st.q = value.trim(); load(); }, 250);
   host.oninput = (ev) => { if (ev.target.dataset?.role === 'q') search(ev.target.value); };
-  host.onchange = (ev) => { if (ev.target.dataset?.role === 'status') { st.status = ev.target.value; load(); } };
+  host.onchange = (ev) => {
+    if (ev.target.dataset?.role === 'status') { st.status = ev.target.value; load(); return; }
+    const role = ev.target.dataset?.role;
+    if (role === 'stats-from' || role === 'stats-to') {
+      if (role === 'stats-from') stStats.from = ev.target.value; else stStats.to = ev.target.value;
+      stStats.preset = '';
+      if (stStats.from && stStats.to) loadStats();
+    }
+  };
   host.onclick = (ev) => {
+    const statsPreset = ev.target.closest('[data-stats-preset]')?.dataset.statsPreset;
+    if (statsPreset) {
+      const p = STATS_PRESETS.find((x) => x.key === statsPreset);
+      [stStats.from, stStats.to] = p.range(new Date());
+      stStats.preset = statsPreset;
+      loadStats();
+      return;
+    }
     if (ev.target.closest('[data-act="retry"]')) { load(); return; }
     if (ev.target.closest('[data-act="new"]')) { openSampleDialog(null, load); return; }
     if (ev.target.closest('[data-act="print"]')) {
@@ -112,6 +181,7 @@ export async function renderSamples(host) {
     const row = ev.target.closest('.pl-row');
     if (row) openSampleDialog(Number(row.dataset.id), load);
   };
+  loadStats();
   await load();
 }
 

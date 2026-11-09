@@ -79,6 +79,7 @@ export const SCREEN_ROUTES = Object.freeze([
 
   // numune takip (EYS.FR.012): olusturma/duzenleme/karar herkese (usta doldurur, ofis karari isaretler); sira tabani/silme kayitsiz -> admin
   [['GET'], /^\/api\/planning\/samples$/, 'numune', 'read'],
+  [['GET'], /^\/api\/planning\/samples\/stats$/, 'numune', 'read'],
   [['POST'], /^\/api\/planning\/samples$/, 'numune', 'write'],
   [['GET'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'read'],
   [['PUT'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'write'],
@@ -90,6 +91,9 @@ export const SCREEN_ROUTES = Object.freeze([
   [['GET'], /^\/api\/planning\/quarantine\/\d{1,12}$/, 'hurda', 'read'],
   [['PUT'], /^\/api\/planning\/quarantine\/\d{1,12}$/, 'hurda', 'write'],
   [['POST'], /^\/api\/planning\/quarantine\/\d{1,12}\/(?:exit|reopen|corrections)$/, 'hurda', 'write'],
+  // karantina deposu (Mikro dep_no=5): "Hurda deposu" sekmesi + basarisiz GIRIS'i elle yeniden deneme
+  [['GET'], /^\/api\/planning\/quarantine\/hurda-deposu$/, 'hurda', 'read'],
+  [['POST'], /^\/api\/planning\/quarantine\/\d{1,12}\/depot\/retry-giris$/, 'hurda', 'write'],
 
   // olcum cihazlari takip (EYS.LS.006): okuma/ekleme/duzenleme role'e; silme ve Excel'den toplu iceri aktarma kayitsiz -> admin
   [['GET'], /^\/api\/planning\/devices$/, 'olcucihazlari', 'read'],

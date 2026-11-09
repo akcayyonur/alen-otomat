@@ -15,6 +15,7 @@
 import { PlanningError } from './errors.js';
 import { foldTr } from './normalize.js';
 import { text, number, day } from './fields.js';
+import { dateKey, parseDateKey, addDays, daysBetween } from '../../shared/shifts.js';
 
 export const STATUS = Object.freeze(['bekliyor', 'onaylandi', 'reddedildi']);
 
@@ -119,6 +120,49 @@ export class SampleTracking {
     const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM sample_requests ${where}`).get(...args).n);
     const items = this.db.prepare(`SELECT * FROM sample_requests ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, limit, offset).map(row);
     return { total, items, next: this.nextSeq() };
+  }
+
+  /* --------------------------------------------------------------------------------- analiz (ret orani) */
+
+  /** 'yyyy-aa-gg' -> gun araligi [fromMs, toMs); vars. bu ayin basindan bugune. `planning.js`'teki ozel #dayRange'in AYNI mantigi (yillik + pay icin ayni 400 gun siniri). */
+  #dayRange(from, to, now) {
+    const today = dateKey(new Date(now));
+    const toKey = to ? String(to) : today;
+    const fromKey = from ? String(from) : `${today.slice(0, 8)}01`;
+    const p = parseDateKey(fromKey);
+    const q = parseDateKey(toKey);
+    if (!p || !q) throw new PlanningError('Tarih yyyy-aa-gg biçiminde olmalı.');
+    if (fromKey > toKey) throw new PlanningError('Başlangıç tarihi bitişten sonra olamaz.');
+    if (daysBetween(fromKey, toKey) > 400) throw new PlanningError('Aralık en fazla 400 gün olabilir.');
+    const next = parseDateKey(addDays(toKey, 1));
+    return { fromKey, toKey, fromMs: new Date(p.y, p.m - 1, p.d).getTime(), toMs: new Date(next.y, next.m - 1, next.d).getTime() };
+  }
+
+  /**
+   * Ret analizi: belirtilen aralıkta MÜŞTERİDEN KARAR GELMİŞ (`decidedOn` bu aralıkta) kayıtların onay/ret
+   * dağılımı — "ret oranı" bu sayıdan hesaplanır, çünkü henüz karar verilmemiş ("bekliyor") bir kayıt onaylandı
+   * ya da reddedildi sayılamaz. Aynı aralıkta TALEP EDİLEN (`requestedOn`) kayıt sayısı ve hâlâ bekleyenler
+   * bağlam için ayrıca döner (farklı bir tarih alanına göre, karıştırılmasın diye ayrı sayılar).
+   */
+  rejectionStats({ from = '', to = '', now = Date.now() } = {}) {
+    const range = this.#dayRange(from, to, now);
+    const decided = this.db.prepare(
+      'SELECT status, COUNT(*) AS n FROM sample_requests WHERE decided_on >= ? AND decided_on < ? GROUP BY status',
+    ).all(range.fromMs, range.toMs);
+    const approved = Number(decided.find((r) => r.status === 'onaylandi')?.n ?? 0);
+    const rejected = Number(decided.find((r) => r.status === 'reddedildi')?.n ?? 0);
+    const decidedTotal = approved + rejected;
+    const requested = Number(this.db.prepare(
+      'SELECT COUNT(*) AS n FROM sample_requests WHERE requested_on >= ? AND requested_on < ?',
+    ).get(range.fromMs, range.toMs).n);
+    const pending = Number(this.db.prepare(
+      "SELECT COUNT(*) AS n FROM sample_requests WHERE requested_on >= ? AND requested_on < ? AND status = 'bekliyor'",
+    ).get(range.fromMs, range.toMs).n);
+    return {
+      from: range.fromKey, to: range.toKey,
+      decided: decidedTotal, approved, rejected, rejectionRate: decidedTotal > 0 ? rejected / decidedTotal : null,
+      requested, pending,
+    };
   }
 
   get(id) {

@@ -86,6 +86,56 @@ test('refresh: elle duzenlenmis kartta Mikro farki EZILMEZ, "korunan" olarak bil
   } finally { k.bitir(); }
 });
 
+test('refresh: Mikro ana veri kaynagi - karttaki deger Mikro\'dan HANGI SEBEPLE olursa olsun farkliysa (elle duzenlenmemisse) HER SENKRONDA Mikro\'ya uyar, "ilk temas" ya da "anlik goruntu" gibi bir ayirim yok', async () => {
+  // Gercek olay (2026-11-09, Nİ178.002, kullanici karari): kart eskiden csv-isemri'den brut/net TERS gelmisti ve
+  // "Mikro'dan yenile" bunu hicbir zaman duzeltemiyordu, cunku eski kod "Mikro'nun SON gonderdigi deger" (anlik
+  // goruntu) ile kiyaslayip "Mikro gercekten degisti mi" diye soruyordu - kart yanlis olsa bile anlik goruntu
+  // Mikro'nun GUNCEL degeriyle hep ayni kaliyordu (onceki bir senkronda sessizce oraya yazilmisti), yani soru hep
+  // "hayir" cevap veriyordu. Kullanici karari: boyle bir soru SORULMAYACAK - yalniz "kart ile Mikro'nun GUNCEL
+  // degeri ayni mi" sorulur, farkliysa (elle duzenlenmemisse) uygulanir. Anlik goruntu mekanizmasi (`src_snapshot`,
+  // `getSnapshot`/`setSnapshot`) tamamen kaldirildi; bu artik Nİ178.002 gibi onceden kilitli kartlari da bir
+  // dahaki senkronda KENDILIGINDEN duzeltir (elle mudahale gerekmez).
+  const k = kur([satir()]);
+  try {
+    k.p.db.saveProduct('SR001.001', { stockCode: 'SR001.001', grossKg: 0.01, netKg: 0.02 }, { source: 'csv-isemri', by: null, edited: false });
+
+    const res = await k.p.mikro.refresh();
+    assert.equal(res.totals.products.updated, 1, 'ilk senkronda duzeltilmis olmali');
+    assert.equal(res.totals.products.protected, 0);
+    const kart = k.p.getProduct('SR001.001');
+    assert.equal(kart.grossKg, 0.02, 'BR'); // satir()'de BR:0,0200
+    assert.equal(kart.netKg, 0.01, 'NT');   // satir()'de NT:0,0100
+
+    const res2 = await k.p.mikro.refresh(); // Mikro gercekten degismedi: artik "ayni" oldugu icin bir daha yazilmaz
+    assert.equal(res2.totals.products.updated, 0);
+  } finally { k.bitir(); }
+});
+
+test('refresh: edited=true kart yine de korunur, "korunan" olarak bildirilir (tek istisna, degismedi)', async () => {
+  const k = kur([satir()]);
+  try {
+    k.p.db.saveProduct('SR001.001', { stockCode: 'SR001.001', grossKg: 0.01, netKg: 0.02 }, { source: 'elle', by: 'usta', edited: true });
+
+    const r = await k.p.mikro.refresh();
+    assert.equal(r.totals.products.protected, 1);
+    assert.deepEqual(r.changes.products.protected[0].stockCode, 'SR001.001');
+    const kart = k.p.getProduct('SR001.001');
+    assert.equal(kart.grossKg, 0.01, 'elle girilen deger korundu');
+    assert.equal(kart.netKg, 0.02, 'elle girilen deger korundu');
+  } finally { k.bitir(); }
+});
+
+test('refresh: yeni acilan kart Mikro gercekten degismedikce bir sonraki senkronda tekrar yazilmaz (unchanged)', async () => {
+  const k = kur([satir()]);
+  try {
+    await k.p.mikro.refresh(); // kart "added" ile olusur, degerler Mikro'nunkiyle zaten ayni
+    const r2 = await k.p.mikro.refresh(); // ayni satirlarla ikinci senkron
+    assert.equal(r2.totals.products.updated, 0, 'Mikro gercekten degismedi, tekrar yazilmamali');
+    assert.equal(r2.totals.products.added, 0);
+    assert.equal(r2.totals.products.protected, 0);
+  } finally { k.bitir(); }
+});
+
 test('refresh: ayni anda iki senkron 409 busy verir', async () => {
   let cozBekleyeni;
   const client = {

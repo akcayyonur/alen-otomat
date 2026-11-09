@@ -36,6 +36,7 @@ export const STATUS = Object.freeze(['acik', 'kapali']);
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS quarantine_entries (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  wo_no           TEXT,
   product_label   TEXT    NOT NULL,
   card_no         TEXT,
   issue           TEXT    NOT NULL,
@@ -86,7 +87,7 @@ const localMidnight = (ms) => { const d = new Date(ms); return new Date(d.getFul
 const fmtCode = (id) => `H${String(id).padStart(6, '0')}`;
 
 const entryRow = (r) => (r == null ? null : {
-  id: Number(r.id), code: fmtCode(r.id), productLabel: r.product_label, cardNo: r.card_no, issue: r.issue,
+  id: Number(r.id), code: fmtCode(r.id), woNo: r.wo_no, productLabel: r.product_label, cardNo: r.card_no, issue: r.issue,
   customer: r.customer, customerCode: r.customer_code, stockCode: r.stock_code, detectedAt: r.detected_at, action: r.action,
   batchQty: r.batch_qty == null ? null : Number(r.batch_qty), scrapQty: r.scrap_qty == null ? null : Number(r.scrap_qty),
   qualityCostTl: r.quality_cost_tl == null ? null : Number(r.quality_cost_tl), note: r.note,
@@ -137,7 +138,7 @@ export class Quarantine {
     const have = new Set(this.db.prepare('PRAGMA table_info(quarantine_entries)').all().map((c) => c.name));
     const add = [
       ['customer', 'TEXT'], ['customer_code', 'TEXT'], ['stock_code', 'TEXT'], ['detected_at', 'TEXT'], ['action', 'TEXT'],
-      ['batch_qty', 'INTEGER'], ['scrap_qty', 'INTEGER'], ['quality_cost_tl', 'REAL'], ['note', 'TEXT'],
+      ['batch_qty', 'INTEGER'], ['scrap_qty', 'INTEGER'], ['quality_cost_tl', 'REAL'], ['note', 'TEXT'], ['wo_no', 'TEXT'],
     ];
     for (const [name, type] of add) if (!have.has(name)) this.db.exec(`ALTER TABLE quarantine_entries ADD COLUMN ${name} ${type}`);
   }
@@ -173,12 +174,17 @@ export class Quarantine {
     const totals = corrections.reduce((s, c) => ({
       qty: s.qty + c.qty, okQty: s.okQty + (c.okQty ?? 0), scrapQty: s.scrapQty + (c.scrapQty ?? 0), manHours: s.manHours + (c.manHours ?? 0),
     }), { qty: 0, okQty: 0, scrapQty: 0, manHours: 0 });
-    return { ...entryRow(r), corrections, totals };
+    const row = entryRow(r);
+    // depot: yalniz is emrine bagli kayitlarda anlamli (bkz. quarantine-depot.js); baglanmamis kayitta hep bos/sifir doner.
+    return { ...row, corrections, totals, depot: this.planning.quarantineDepot.statusFor(row.id) };
   }
 
   #entryFields(input, { partial = false, now = Date.now() } = {}) {
     const out = {};
     const has = (k) => Object.hasOwn(input, k);
+    // Is emri var olma kontrolu YAPILMAZ (UI bir secici ile dolduracagi icin gecersiz 'no' beklenmez; products
+    // tablosuyla hic baglanmama ilkesiyle ayni esneklik). Bos gonderilirse (link kaldirilirsa) null olur.
+    if (has('woNo')) out.woNo = text(input.woNo, 'İş emri no', 20);
     if (!partial || has('productLabel')) {
       const v = text(input.productLabel, 'Ürün tanımı', 200);
       if (!v) throw new PlanningError('Ürün tanımı gerekli.');
@@ -219,15 +225,17 @@ export class Quarantine {
   create(input = {}, { by = null, now = Date.now() } = {}) {
     const f = this.#entryFields(input, { now });
     const id = Number(this.db.prepare(
-      `INSERT INTO quarantine_entries (product_label, card_no, issue, customer, customer_code, stock_code, detected_at, action,
+      `INSERT INTO quarantine_entries (wo_no, product_label, card_no, issue, customer, customer_code, stock_code, detected_at, action,
         batch_qty, scrap_qty, quality_cost_tl, note, entered_on, entered_by, status, search_key, created_at, created_by, updated_at, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'acik',?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'acik',?,?,?,?,?)`,
     ).run(
-      f.productLabel, f.cardNo ?? null, f.issue, f.customer ?? null, f.customerCode ?? null, f.stockCode ?? null, f.detectedAt ?? null,
+      f.woNo ?? null, f.productLabel, f.cardNo ?? null, f.issue, f.customer ?? null, f.customerCode ?? null, f.stockCode ?? null, f.detectedAt ?? null,
       f.action ?? null, f.batchQty ?? null, f.scrapQty ?? null, f.qualityCostTl ?? null, f.note ?? null,
       f.enteredOn, f.enteredBy, this.#searchKey(f), now, by, now, by,
     ).lastInsertRowid);
-    return this.get(id);
+    const created = this.get(id);
+    this.#onLink(created, null, null, { by, now });
+    return created;
   }
 
   /** Giriş/çıkış alanlarını düzeltir (yalnız gönderilen alanlar değişir; durum BURADAN değişmez — bkz. exit()/reopen()). */
@@ -239,7 +247,7 @@ export class Quarantine {
     const cols = [];
     const args = [];
     const map = {
-      productLabel: 'product_label', cardNo: 'card_no', issue: 'issue',
+      woNo: 'wo_no', productLabel: 'product_label', cardNo: 'card_no', issue: 'issue',
       customer: 'customer', customerCode: 'customer_code', stockCode: 'stock_code', detectedAt: 'detected_at', action: 'action',
       batchQty: 'batch_qty', scrapQty: 'scrap_qty', qualityCostTl: 'quality_cost_tl', note: 'note',
       enteredOn: 'entered_on', enteredBy: 'entered_by', exitReason: 'exit_reason', exitedOn: 'exited_on', exitedBy: 'exited_by',
@@ -248,7 +256,25 @@ export class Quarantine {
     cols.push('search_key = ?'); args.push(this.#searchKey(next));
     cols.push('updated_at = ?', 'updated_by = ?'); args.push(now, by);
     this.db.prepare(`UPDATE quarantine_entries SET ${cols.join(', ')} WHERE id = ?`).run(...args, Number(id));
-    return this.get(id);
+    const updated = this.get(id);
+    this.#onLink(updated, cur.woNo, cur.batchQty, { by, now });
+    return updated;
+  }
+
+  /**
+   * Kayıt bir iş emrine bağlıysa (yeni ya da zaten bağlıyken), iş emri geçmişine not düşer ve miktar netleşince
+   * (`batchQty` ilk kez ya da farklı bir değere gelince) Mikro Karantina depo GİRİŞ'ini tetikler (fire-and-forget:
+   * `create`/`update` SENKRON fonksiyonlardır, Mikro'ya bağımlı DEĞİLDİR — bkz. product-depot.js'teki aynı ilke).
+   */
+  #onLink(entry, prevWoNo, prevBatchQty, { by, now }) {
+    if (!entry.woNo) return;
+    if (!prevWoNo) {
+      this.planning.db.addWorkOrderEvent(entry.woNo, 'karantinaya-baglandi', `${entry.code} karantina kaydı açıldı: ${entry.productLabel}`, { by, now });
+    }
+    if (entry.batchQty != null && entry.batchQty !== prevBatchQty) {
+      this.planning.db.addWorkOrderEvent(entry.woNo, 'karantina-miktari-belirlendi', `${entry.code}: ${entry.batchQty} adet karantinaya çekildi`, { by, now });
+      this.planning.quarantineDepot.sendGiris(entry.id, { by, now }).catch(() => { /* gecmise zaten yazildi; bir sonraki guncellemede ya da elle yeniden denenir */ });
+    }
   }
 
   /** "Çıkış yap": yalnız açık kayıtta. Çıkış nedeni/tarihi/personeli zorunlu. */
@@ -306,7 +332,32 @@ export class Quarantine {
       `INSERT INTO quarantine_corrections (quarantine_id, done_on, operator, description, qty, ok_qty, scrap_qty, man_hours, note, created_at, created_by)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(Number(id), doneOn, operator, description, qty, okQty, scrapQty, manHours, note, now, by);
-    return this.get(id);
+    const updated = this.get(id);
+    this.#onCorrection(updated, okQty ?? 0, scrapQty ?? 0, { by, now });
+    return updated;
+  }
+
+  /**
+   * Tashih sonucu (OK/hurda) bu kayıt bir iş emrine bağlıysa Mikro'ya yansır (kullanıcı kararı, 2026-11-09):
+   * hurda HER ZAMAN hemen Karantina->Hurda gider; OK yalnız iş emri ZATEN `bitti` ise hemen Karantina->Geçici
+   * gider, üretimdeyken ERTELENİR (iş emri geçmişine not düşülür, gerçek gönderim `finishWorkOrder`'daki
+   * `flushPendingOk` ile iş emri bitince olur — bkz. quarantine-depot.js dosya başı). Fire-and-forget.
+   */
+  #onCorrection(entry, okQty, scrapQty, { by, now }) {
+    if (!entry.woNo) return;
+    if (scrapQty > 0) this.planning.quarantineDepot.sendHurda(entry.id, scrapQty, { by, now }).catch(() => {});
+    if (okQty > 0) {
+      const wo = this.planning.db.getWorkOrder(entry.woNo);
+      if (wo?.status === 'bitti') {
+        this.planning.quarantineDepot.sendOk(entry.id, okQty, { by, now }).catch(() => {});
+      } else {
+        this.planning.db.addWorkOrderEvent(
+          entry.woNo, 'karantina-tashih',
+          `${entry.code}: ${okQty} adet OK (iş emri bitince Geçici'ye aktarılacak)${scrapQty > 0 ? `, ${scrapQty} adet hurda` : ''}`,
+          { by, now },
+        );
+      }
+    }
   }
 
   /** Yanlış girilen tashih satırını sil. Yalnız yönetici. */

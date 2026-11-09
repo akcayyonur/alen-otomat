@@ -131,16 +131,18 @@ test('olusturma: siparis satirindan; urun degerleri KOPYALANIR, hesaplar ve vars
   p.close();
 });
 
-test('olusturma: siparis satirindan aciliyorsa MAMUL ADI o satirin (Mikro\'dan taze) adi - urun kartinin BAYAT adi degil', () => {
-  // Gercek hatanin aynisi: urun karti once eski/kisa bir adla acilmis (ISEMRI ice almasi), sonradan gelen siparis
-  // satirinin adi (Mikro'dan) daha TAM ama kart ilk dolu deger korunduğu icin guncellenmiyor (bkz. CLAUDE.md
-  // "Musteri urun kodu / Mikro senkron" kurali). Siparissiz acilista hala kart adina dusulmeli.
+test('olusturma: siparis satirindan aciliyorsa MAMUL ADI o satirin (Mikro\'dan taze) adi - elle duzenlenmis (korunan) kartin BAYAT adi degil', () => {
+  // Kart elle duzenlenmis (edited=true, ör. usta adi bilerek kisalttiysa): bu durumda Mikro/siparis senkronu
+  // karti HALA gUncellemez (korunan kural, degismedi - bkz. importers.js "elle duzenlenmis karta dokunulmaz").
+  // Siparisten is emri acilirken SATIRIN (Mikro'dan taze) adi kullanilmali, kartin bayat/korunan adi degil
+  // (bkz. CLAUDE.md "Mamul adı bazı ürünlerde eksik basılıyordu", 2026-11-03).
   const p = new Planning({ dbFile: ':memory:', listMachines: () => MAKINELER });
   p.importCsv(Buffer.from([
     'ÜRETİM EMRİ NO;TARİH;MAMÜL ADI;ALEN KOD;MÜŞTERİ KODU;MAKİNA NO;ADET;HAMMADDE;ALTERNATİF HM;ÜRETİM SN;HM TOPLAM;BRÜT GR;NET GR',
     '2026000001;02.01.2026;PİRİNÇ SOMUN G1;SR055.011;1050100107;CNC;600;HM617.SK37.00;;32;76,5;0,1275;0,0495',
     '',
   ].join('\r\n'), 'utf8'));
+  p.updateProduct('SR055.011', { note: 'ad kasten kisaltildi' }, { by: 'admin' }); // kart artik elle duzenlenmis (edited=true)
   p.importCsv(Buffer.from([
     'Musteri;Mamul_Kodu;Mamul_Adi;Evrak_No;Sip_Tarihi;Miktar;Sevk_Edilen_Miktar;Kalan_Miktar;Teyit_Edilen_Tarih;Must_Sip_No;TAM BOY',
     'KONVEYÖR A.Ş.;SR055.011;1050100107 1235-963 PİRİNÇ SOMUN G1 SW37 16,5 CW617N 601275;SPR-738;03.11.2026;600;0;600;09.11.2026;4100018000;',
@@ -148,13 +150,13 @@ test('olusturma: siparis satirindan aciliyorsa MAMUL ADI o satirin (Mikro\'dan t
   ].join('\r\n'), 'utf8'));
 
   const card = p.getProduct('SR055.011');
-  assert.equal(card.name, 'PİRİNÇ SOMUN G1', 'kart adi ice almada EZILMEZ (ilk dolu deger korunur) - bu bilinen/beklenen davranis');
+  assert.equal(card.name, 'PİRİNÇ SOMUN G1', 'elle duzenlenmis (edited) kart Mikro/siparis senkronuyla EZILMEZ');
   const [g] = p.searchOrders({ q: '4100018000' });
   const [line] = p.orderLines({ customerKey: g.customerKey, custOrderKey: g.custOrderKey, docKey: g.docKey });
   assert.equal(line.itemName, '1050100107 1235-963 PİRİNÇ SOMUN G1 SW37 16,5 CW617N 601275');
 
   const fromLine = p.createWorkOrder({ lineId: line.id, targetQty: 200, machineId: 'CNC-01' }, { now: NOW });
-  assert.equal(fromLine.productName, line.itemName, 'siparisten acilinca SATIRIN (taze) adi kullanilmali, kartin bayat adi degil');
+  assert.equal(fromLine.productName, line.itemName, 'siparisten acilinca SATIRIN (taze) adi kullanilmali, kartin bayat/korunan adi degil');
 
   const fromCard = p.createWorkOrder({ stockCode: 'SR055.011', targetQty: 50, machineId: 'CNC-01' }, { now: NOW });
   assert.equal(fromCard.productName, 'PİRİNÇ SOMUN G1', 'siparissiz acilista hala kart adina dusulur (degisen davranis degil)');
@@ -299,6 +301,18 @@ test('liste ve arama: numara, Turkce urun adi, musteri siparis no, tezgah, durum
   assert.equal(p.listWorkOrders({ machineId: 'CNC-01' }).total, 0);
   assert.equal(p.listWorkOrders({ q: '%', status: 'tumu' }).total, 0, 'LIKE ozel karakteri desen olmaz');
   assert.equal(p.listWorkOrders({ status: 'tumu' }).items[0].no, b.no, 'en yeni once');
+  p.close();
+});
+
+test('liste: "uretimde-bitti" suzgeci (Hurda Girisi is emri secici) planlandi/iptal\'i disarida birakir, uretimde+bitti\'yi dondurur', () => {
+  const p = kur();
+  const planlandi = p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-01' }, { now: NOW });
+  const uretimde = p.startWorkOrder(p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-03' }, { now: NOW }).no, {}, { now: NOW });
+  const bitti = p.finishWorkOrderManually(p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-01' }, { now: NOW }).no, { qty: 100 }, { now: NOW });
+
+  const r = p.listWorkOrders({ status: 'uretimde-bitti' });
+  assert.deepEqual(r.items.map((x) => x.no).sort(), [uretimde.no, bitti.no].sort());
+  assert.ok(!r.items.some((x) => x.no === planlandi.no));
   p.close();
 });
 

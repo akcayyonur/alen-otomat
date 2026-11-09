@@ -145,13 +145,16 @@ export class ProductDepot {
     const paketlemeSent = this.#sentTotal(w.no, 'paketleme');
     const temizleSent = this.#sentTotal(w.no, 'temizle');
     const remaining = Math.max(0, bitisSent - paketlemeSent - temizleSent);
+    // Karantinada (tashih sonucu belirlenmemis) bekleyen kisim: "Gecici depoya aktar"ilabilir toplamdan ayri
+    // raporlanir (bkz. quarantine-depot.js); iki kez sayilmaz, pending hesabindan dusulur.
+    const pendingQuarantine = this.planning.quarantineDepot.pendingQtyForWorkOrder(w.no);
     return {
       stockCode: w.stockCode,
       configured: this.planning.mikroStock.configured(),
       writeEnabled: this.planning.mikroStock.writeEnabled(),
       // MIKRO_WRITE_ENABLED'dan AYRI kapı: bu modüle özel, "fabrika PC'si/paketleme sahada kuruluncaya kadar kapalı" (bkz. dosya başı).
       flowEnabled: this.enabled(),
-      bitis: { history: this.#history(w.no, 'bitis'), produced, sent: bitisSent, pending: w.status === 'bitti' ? Math.max(0, produced - bitisSent) : 0 },
+      bitis: { history: this.#history(w.no, 'bitis'), produced, sent: bitisSent, pendingQuarantine, pending: w.status === 'bitti' ? Math.max(0, produced - pendingQuarantine - bitisSent) : 0 },
       paketleme: { history: this.#history(w.no, 'paketleme'), packedTotal, sent: paketlemeSent, pending: Math.max(0, packedTotal - paketlemeSent) },
       // "remaining": Gecici'de bu is emrinden kalan, hic Merkez'e donmemis adet (= paketlenmeyecek fark); yalniz is emri
       // bittiyse ve hala temizlenmemis bir sey varsa elle temizlenebilir (bkz. clearRemaining, dosya basindaki not).
@@ -168,9 +171,17 @@ export class ProductDepot {
     const { w } = this.#load(woNo);
     if (w.status !== 'bitti') throw new PlanningError('Yalnız biten iş emri için Geçici depoya aktarılabilir.', 409, 'bad-status');
     const produced = w.result?.produced ?? 0;
-    const qty = produced - this.#sentTotal(w.no, 'bitis');
+    // Karantinada (henuz tashih sonucu belirlenmemis) bekleyen kisim Gecici'ye "dogmaz" - ayri bir TRANSFER'le
+    // (Karantina->Gecici, bkz. quarantine-depot.js) kendi yolundan gelir; burada iki kez sayilmasin diye dusulur.
+    const pendingQuarantine = this.planning.quarantineDepot.pendingQtyForWorkOrder(w.no);
+    const qty = produced - pendingQuarantine - this.#sentTotal(w.no, 'bitis');
     if (qty <= 0) {
-      throw new PlanningError(produced === 0 ? 'Hiç parça üretilmedi: aktarılacak adet yok.' : 'Bu iş emrinin üretimi zaten Geçici depoya aktarıldı.', 409, 'nothing-to-send');
+      throw new PlanningError(
+        produced === 0 ? 'Hiç parça üretilmedi: aktarılacak adet yok.'
+          : pendingQuarantine > 0 && produced - this.#sentTotal(w.no, 'bitis') === pendingQuarantine ? `Kalan ${pendingQuarantine} adet hâlâ karantinada (tashih sonucu belirlenmedi): aktarılacak başka adet yok.`
+          : 'Bu iş emrinin üretimi zaten Geçici depoya aktarıldı.',
+        409, 'nothing-to-send',
+      );
     }
     return this.#send({
       woNo: w.no, kind: 'bitis', stockCode: w.stockCode, qty, fromDepot: GECICI_DEPO_NO, toDepot: GECICI_DEPO_NO,

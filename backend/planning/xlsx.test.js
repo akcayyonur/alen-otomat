@@ -127,9 +127,17 @@ test('xlsx iceri alma: tum sayfalar taranir, taninanlar alinir, sablon/sevkiyat 
   assert.ok(r.warnings.every((w) => /^(PLANLANAN|_SIPARIS): /.test(w)), 'birlesik uyarilar sayfa adini tasir');
   assert.deepEqual(p.summary().lastImports.map((b) => b.filename).sort(), ['kitap.xlsx › PLANLANAN', 'kitap.xlsx › _SIPARIS']);
 
-  // tekrar yukleme guvenli (idempotent)
+  // tekrar yukleme guvenli (idempotent). Nİ002.001'in PLANLANAN'daki (SN:45) ve _SIPARIS'teki (SN:27) sureleri
+  // FARKLI: ilk buyuk ice almada _SIPARIS sayfasi bunu Mikro'ya (27) uydurdu (2026-11-09 karari, "Mikro ana veri
+  // kaynagi", bkz. importers.js); bu "again" cagrisinda PLANLANAN sayfasi (sirada ONCE islenir) KENDI (hala 45
+  // diyen) verisiyle karti gecici olarak 45'e dondurur (isemri Mikro'nun senkron durumunu bilmez/gozetmez), AMA
+  // _SIPARIS sayfasi (sirada SONRA islenir) ayni cagri icinde bunu tekrar 27'ye duzeltir - iki kaynak celisirse
+  // SIRADA EN SON islenen (Mikro/_SIPARIS) kazanir, hicbir yerde kalici bir "yanlis" durum kalmaz.
   const again = p.importFile(xlsxOf([planlanan(), siparis()]), { by: 'ayse', keepOld: true });
-  assert.deepEqual([again.sheets[0].products.added, again.sheets[0].products.updated, again.sheets[1].added, again.sheets[1].updated, again.sheets[1].unchanged], [0, 0, 0, 0, 2]);
+  assert.deepEqual([again.sheets[0].products.added, again.sheets[0].products.updated, again.sheets[1].added, again.sheets[1].updated, again.sheets[1].unchanged], [0, 1, 0, 0, 2]);
+  assert.deepEqual(again.sheets[0].changes.products.updated.map((x) => x.stockCode), ['Nİ002.001']);
+  assert.deepEqual(again.sheets[1].changes.products.updated.map((x) => x.stockCode), ['Nİ002.001'], '_SIPARIS sayfasi kendi geldiginde Mikro degerini tekrar uygular');
+  assert.equal(p.getProduct('Nİ002.001').plannedSec, 27, 'son durumda Mikro (_SIPARIS) degeri kazanir');
   p.close();
 });
 

@@ -229,15 +229,16 @@ test('siparis: urun kartina tam boy, hammadde, agirlik ve sure gelir; birimler k
   assert.equal(p.source, 'csv-siparis');
 });
 
-test('siparis: is emri degerleri siparis dosyasiyla EZILMEZ (yalniz tam boy gelir, bos alanlar dolar)', () => {
+test('siparis: is emri degerleri ile ilk siparis senkronu FARKLIYSA, siparis (Mikro) degerine hemen gecer (ilk temas); kaynak etiketi (source) degismez', () => {
   const db = yeniDb();
-  importCsv(db, Buffer.from(ISEMRI, 'utf8')); // SR001.013: sure 25, brut 0,018
-  importCsv(db, Buffer.from(SIPARIS, 'utf8')); // siparis: sure 24, brut 0,0179
+  importCsv(db, Buffer.from(ISEMRI, 'utf8')); // SR001.013: sure 25, brut 0,018, net 0,0079
+  importCsv(db, Buffer.from(SIPARIS, 'utf8')); // siparis: sure 24, brut 0,0179, net 0,0078 - kart ilk kez bu yoldan goruyor, farki hemen uygular
   const p = db.getProduct('SR001.013');
-  assert.equal(p.plannedSec, 25);
-  assert.equal(p.grossKg, 0.018);
-  assert.equal(p.lengthMm, 6.9, 'tam boy yalniz siparis dosyasinda var');
-  assert.equal(p.source, 'csv-isemri');
+  assert.equal(p.plannedSec, 24);
+  assert.equal(p.grossKg, 0.0179);
+  assert.equal(p.netKg, 0.0078);
+  assert.equal(p.lengthMm, 6.9, 'tam boy yalniz siparis dosyasinda var (bos alan dolar, ayri kural)');
+  assert.equal(p.source, 'csv-isemri', 'alanlar guncellense de kaynak etiketi kartin olusturuldugu yer olarak kalir');
 });
 
 test('siparis: tekrar iceri alma idempotent; degisen kalan miktar guncellenir; dosyada olmayan satir eski isaretlenir', () => {

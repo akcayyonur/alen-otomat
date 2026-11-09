@@ -142,6 +142,40 @@ test('sil: kayit kalkar, onaylanmis/reddedilmis kayit da silinebilir (gecmis kay
   p.close();
 });
 
+test('ret analizi: karar tarihine gore onay/ret dagilimi + ret orani; "talep edilen/bekleyen" farkli (requestedOn) tarih alanindan sayilir', () => {
+  const p = kur();
+  const a = p.samples.create({ customer: 'A', requestedOn: '20.09.2026' }, { now: at(9) });
+  p.samples.decide(a.id, { status: 'onaylandi', decidedOn: '05.10.2026' });
+  const b = p.samples.create({ customer: 'B', requestedOn: '04.10.2026' }, { now: at(9) });
+  p.samples.decide(b.id, { status: 'reddedildi', decidedOn: '06.10.2026' });
+  p.samples.create({ customer: 'C', requestedOn: '07.10.2026' }, { now: at(9) }); // hala bekliyor
+  const d = p.samples.create({ customer: 'D', requestedOn: '15.09.2026' }, { now: at(9) });
+  p.samples.decide(d.id, { status: 'onaylandi', decidedOn: '20.09.2026' }); // aralik disinda karar verildi
+
+  const r = p.samples.rejectionStats({ from: '2026-10-01', to: '2026-10-12' });
+  assert.equal(r.decided, 2, 'yalniz karar tarihi (decidedOn) Ekim araliginda olan A ve B sayilir, D (Eylulde karar) sayilmaz');
+  assert.equal(r.approved, 1);
+  assert.equal(r.rejected, 1);
+  assert.equal(r.rejectionRate, 0.5);
+  assert.equal(r.requested, 2, 'B ve C bu araliktaki taleplerdir (A ve D Eylulde talep edildi, requestedOn farkli bir alan)');
+  assert.equal(r.pending, 1, 'talep edilenlerden yalniz C hala bekliyor');
+  p.close();
+});
+
+test('ret analizi: aralik verilmezse bu ayin basindan "now"a; hic karar yoksa oran belirsiz (null, 0 degil); gecersiz girdi reddedilir', () => {
+  const p = kur();
+  const r = p.samples.rejectionStats({ now: at(14, 0, 15) }); // 15 Ekim 2026 -> bu ay: 2026-10-01..2026-10-15
+  assert.equal(r.from, '2026-10-01');
+  assert.equal(r.to, '2026-10-15');
+  assert.deepEqual([r.decided, r.approved, r.rejected, r.requested, r.pending], [0, 0, 0, 0, 0]);
+  assert.equal(r.rejectionRate, null, 'hic karar verilmemisse oran belirsizdir, 0 degil');
+
+  assert.throws(() => p.samples.rejectionStats({ from: 'gecersiz', to: '2026-10-12' }), /yyyy-aa-gg/);
+  assert.throws(() => p.samples.rejectionStats({ from: '2026-10-12', to: '2026-10-01' }), /sonra olamaz/);
+  assert.throws(() => p.samples.rejectionStats({ from: '2025-01-01', to: '2026-10-12' }), /400 gün/);
+  p.close();
+});
+
 /* ====================================================================================== HTTP */
 
 test('HTTP: olustur, listele, ayrinti, duzenle, karar, geri al, sira tabani, sil', async () => {
@@ -178,6 +212,11 @@ test('HTTP: olustur, listele, ayrinti, duzenle, karar, geri al, sira tabani, sil
     const sira = await j('/api/planning/samples/sequence', 'PUT', { last: 300 });
     assert.equal(sira.status, 200);
     assert.equal(sira.json.nextCode, '000301');
+
+    const istatistik = await j('/api/planning/samples/stats');
+    assert.equal(istatistik.status, 200);
+    assert.ok(Object.hasOwn(istatistik.json, 'rejectionRate'));
+    assert.equal((await j('/api/planning/samples/stats?from=2026-10-12&to=2026-10-01')).status, 400, 'baslangic bitisten sonraysa 400');
 
     assert.equal((await j(`/api/planning/samples/${s.id}/decide`, 'POST', { status: 'baska' })).status, 400);
     assert.equal((await j('/api/planning/samples', 'POST', { customer: '' })).status, 400);

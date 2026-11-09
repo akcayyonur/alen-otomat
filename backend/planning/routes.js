@@ -9,6 +9,8 @@
  *   GET  /api/planning/packing/sheet?day=&shift=       PAKETLEME FORMU (EYS.FR.007) vardiya sayfasi;  PUT .../packing/sheet/air {day, shift, airBar}  hava basinci
  *   POST /api/planning/packing/rows {stockCode, operator, woNo?, boxes, boxQty, halfQty?, visualCheck?, scrapQty?, note?}  satir ekle (standart koli ici adet ogrenilir);
  *        PUT|DELETE .../packing/rows/:id  duzelt / iptal (?reason=);  GET .../packing/suggest?stockCode=  koli ici adet onerisi, is emirleri, etiket dosyalari  (operator + yonetici)
+ *   GET  /api/planning/packing/specs?q=&limit=&offset=   PAKETLEME LISTESI (EYS.LS.005): koli boyutu/kasa ozelligi/kat sayisi/koli ici adet/etiket/agirlik
+ *   PUT  /api/planning/packing/specs/:kod                 duzenle (yalniz gonderilen alanlar);  POST .../packing/specs/import  Excel'den ilk aktarim (govde = ham .xlsx, yalniz yonetici)
  *   GET  /api/planning/(drawing|sticker)-folder         TEKNIK RESIM / ETIKET klasoru durumu;  PUT .../dir {dir}  klasoru ayarla;  POST .../match {update?}  dosyalari urun koduna gore urun kartlarina esle (yonetici)
  *   GET  /api/planning/product-files/:id                urun kartindaki dosyayi indir/ac (operator + yonetici);  DELETE ... kaldir (yonetici)
  *   POST /api/planning/import?filename=&keepOld=1       Excel'den CSV ya da .xlsx (govde = ham dosya; tur icerikten anlasilir, .xlsx'te tum sayfalar taranir)
@@ -262,6 +264,20 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       if ((m = /^\/api\/planning\/packing\/rows\/(\d{1,12})$/.exec(path))) {
         if (method === 'PUT') return sendJson(res, 200, planning.updatePackingRow(Number(m[1]), await readJson(req), { by: who(req) })), true;
         if (method === 'DELETE') return sendJson(res, 200, planning.packing.voidRow(Number(m[1]), { reason: url.searchParams.get('reason') ?? '' }, { by: who(req) })), true;
+      }
+
+      /* ---- paketleme listesi (EYS.LS.005): koli boyutu/kasa ozelligi/kat sayisi/koli ici adet/etiket/agirlik ---- */
+      if (method === 'GET' && path === '/api/planning/packing/specs') {
+        return sendJson(res, 200, planning.packingSpecs.list({
+          q: url.searchParams.get('q') ?? '', limit: intParam(url, 'limit', 200, { min: 1, max: 2000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+        })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/packing/specs/import') {
+        const body = await readBuffer(req, MAX_CSV_BYTES);
+        return sendJson(res, 200, planning.packingSpecs.importXlsx(body, { by: who(req) })), true;
+      }
+      if (method === 'PUT' && (m = /^\/api\/planning\/packing\/specs\/([^/]+)$/.exec(path))) {
+        return sendJson(res, 200, planning.packingSpecs.update(decodeURIComponent(m[1]), await readJson(req), { by: who(req) })), true;
       }
 
       /* ---- teknik resim ve etiket klasorleri: dosyalari urun koduna gore urun kartlarina esle (yonetici) ---- */

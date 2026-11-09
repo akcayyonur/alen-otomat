@@ -58,6 +58,9 @@ export const SCREEN_ROUTES = Object.freeze([
   [['POST'], /^\/api\/planning\/packing\/rows$/, 'paketleme', 'write'],
   [['PUT'], /^\/api\/planning\/packing\/rows\/\d{1,12}$/, 'paketleme', 'write'],
   [['DELETE'], /^\/api\/planning\/packing\/rows\/\d{1,12}$/, 'paketleme', 'write'],
+  // paketleme listesi (EYS.LS.005): "Liste" gorunumu, ayri bir ekran id'si degil - ayni paketleme yetkisini paylasir; Excel iceri aktarma kayitsiz -> admin
+  [['GET'], /^\/api\/planning\/packing\/specs$/, 'paketleme', 'read'],
+  [['PUT'], /^\/api\/planning\/packing\/specs\/[^/]+$/, 'paketleme', 'write'],
   [['POST'], /^\/api\/planning\/crates\/\d{1,12}\/pack$/, 'paketleme', 'write'],
   [['GET'], /^\/api\/planning\/product-files\/\d{1,12}$/, 'paketleme', 'read'],
 

@@ -1712,6 +1712,69 @@ dosya satırını SİLİP yenisini EKLEDİĞİ için geçmiş iz bırakmadan kay
   vermesi (göçle gelen İzleyici/Operatör rollerine otomatik eklenmedi — diğer yeni ekranlarla aynı, `Ayarlar >
   Roller`den elle verilir); çok büyük (>1000) ürün listesinde arama performansı (514 ürünle sorunsuzdu).
 
+### Paketleme listesi (EYS.LS.005 "Paketleme Listesi") — 2026-11-09, kullanıcı isteği
+
+Paketleme ekranına **üçüncü görünüm** ("Liste", `paketleme` ekranının "Paketleme formu"/"Kasalar" ile AYNI
+yetkisini paylaşır — ayrı bir ekran id'si değil): her ürünün NASIL paketlendiğini sabitleyen kayıt — koli
+boyutu, kasa özelliği, kat sayısı, koli/kasa içi adet, koli etiketi (STANDART/QR/İNGİLİZCE-LOGOSUZ), koli
+ağırlığı (kg). Bugüne kadar bunun yalnız BİR parçası (koli içi adet) örtük tutuluyordu: `packing.js`'in
+"koli içi adet öğrenme" mekanizması (`setBoxQtyIfEmpty`) bir ürünün İLK paketleme satırında girilen `boxQty`'yi
+`products.box_qty`'ye yazıp sonraki paketlemelerde öneri olarak gösteriyordu; geri kalan 5 alan hiç tutulmuyordu.
+
+- **Excel'deki ALEN OTOMAT ÜRÜN KODU / MÜŞTERİ ÜRÜN KODU sütun başlıkları gerçek veriyle TUTARSIZ** (salt okuma
+  ile doğrulandı, Teknik Resim Takip'teki benzer bulgudan FARKLI bir örüntü): 110 satırın 108'inde SR0xx.xxx
+  biçimindeki Alen kodu "MÜŞTERİ ÜRÜN KODU" yazan sütunda duruyor. **Çözüm regex/biçim değil, doğrudan gerçek
+  ürün kartına karşı doğrulama:** her satırda İKİ sütun da `products`'a karşı denenir (`planning.db.getProduct`),
+  hangisi gerçek bir ürün kartına karşılık geliyorsa o Alen kodu sayılır (bu şirkette `SR20.002` gibi düzensiz
+  biçimli kodlar da olduğu için bir regex'e güvenmek Teknik Resim Takip'teki kadar güvenilir olmazdı). İkisi de
+  eşleşmiyorsa ya da İKİSİ DE FARKLI ürünlere eşleşiyorsa satır "ürün kartı yok"/"belirsiz" uyarısıyla atlanır.
+- **Paketleme formuna entegre edildi** (kullanıcının kendi tarifi: "ilk kez paketlemesi yapılan bir ürünse aynı
+  şu anki akış gibi ama fieldlar artıyor"): `packing.js#suggest()` artık `packingSpec` alanı da döner; ürünün
+  BU KAYDI varsa koli boyutu/kasa özelliği/kat sayısı/etiket/ağırlık paketleme formunda **salt bilgi** olarak
+  gösterilir ve "koli içi adet" önerisi ÖNCE bu kayıttan gelir (yoksa eskisi gibi `products.box_qty`'den — o
+  mekanizma HİÇ DOKUNULMADAN, paralel çalışmaya devam ediyor). Kaydı YOKSA (ürün ilk kez paketleniyor olabilir)
+  aynı 5 alan satır ekleme formunda DOĞRUDAN GİRİLEBİLİR olur; satır kaydedilince boş kalan alanlara öğrenilir
+  (`learnIfEmpty`, `setBoxQtyIfEmpty`'nin 6 alana genişletilmiş hâli: yalnız o an BOŞ olan alanlara yazar, dolu
+  alana asla dokunmaz). Bu alanlar `packing_rows`'a YAZILMAZ (satır-düzeyi değil ürün-düzeyi veri); öğrenme yan
+  etkisi try/catch içinde — satır kaydını ASLA engellemez (`product-depot.js`'in "satır eklemeyi asla
+  bekletmez/engellemez" ilkesiyle aynı gerekçe, burada senkron olduğu için düz try/catch).
+- **"X" (tam, kırpılmış) kat sayısı değeri `null`'a çevrilir** (gerçek veride "henüz girilmedi" yerine kullanılan
+  yer tutucu, 2/110 satırda görüldü) — hem içeri aktarmada hem elle düzenlemede AYNI normalizasyon.
+- **Yinelenen Alen kodu, gerçek dosyada 3/110 satırda görüldü** (Teknik Resim Takip'ten FARKLI: bu sayfada tarih
+  sütunu YOK, bu yüzden "en yeni tarih" kuralı uygulanamaz) — SON satır kazanır, önceki her biri ayrı bir
+  "yinelenen" uyarısıyla raporlanır (sessizce üzerine yazılmaz).
+- **Dosyalar:** `backend/planning/packing-specs.js` (`PackingSpecs` sınıfı, tablo `packing_specs`, `planlama.db`'de
+  kendi `CREATE TABLE IF NOT EXISTS`'i ile — diğer alt modüllerle aynı desen), `planning.js` (`this.packingSpecs`),
+  `packing.js` (`whole()` artık export edilip buradan yeniden kullanılıyor; `suggest()`/`addRow()`'a cerrahi
+  eklemeler), `routes.js`, `dashboard/planning-packing-list.js` (liste + "Düzenle" + Excel içeri aktarma —
+  Teknik Resim Takip'in liste ekranıyla BİREBİR aynı iskelet), `dashboard/planning-packing.js` (üçüncü sekme),
+  `dashboard/planning-packing-form.js` (`packingSpecBlock()`: salt bilgi ya da editlenebilir alanlar).
+- **Uçlar:** `GET /api/planning/packing/specs?q=&limit=&offset=` (liste) · `PUT .../specs/:kod` (düzenle; satır
+  yoksa oluşturulur) · `POST .../specs/import` (gövde = ham `.xlsx`, admin — diğer Excel-içeri-alma özellikleriyle
+  aynı desen, ekran id'si İCAT EDİLMEDİ, `paketleme` ekranının write yetkisiyle AYNI `policy.js` girdisi).
+- **Doğrulama:** `backend/planning/packing-specs.test.js` (10 test: `update`/`learnIfEmpty` — boş alanlara yazar,
+  dolu alana dokunmaz, "X" normalizasyonu — `list`, Excel içeri aktarma — B/C sütunu karışık sırada senaryo,
+  ürün kartı olmayan/belirsiz satır, yinelenen kod, tek satırlık bozuk değerin tüm içeri almayı düşürmemesi,
+  başlık bulunamama — uçtan uca HTTP) + `packing.test.js`'e 2 test (yeni ürün için `packingSpecs`'e öğrenme +
+  var olan kayda dokunmama, `suggest()`'in `packingSpec` + önceliklendirilmiş `boxQty` döndürmesi). `npm test`
+  683/683 yeşil (yeni bir ekran id'si eklenmediği için `apps.test.js`/`features.test.js`'teki sabit sekme
+  sayımları ETKİLENMEDİ — Teknik Resim Takip'ten farkı, o ayrı bir ekran id'siydi, bu bir alt-görünüm).
+  **Tarayıcıda gerçek sunucuya (AUTH_DISABLED) karşı uçtan uca denendi:** boş liste → **gerçek EYS.LS.005 Excel
+  dosyasının içeri aktarımı** (`POST .../specs/import`'a ham baytlarla, tarayıcının native dosya seçicisi bu
+  oturumda sürülemedi — projedeki diğer Excel içeri alma özellikleriyle aynı bilinen sınır): 110 satır okundu,
+  **106 eşleşti, 3 yinelenen, 1 ürün kartı yok, 0 belirsiz**; gerçek bir satır (SR003.002) alan alan doğrulandı
+  (Alen kodu "MÜŞTERİ ÜRÜN KODU" sütununda olmasına rağmen doğru çözüldü, koli boyutu/kat sayısı/koli içi
+  adet/etiket/ağırlık kaynak dosyayla birebir tuttu) → paketleme formunda bu ürün seçilince "Standart koli içi
+  adet: … (paketleme listesinde; …)" + salt bilgi satırı doğru göründü → kaydı OLMAYAN bir ürün (MJ003.016)
+  seçilince 6 alan EDİTLENEBİLİR olarak çıktı, dolduruldu, satır kaydedildi, **tüm 6 alan yeni tabloya doğru
+  öğrenildi** (API ile doğrulandı), ürün yeniden seçilince artık salt bilgi olarak göründü. Test için eklenen
+  satır iptal edildi, sentetik `packing_specs`/`products.box_qty` değerleri temizlendi; gerçek 106 satırlık
+  içeri aktarım dev veritabanında kaldı (önceki EYS.LS.006/EYS.LS.007/EYS.LS.018 oturumlarındaki aynı ilke).
+- **DENENMEDİ:** gerçek yazıcıdan baskı (bu listenin kâğıt karşılığı yalnız referans, basılan bir form değil);
+  tarayıcıdan native dosya seçiciyle içeri aktarma; fabrika PC'sinde gerçek kullanım (ustaların paketleme
+  formunda yeni ürün akışını nasıl bulduğu); "Satırı düzelt" (updateRow) akışında bu alanların öğrenilmesi
+  BİLİNÇLİ OLARAK yapılmıyor (yalnız `addRow`/ilk ekleme — plan kararı).
+
 **Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
 `RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
 gönderme öncesi ve adlandırmadan hemen önce `LIST` ile ikinci çakışma denetimi var, yine de
@@ -1760,6 +1823,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `dashboard/production-view.js` | Tezgah detayındaki vardiya adetleri paneli ve "Üretim raporu" ekranı (makine / ürün / günlük görünümü). |
 | `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`) · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Teknik resim takip (`planning-drawing-tracking.js`, `drawing-tracking.js`; her ürünün resim durumu/rev no/tarihleri, EYS.LS.007, §6 "Teknik Resim Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
 | `backend/planning/packing.js` · `dashboard/planning-packing-form.js` | Paketleme formu (EYS.FR.007): vardiya sayfası, satırlar, hava basıncı, koli içi adet öğrenme/öneri, yazdırma. Bkz. §6 "Paketleme formu". |
+| `backend/planning/packing-specs.js` · `dashboard/planning-packing-list.js` | Paketleme listesi (EYS.LS.005): koli boyutu/kasa özelliği/kat sayısı/koli içi adet/koli etiketi/koli ağırlığı referans kaydı, Paketleme ekranının "Liste" görünümü. Bkz. §6 "Paketleme listesi (EYS.LS.005)". |
 | `backend/planning/doc-folder.js` · `dashboard/planning-docs.js` | Teknik resim klasörü ve etiket klasörü (iki ayrı `DocFolder`): dosyaları ürün koduna göre ürün kartlarına bağlama, eşle penceresi. Bkz. §6 "Teknik resim klasörü ve Etiket klasörü". |
 | `backend/planning/sources.js` · `dashboard/planning-sources.js` | Kaynak klasörü: Mikro/GKK Excel dosyalarını sabit klasörden okuyup değişenleri uygulama ("Kaynak dosyadan yenile"), klasör ayarı ve sonuç penceresi. Bkz. §6 "Kaynak klasörü". |
 | `dashboard/library-view.js` | Program kütüphanesi ekranı, tezgah detayındaki "Programlar" paneli ve gönderme penceresi. |
@@ -1798,6 +1862,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `GET /api/production?from=&to=&machine=` · `/api/production/export.csv?...&view=makine\|urun\|gunluk` | **Üretim raporu** (izleme verisi: viewer de görür). `from/to` = üretim günü `YYYY-AA-GG` (varsayılan bugünün üretim günü, en çok 93 gün). Yanıt: `rows`, `byMachine`, `byProduct`, `days`, `totals`, `suspect`, `shifts`, `current`, `prevDate/nextDate`, `prevRange/nextRange`, `presets`. |
 | `GET /api/production/runs?from=&to=&machine=` · `/api/production/runs.csv?...` | **Program geçişleri** (izleme verisi: viewer de görür): aralığın program çalışma aralıkları (`runs[]`: `program`, `startedAt`, `endedAt`/`ongoing`, `durationMs`, `qty`, `startsBefore/endsAfter`, `startShift/endShift`). |
 | `/api/planning/packing/sheet` (GET) · `packing/sheet/air` (PUT) · `packing/suggest` (GET) · `packing/rows` (POST) · `packing/rows/:id` (PUT/DELETE) | **Paketleme formu** (operatör + yönetici; `paketleme` bölümü kapalıysa 403): vardiya sayfası (`?day=&shift=`), hava basıncı, ürün için koli içi adet önerisi/iş emirleri/etiket, satır ekle (yanıt `learned`) / düzenle / iptal (`?reason=`). |
+| `GET /api/planning/packing/specs?q=&limit=&offset=` · `PUT packing/specs/:kod` · `POST packing/specs/import` | **Paketleme listesi** (EYS.LS.005, §6): koli boyutu/kasa özelliği/kat sayısı/koli içi adet/koli etiketi/koli ağırlığı referans kaydı, `paketleme` ekranının "Liste" görünümü — liste (okuma), düzenle (yazma; satır yoksa oluşturulur), Excel'den içeri aktar (gövde = ham `.xlsx`, kayıtsız → admin). |
 | `/api/planning/drawing-folder` · `sticker-folder` (GET) · `…/dir` (PUT) · `…/match` (POST) · `/api/planning/product-files/:id` (GET/DELETE) | **Teknik resim / etiket klasörü** (yalnız admin; `product-files/:id` GET operatör + yönetici, DELETE yönetici): klasör ve dosya durumu · klasörü ayarla (`{dir}`) · dosyaları ürün koduna göre eşle (`{update?}`; yanıt: bağlananlar, eşleşmeyen/kabul edilmeyen dosyalar, hâlâ dosyası olmayan ürünler) · ürüne bağlı dosyayı indir/kaldır. |
 | `/api/planning/sources` (GET) · `sources/dir` (PUT) · `sources/refresh` (POST) | **Kaynak klasörü** (yalnız admin): klasör + dosyaların durumu (yeni/değişmiş/güncel) · klasörü ayarla (`{dir}`, boş = varsayılan `data/kaynak`) · klasörü oku ve değişenleri uygula (`{force?}`; yanıt: dosya durumları, toplamlar, `changes` listeleri). |
 | `/api/planning/summary` · `products[/:kod]` · `import` · `orders[/lines]` · `programs[/map\|/confirm-exact\|/product-search]` | **Planlama** (yalnız admin; **`programs*` uçları 0.17.2'den beri operatöre de açık**, `programs/product-search` dar ürün araması): özet · ürün kartı listesi/arama, oluştur (POST), düzenle (PUT) · Excel içeri alma: `.xlsx` (tüm sayfalar taranır) ya da CSV (gövde = ham dosya, tür içerikten anlaşılır, `?filename=&keepOld=1`) · siparişler (`?q=&open=1`) ve bir siparişin satırları · tornalarda görülen programlar ve eşleme durumu, eşle (PUT), kaldır (DELETE), toplu onay (POST). |

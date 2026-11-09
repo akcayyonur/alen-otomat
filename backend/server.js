@@ -175,6 +175,7 @@ const STATIC_FILES = {
   '/planning-measure.js': ['../dashboard/planning-measure.js', 'text/javascript; charset=utf-8'],
   '/planning-packing.js': ['../dashboard/planning-packing.js', 'text/javascript; charset=utf-8'],
   '/planning-packing-form.js': ['../dashboard/planning-packing-form.js', 'text/javascript; charset=utf-8'],
+  '/planning-packing-list.js': ['../dashboard/planning-packing-list.js', 'text/javascript; charset=utf-8'],
   '/planning-docs.js': ['../dashboard/planning-docs.js', 'text/javascript; charset=utf-8'],
   '/planning-sources.js': ['../dashboard/planning-sources.js', 'text/javascript; charset=utf-8'],
   '/planning-mikro.js': ['../dashboard/planning-mikro.js', 'text/javascript; charset=utf-8'],

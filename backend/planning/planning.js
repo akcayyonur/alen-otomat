@@ -21,6 +21,7 @@ import { MikroStock } from './mikro-stock.js';
 import { ProductDepot } from './product-depot.js';
 import { DocFolder } from './doc-folder.js';
 import { Packing } from './packing.js';
+import { PackingSpecs } from './packing-specs.js';
 import { Schedule } from './schedule.js';
 import { PriceStudies } from './price-studies.js';
 import { SampleTracking } from './sample-tracking.js';
@@ -108,6 +109,8 @@ export class Planning {
     this.drawingTracking = new DrawingTracking({ planning: this });
     /** Paketleme formu (EYS.FR.007): urun kodu uzerinden satirlar, koli ici adet ogrenme/oneri (packing.js). */
     this.packing = new Packing({ planning: this });
+    /** Paketleme listesi (EYS.LS.005): koli boyutu/kasa ozelligi/kat sayisi/koli ici adet/etiket/agirlik referans kaydi (packing-specs.js); packing.js'in suggest()/addRow()'u bunu kullanir. */
+    this.packingSpecs = new PackingSpecs({ planning: this });
     /** Bitmiş ürün depo akışı (product-depot.js): iş emri bitince Merkez->Geçici, paketlenince Geçici->Merkez; `mikroStock`'u kullanır. */
     this.productDepot = new ProductDepot({ planning: this });
     /** Cizelgeleme / optimizasyon (OR-Tools CP-SAT, ayri Python sureci): bekleyen is emirlerini tezgahlara ONERIR (schedule.js). ASLA otomatik uygulamaz. */

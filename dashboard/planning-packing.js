@@ -13,6 +13,7 @@ import { openFormDialog } from './auth-view.js';
 import { openCrateCard, crateStateChip, stepsCell } from './planning-card.js';
 import { openMeasureSheet } from './planning-measure.js';
 import { renderPackingForm } from './planning-packing-form.js';
+import { renderPackingSpecs } from './planning-packing-list.js';
 
 const REFRESH_MS = 20_000;
 const FILTERS = Object.freeze([
@@ -27,13 +28,14 @@ const sign = (n) => (n > 0 ? `+${fmtNum(n)}` : fmtNum(n));
 export async function renderPacking(host) {
   host.innerHTML =
     '<div class="seg pl-tabs" role="group" aria-label="Paketleme görünümü" data-role="views">' +
-    '<button type="button" data-view="form">Paketleme formu</button><button type="button" data-view="kasa">Kasalar (kart no ile)</button></div><div data-role="slot"></div>';
+    '<button type="button" data-view="form">Paketleme formu</button><button type="button" data-view="kasa">Kasalar (kart no ile)</button>' +
+    '<button type="button" data-view="liste">Liste</button></div><div data-role="slot"></div>';
   const show = (view) => {
     for (const b of host.querySelectorAll('[data-view]')) { const on = b.dataset.view === view; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(on)); }
     // her gecis TAZE bir kap: eski gorunumun zamanlayicisi kapsiz kalinca kendiliginden durur
     const body = document.createElement('div');
     host.querySelector('[data-role="slot"]').replaceChildren(body);
-    return view === 'form' ? renderPackingForm(body) : renderCrates(body);
+    return view === 'form' ? renderPackingForm(body) : view === 'liste' ? renderPackingSpecs(body) : renderCrates(body);
   };
   host.querySelector('[data-role="views"]').addEventListener('click', (ev) => { const b = ev.target.closest('[data-view]'); if (b) show(b.dataset.view); });
   await show('form');

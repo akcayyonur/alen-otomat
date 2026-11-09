@@ -60,7 +60,7 @@ const parentFolder = (rel) => { const parts = String(rel ?? '').split(/[\\/]/); 
 const MAX_QTY = 1_000_000;
 
 /** Bos -> null; tam sayi, 0..max degilse hata. */
-function whole(value, label, max, { required = false } = {}) {
+export function whole(value, label, max, { required = false } = {}) {
   if (value === undefined || value === null || value === '') {
     if (required) throw new PlanningError(`${label} girilmeli.`);
     return null;
@@ -185,6 +185,14 @@ export class Packing {
     ).run(w.day, w.shift, f.operator, product.codeKey, product.stockCode, product.name, resolveCustomerCode(product.customerCode, product.name), f.woNo, f.boxes, f.boxQty,
       f.halfQty, f.visualCheck, f.scrapQty, f.note, now, by, now, by).lastInsertRowid);
     const learned = f.boxes >= 1 && f.boxQty > 0 && this.planning.db.setBoxQtyIfEmpty(product.codeKey, f.boxQty, now);
+    try {
+      // Paketleme listesi (EYS.LS.005): ilk kez paketlenen bir urunun bos kalan alanlarini ogrenir (satir-duzeyi
+      // degil urun-duzeyi veri; packing_rows'a yazilmaz). Satir kaydi zaten tamamlandi, bu yan adim onu engellemez.
+      this.planning.packingSpecs.learnIfEmpty(product.codeKey, {
+        musteri: input.musteri, koliBoyutu: input.koliBoyutu, kasaOzelligi: input.kasaOzelligi, katSayisi: input.katSayisi,
+        koliIciAdet: f.boxQty > 0 ? f.boxQty : null, koliEtiketi: input.koliEtiketi, koliAgirligiKg: input.koliAgirligiKg,
+      }, { by, now });
+    } catch { /* yan ogrenme adimi; satir kaydi zaten tamamlandi */ }
     return { ...rowOut(this.db.prepare('SELECT * FROM packing_rows WHERE id = ?').get(id)), learned, standardBoxQty: this.planning.db.getProduct(product.codeKey).boxQty };
   }
 
@@ -230,7 +238,12 @@ export class Packing {
       startedAt: r.started_at == null ? null : Number(r.started_at), finishedAt: r.finished_at == null ? null : Number(r.finished_at),
     })).sort((a, b) => rank[a.status] - rank[b.status] || (b.startedAt ?? 0) - (a.startedAt ?? 0));
     const stickers = this.planning.quality.db.productFiles(p.codeKey, 'etiket').map((f) => ({ id: f.id, name: f.name, size: f.size, folder: parentFolder(f.relPath) }));
-    return { stockCode: p.stockCode, name: p.name, customerCode: resolveCustomerCode(p.customerCode, p.name), boxQty: p.boxQty, common, orders, stickers };
+    // Paketleme listesi (EYS.LS.005): koli ici adet onerisi ONCE bu kayittan gelir, yoksa eskisi gibi urun kartindan.
+    const spec = this.planning.packingSpecs.find(p.codeKey);
+    return {
+      stockCode: p.stockCode, name: p.name, customerCode: resolveCustomerCode(p.customerCode, p.name),
+      boxQty: spec?.koliIciAdet ?? p.boxQty, common, orders, stickers, packingSpec: spec,
+    };
   }
 
   /** Bir iş emrine bağlı paketleme satırlarının toplamı (iş emri ayrıntısı). */

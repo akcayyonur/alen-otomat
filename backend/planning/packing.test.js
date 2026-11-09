@@ -115,7 +115,7 @@ test('duzeltme ve iptal: duzeltme toplami yeniler (urun degismez); iptal edilen 
 test('oneri: standart koli ici adet, son paketlemelerde sik gorulenler, secilebilir is emirleri (uretimde once), etiket dosyalari', () => {
   const p = kur();
   assert.deepEqual(p.packing.suggest('SR001.013'), {
-    stockCode: 'SR001.013', name: '123456789 TEST SOMUN A', customerCode: '123456789', boxQty: null, common: [], orders: [], stickers: [],
+    stockCode: 'SR001.013', name: '123456789 TEST SOMUN A', customerCode: '123456789', boxQty: null, common: [], orders: [], stickers: [], packingSpec: null,
   });
   for (const q of [300, 300, 310, 300, 567]) p.packing.addRow(satir({ boxes: 1, boxQty: q, halfQty: null }), { now: NOW });
   const bekleyen = p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 50 }, { now: NOW });
@@ -129,6 +129,42 @@ test('oneri: standart koli ici adet, son paketlemelerde sik gorulenler, secilebi
   assert.deepEqual(s.orders.map((o) => [o.no, o.status]), [[eski.no, 'uretimde'], [bekleyen.no, 'planlandi']]);
   assert.deepEqual(s.stickers, [{ id: etiket.id, name: 'SR001.013 etiket.docx', size: etiket.size, folder: '' }]);
   assert.throws(() => p.packing.suggest('SR999.999'), (e) => e.status === 404);
+  p.close();
+});
+
+test('paketleme listesi (EYS.LS.005): ilk kez paketlenen urun bos kalan alanlara ogrenir, var olan kayda dokunmaz, oneri once bu listeden gelir', () => {
+  const p = kur();
+  // ilk satir: urunun hic paketleme listesi kaydi yok -> girilen alanlar ogrenilir
+  p.packing.addRow(satir({
+    boxes: 2, boxQty: 500, musteri: 'AYVAZ', koliBoyutu: '25 X 25 X 17', kasaOzelligi: 'STANDART', katSayisi: '3 X 85', koliEtiketi: 'QR', koliAgirligiKg: '12,5',
+  }), { now: NOW });
+  let spec = p.packingSpecs.find(p.db.getProduct('SR001.013').codeKey);
+  assert.deepEqual(
+    [spec.musteri, spec.koliBoyutu, spec.kasaOzelligi, spec.katSayisi, spec.koliIciAdet, spec.koliEtiketi, spec.koliAgirligiKg],
+    ['AYVAZ', '25 X 25 X 17', 'STANDART', '3 X 85', 500, 'QR', 12.5],
+  );
+  // ikinci satir: ayni urun icin farkli deger girilse bile DOLU alanlara dokunulmaz (yalniz ilk oyrenme)
+  p.packing.addRow(satir({ boxes: 1, boxQty: 600, musteri: 'BASKA MUSTERI' }), { now: NOW });
+  spec = p.packingSpecs.find(p.db.getProduct('SR001.013').codeKey);
+  assert.equal(spec.musteri, 'AYVAZ', 'dolu alan ezilmedi');
+  assert.equal(spec.koliIciAdet, 500, 'koli ici adet de ezilmedi');
+  // oneri artik bu listeden geliyor (products.box_qty'den DEGIL, ilk satirda o da 500 oldu zaten ayrica)
+  const s = p.packing.suggest('SR001.013');
+  assert.equal(s.boxQty, 500);
+  assert.deepEqual(s.packingSpec.musteri, 'AYVAZ');
+  p.close();
+});
+
+test('paketleme listesi: elle "Duzenle" ile BOS olan alan sonradan paketleme formundan ogrenilebilir (yalniz bos alanlar)', () => {
+  const p = kur();
+  p.packingSpecs.update('SR001.013', { musteri: 'AYVAZ', koliBoyutu: '25 X 25 X 17' }, { now: NOW });
+  p.packing.addRow(satir({ boxes: 1, boxQty: 300, musteri: 'BASKA', kasaOzelligi: 'STANDART', koliAgirligiKg: '9' }), { now: NOW });
+  const spec = p.packingSpecs.find(p.db.getProduct('SR001.013').codeKey);
+  assert.equal(spec.musteri, 'AYVAZ', 'elle girilen dolu alan korunur');
+  assert.equal(spec.koliBoyutu, '25 X 25 X 17', 'elle girilen dolu alan korunur');
+  assert.equal(spec.kasaOzelligi, 'STANDART', 'bos olan alan satirdan ogrenildi');
+  assert.equal(spec.koliAgirligiKg, 9, 'bos olan alan satirdan ogrenildi');
+  assert.equal(spec.koliIciAdet, 300, 'koli ici adet de bos oldugu icin ogrenildi');
   p.close();
 });
 

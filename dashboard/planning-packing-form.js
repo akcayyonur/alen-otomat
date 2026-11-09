@@ -113,8 +113,8 @@ export async function renderPackingForm(host) {
     box.hidden = !s;
     if (!s) return;
     const standard = s.boxQty == null
-      ? 'Bu ürün için standart koli içi adet <b>henüz yok</b>: ilk koli kaydedilince ürün kartına yazılır ve sonra öneri olarak gelir.'
-      : `Standart koli içi adet: <b>${fmtNum(s.boxQty)}</b> <span class="hint">(ürün kartında; kutuya bazen fazla girer, değiştirebilirsiniz)</span>`;
+      ? 'Bu ürün için standart koli içi adet <b>henüz yok</b>: ilk koli kaydedilince öğrenilir ve sonra öneri olarak gelir.'
+      : `Standart koli içi adet: <b>${fmtNum(s.boxQty)}</b> <span class="hint">(${s.packingSpec?.koliIciAdet != null ? 'paketleme listesinde' : 'ürün kartında'}; kutuya bazen fazla girer, değiştirebilirsiniz)</span>`;
     const common = s.common.length > 1 || (s.common.length === 1 && s.common[0].boxQty !== s.boxQty)
       ? `<p class="hint">Son paketlemelerde: ${s.common.map((c) => `<button type="button" class="chip chip-none pk-chip" data-qty="${c.boxQty}">${fmtNum(c.boxQty)} × ${c.count}</button>`).join(' ')}</p>` : '';
     const orders = s.orders.length === 0
@@ -125,7 +125,32 @@ export async function renderPackingForm(host) {
     const stickers = s.stickers.length === 0
       ? '<p class="hint">Kutu etiketi dosyası yok (Ürün kartları › "Etiketleri eşle…" ile klasörden bağlanır).</p>'
       : `<p class="hint">Kutu etiketi: ${s.stickers.map((f) => `<a href="/api/planning/product-files/${f.id}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a> <small>(${f.folder ? `${escapeHtml(f.folder)} · ` : ''}${escapeHtml(sizeText(f.size))})</small>`).join(' · ')}</p>`;
-    box.innerHTML = `<p>${standard}</p>${common}${orders}${stickers}`;
+    box.innerHTML = `<p>${standard}</p>${common}${orders}${stickers}${packingSpecBlock(s.packingSpec)}`;
+  }
+
+  /**
+   * Paketleme listesi (EYS.LS.005): kayit VARSA koli boyutu/kasa ozelligi/kat sayisi/etiket/agirlik SALT BILGI
+   * olarak gosterilir; YOKSA (urun ilk kez paketleniyor olabilir) ayni alanlar DOGRUDAN GIRILEBILIR olur ve
+   * satir kaydedilince bos kalan alanlara ogrenilir (bkz. backend/planning/packing.js#addRow).
+   */
+  function packingSpecBlock(spec) {
+    if (spec) {
+      const known = [
+        ['Müşteri', spec.musteri], ['Koli boyutu', spec.koliBoyutu], ['Kasa özelliği', spec.kasaOzelligi],
+        ['Kat sayısı', spec.katSayisi], ['Koli etiketi', spec.koliEtiketi],
+        ['Koli ağırlığı', spec.koliAgirligiKg == null ? null : `${fmtNum(spec.koliAgirligiKg, 2)} kg`],
+      ].filter(([, v]) => v != null);
+      return known.length === 0 ? '' : `<p class="hint">Paketleme listesi: ${known.map(([l, v]) => `${l}: <b>${escapeHtml(String(v))}</b>`).join(' · ')}</p>`;
+    }
+    return '<p class="hint"><b>Bu ürün paketleme listesinde kayıtlı değil</b> (ilk kez paketleniyor olabilir): aşağıdaki alanları doldurursanız kaydedilir.</p>' +
+      '<div class="fld-grid">' +
+      '<label class="fld"><span>Müşteri</span><input name="musteri" maxlength="120" autocomplete="off"></label>' +
+      '<label class="fld"><span>Koli boyutu</span><input name="koliBoyutu" maxlength="60" placeholder="ör. 25 X 25 X 17" autocomplete="off"></label>' +
+      '<label class="fld"><span>Kasa özelliği</span><input name="kasaOzelligi" maxlength="60" autocomplete="off"></label>' +
+      '<label class="fld"><span>Kat sayısı</span><input name="katSayisi" maxlength="40" placeholder="ör. 7 X 273" autocomplete="off"></label>' +
+      '<label class="fld"><span>Koli etiketi</span><input name="koliEtiketi" maxlength="60" autocomplete="off"></label>' +
+      '<label class="fld"><span>Koli ağırlığı (kg)</span><input name="koliAgirligiKg" inputmode="decimal" autocomplete="off"></label>' +
+      '</div>';
   }
 
   async function pick(p, { woNo = null, keepQty = false } = {}) {
@@ -232,6 +257,9 @@ export async function renderPackingForm(host) {
     const body = {
       day: st.day, shift: st.shift, stockCode: st.product.stockCode, operator: e.operator.value, woNo: e.woNo?.value ?? '',
       boxes: num(e.boxes.value), boxQty: num(e.boxQty.value), halfQty: num(e.halfQty.value), scrapQty: num(e.scrapQty.value), visualCheck: e.visualCheck.checked, note: e.note.value,
+      // Paketleme listesi (EYS.LS.005): yalniz urunun hic kaydi yoksa form bu alanlari gosterir (bkz. packingSpecBlock); varsa `e.X` yok, undefined gider, sunucu dokunmaz.
+      musteri: e.musteri?.value, koliBoyutu: e.koliBoyutu?.value, kasaOzelligi: e.kasaOzelligi?.value,
+      katSayisi: e.katSayisi?.value, koliEtiketi: e.koliEtiketi?.value, koliAgirligiKg: e.koliAgirligiKg?.value,
     };
     rememberPerson(body.operator);
     const btn = $('save');

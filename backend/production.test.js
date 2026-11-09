@@ -116,6 +116,20 @@ test('izleyici: ortak alt program (O9001) MainProg\'ta da gorunse okunamayan say
   assert.equal(v.observe(mesaj(T0 + 2 * SN, { total: 1001, count: 11, program: 'SR001', main: 'SR001' })).program, 'SR001');
 });
 
+test('izleyici: MDIBlock (sistemin MDI tamponu) da O9001 ile AYNI sekilde okunamayan sayilir', () => {
+  const t = new PartTracker();
+  t.observe(mesaj(T0, { program: 'SR001', main: 'SR001' }));
+  // tezgah MDI kipine girince Status/MainProg MDIBlock gosterebilir
+  t.observe(mesaj(T0 + SN, { total: 1000, count: 10, program: 'MDIBlock', main: 'MDIBlock' }));
+  const ev = t.observe(mesaj(T0 + 2 * SN, { total: 1001, count: 11, program: 'SR001', main: 'SR001' }));
+  assert.equal(ev.program, 'SR001', 'MDIBlock blip parcayi bolmedi, eski program surdu');
+  // kucuk/buyuk harf de yakalanir
+  const v = new PartTracker();
+  v.observe(mesaj(T0, { program: 'SR001', main: 'SR001' }));
+  v.observe(mesaj(T0 + SN, { total: 1000, count: 10, program: 'mdiblock', main: 'mdiblock' }));
+  assert.equal(v.observe(mesaj(T0 + 2 * SN, { total: 1001, count: 11, program: 'SR001', main: 'SR001' })).program, 'SR001');
+});
+
 test('izleyici: ayni mesajda program degistiyse parca ESKI programindir', () => {
   const t = new PartTracker();
   t.observe(mesaj(T0, { program: 'A', main: 'A' }));

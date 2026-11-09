@@ -274,6 +274,28 @@ test('depo: ortak alt program (O9001, ör. cubuk alma) icin ayri satir ACILMAZ, 
   }
 });
 
+test('depo: sistemin MDI tamponu (MDIBlock) icin de ayri satir ACILMAZ, O9001 ile AYNI muamele', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cnc-runs-mdiblock-'));
+  const file = join(dir, 'telemetry.db');
+  const acik = [];
+  try {
+    const bas = Date.now() - 5 * DK;
+    const store = new TelemetryStore(file);
+    acik.push(store);
+    store.ingest(mesaj('CNC-01', bas, 'SR001.013'));
+    // tezgah MDI kipine girince MainProg MDIBlock gosterebilir
+    store.ingest(mesaj('CNC-01', bas + 5 * SN, 'MDIBlock'));
+    store.ingest(mesaj('CNC-01', bas + 10 * SN, 'SR001.013'));
+    store.db.flush();
+    const rows = store.db.programRuns('CNC-01', 0, Date.now() + DK);
+    assert.deepEqual(rows.map((r) => r.program), ['SR001.013'], 'MDIBlock blip ayri satir acmadi, tek aralik surdu');
+    assert.equal(store.runs.current('CNC-01').program, 'SR001.013');
+  } finally {
+    for (const s of acik) { clearInterval(s.db.flushTimer); try { s.db.db.close(); } catch { /* zaten kapali */ } }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('veritabani: ilk acilista mevcut orneklerden program araliklari cikarilir (bir kez)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cnc-runs-bf-'));
   const file = join(dir, 'telemetry.db');

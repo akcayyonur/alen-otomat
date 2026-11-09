@@ -11,7 +11,8 @@
  *    (sifirlamayla ayni saniyede biten parca, veri kopuklugunda yapilanlar). Taban her durumda yenilenir.
  *  - Program: parca, o sirada AKTIF olan (ana) programa yazilir. Ayni mesajda program degistiyse parca ESKI
  *    programindir (sayac parca bitince artar, program sonra secilir). Ortak alt program (O9001, ör. cubuk alma)
- *    okunamayan sayilir: ne parcaya ne de "Program gecisleri"ne ayri bir program olarak yazilir (`programOf`).
+ *    ve sistemin MDI tamponu (MDIBlock) okunamayan sayilir: ne parcaya ne de "Program gecisleri"ne ayri bir
+ *    program olarak yazilir (`programOf`).
  *  - Makul olmayan sicrama (gecen surede uretilemeyecek kadar buyuk fark: operator sayaci elle ayarladi)
  *    `suspect` isaretlenir ve toplamlara KATILMAZ; sessizce yutulmaz, raporda ayrica sayilir.
  *  - Veri kopuklugundan sonra gelen adet gercektir (sayac tezgahta artti) ama ZAMANI kesin degildir:
@@ -31,14 +32,18 @@ const isCounter = (v) => Number.isInteger(v) && v >= 0;
  * Kok dizindeki ortak alt program (ör. cubuk alma rutini): her parcada kisaca devreye girer, gercek bir parca
  * programi degildir. Kontrolcu bu sirada MainProg'u da O9001 (ya da bos) gosterebilir; ikisinde de okunamayan
  * sayilir ("ortak alt program gecici gecisi aralik/parca atfini bolmez" - ana programin devamidir).
+ *
+ * MDIBlock (2026-11-09, kullanici istegi): sistemin kendi MDI tamponu (bkz. CLAUDE.md §3, torna 8'de kokte
+ * gorulen 7 dosyadan biri) - tezgah MDI kipindeyken Status/MainProg bunu gosterebilir, gercek bir parca
+ * programi degildir. O9001 ile AYNI muameleyi gorur: ne parcaya ne de "Program gecisleri"ne ayri satir acar.
  */
-const COMMON_SUBPROGRAM = 'O9001';
+const UNREADABLE_PROGRAMS = new Set(['O9001', 'MDIBLOCK']);
 
-/** Parcanin atfedilecegi program: ana program, yoksa calisan program. Ortak alt program (O9001) okunamayan sayilir. */
+/** Parcanin atfedilecegi program: ana program, yoksa calisan program. Ortak alt program (O9001/MDIBlock) okunamayan sayilir. */
 export function programOf(msg) {
   const raw = msg.mainProgram ?? msg.program ?? null;
   const text = raw == null ? '' : String(raw).trim();
-  return text === '' || text.toUpperCase() === COMMON_SUBPROGRAM ? null : text;
+  return text === '' || UNREADABLE_PROGRAMS.has(text.toUpperCase()) ? null : text;
 }
 
 /**

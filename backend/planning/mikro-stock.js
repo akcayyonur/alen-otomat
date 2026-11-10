@@ -46,13 +46,23 @@ function positiveInt(v, label) {
   return n;
 }
 
-function kgAmount(v) {
-  const n = typeof v === 'number' ? v : Number(String(v ?? '').trim().replace(',', '.'));
+/** Türkçe yazım: "." HER ZAMAN binlik ayracıdır (atılır), "," ondalık ayracıdır — `quarantine.js`'teki EYS.LS.018
+ * düzeltmesiyle AYNI kural (2026-11-06'da bulunan "12.500" → 12,5 yerine 12500 hatasının aynısı, burada GERÇEK
+ * Mikro yazma miktarını besliyor: 2026-11-10'da kod incelemesinde bulundu, hiç gerçek yazmada denenmemişti). */
+function parseTrNumber(v) {
+  return typeof v === 'number' ? v : Number(String(v ?? '').trim().replace(/\./g, '').replace(',', '.'));
+}
+
+/** Dışa aktarılır: `material-quarantine.js` (hammadde karantinası) kg'yı kendi kaydında saklamadan önce AYNI
+ * ayrıştırma/doğrulamayı kullanır (ayrı bir kopya YAZILMADI — 2026-11-10). */
+export function kgAmount(v) {
+  const n = parseTrNumber(v);
   if (!Number.isFinite(n) || n <= 0 || n > MAX_KG) throw new PlanningError(`Kilo 0 ile ${MAX_KG} arasında bir sayı olmalı.`, 400, 'bad-kg');
   return round(n, 3);
 }
 
-function stockCodeOf(v) {
+/** Dışa aktarılır: `material-quarantine.js` aynı stok kodu doğrulamasını kullanır. */
+export function stockCodeOf(v) {
   const s = String(v ?? '').trim();
   if (s === '' || s.length > 40) throw new PlanningError('Hammadde (Mikro stok kodu) seçilmeli.', 400, 'bad-stock-code');
   return s;
@@ -61,9 +71,22 @@ function stockCodeOf(v) {
 const MAX_QTY = 1_000_000;
 /** Bitmiş ürün (adet) miktarı: kg'dan farklı olarak her zaman tam sayı. */
 function pieceCount(v) {
-  const n = Number(v);
+  const n = parseTrNumber(v);
   if (!Number.isInteger(n) || n <= 0 || n > MAX_QTY) throw new PlanningError(`Adet 1 ile ${MAX_QTY.toLocaleString('tr-TR')} arasında bir tam sayı olmalı.`, 400, 'bad-qty');
   return n;
+}
+
+/**
+ * MikroAPI'nin `SqlVeriOkuV2` ucu bağlı (parametreli) sorgu DESTEKLEMEZ — gönderilen `SQLSorgu` metni harfi
+ * harfine SQL olarak çalışır (bkz. dosya başı ve `mikro.js`). Bu yüzden kullanıcı girdisi doğrudan `LIKE '%…%'`
+ * içine gömülmeden önce SQL metnini KAPATABİLECEK/BOZABİLECEK her karakter (tek tırnak) ve LIKE joker
+ * karakterleri (`%`, `_`, `[`, `]`) ATILIR — tutulmaz/kaçırılmaz, çünkü kaçırma (escape) biçimi MikroAPI'nin SQL
+ * lehçesine göre değişebilir ve burada doğrulanmadı; atmak (strip) hem basit hem her durumda güvenli. Adını taşıyan
+ * tek bir fonksiyonda tutulur ki bu desen ileride başka bir Mikro SQL sorgusuna kopyalanırken karakter kümesi
+ * unutulmasın/yanlış kopyalanmasın (2026-11-10, kod incelemesinde bulundu).
+ */
+function likeTermForMikro(q) {
+  return String(q ?? '').trim().replace(/[%_[\]']/g, '');
 }
 
 function noteOf(v) {
@@ -126,8 +149,8 @@ export class MikroStock {
 
   /** Hammadde (HM%) arama — canlı okuma, salt SELECT; `q` kod ya da isimde geçebilir. */
   async searchMaterials(q, limit = 30) {
-    const query = String(q ?? '').trim().replace(/[%_[\]']/g, '');
-    const top = Math.min(Math.max(Number(limit) || 30, 1), 50);
+    const query = likeTermForMikro(q);
+    const top = Math.min(Math.max(Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 30, 1), 50);
     const sql =
       `SELECT TOP ${top} sto_kod, sto_isim, sto_birim1_ad FROM STOKLAR ` +
       "WHERE sto_kod LIKE 'HM%' AND sto_iptal = 0 AND sto_hidden = 0" +

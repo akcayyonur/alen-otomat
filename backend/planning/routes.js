@@ -20,7 +20,7 @@
  *   POST /api/planning/work-orders/import-legacy        Eski Excel is emri sisteminden BIR KEZLIK gecis (govde = ham .xlsx): renk -> durum (yesil=bitti/kirmizi=iptal/diger=planlandi), idempotent (yalniz yonetici)
  *   GET  /api/planning/orders?q=&open=1&limit=          siparisler (musteri siparis no + evrak no ile gruplu)
  *   GET  /api/planning/orders/lines?customerKey=&custOrderKey=&docKey=   bir siparisin satirlari
- *   GET  /api/planning/work-orders?q=&status=&machine=  is emirleri (status: aktif | planlandi | uretimde | bitti | iptal | tumu)
+ *   GET  /api/planning/work-orders?q=&status=&machine=  is emirleri (status: aktif | planlandi | uretimde | uretimde-bitti | bitti | iptal | tumu)
  *   POST /api/planning/work-orders                      yeni is emri (JSON: lineId ya da stockCode, targetQty, machineId, dueDate, sampleQty ...)
  *   GET  /api/planning/work-orders/next                 siradaki is emri numarasi;  PUT .../sequence {last}: numara tabanini ayarla
  *   GET/PUT /api/planning/work-orders/:no               is emri (olaylar, siparis satiri, gerceklesen uretim) / guncelle;  POST .../:no/cancel {reason}
@@ -48,6 +48,7 @@
  *   DELETE /api/planning/quarantine/corrections/:id         yanlis tashih satirini sil (yalniz yonetici)
  *   GET  /api/planning/quarantine/hurda-deposu?from=&to=    KARANTINA DEPOSU (Mikro dep_no=5): "Hurda deposu" sekmesi, Karantina->Hurda(3) basarili transferleri
  *   POST .../quarantine/:id/depot/retry-giris                basarisiz Karantina GIRIS'ini elle yeniden dener (normalde batchQty guncellenince kendiliginden tetiklenir)
+ *   POST .../quarantine/:id/depot/retry-hurda                basarisiz Karantina->Hurda gonderimini elle yeniden dener (hurda hic otomatik ertelenmez, tek kurtarma yolu budur)
  *   GET  /api/planning/devices?q=&active=&usable=&calibration=   OLCUM CIHAZLARI TAKIP listesi (EYS.LS.006)
  *   POST /api/planning/devices                            yeni olcum cihazi ekle (yalniz kategori+tanim zorunlu)
  *   POST /api/planning/devices/import                      Setup kurulumunda ILK SEFER icin EYS.LS.006 Excel'ini iceri aktar (govde = ham .xlsx)
@@ -74,6 +75,11 @@
  *   GET  /api/planning/material/mikro/materials?q=       hammadde (HM%) arama (canli okuma, salt SELECT)
  *   POST /api/planning/material/mikro/transfer-preview|transfer-send {fromDepotNo, toDepotNo, stockCode, kg, note?}   DEPOLAR ARASI SEVKIYAT fisi: onizle (govde kurulur, GONDERILMEZ) / gonder (yalniz MIKRO_WRITE_ENABLED=1 ise; yoksa 409 mikro-write-disabled)
  *   POST /api/planning/material/mikro/virman-preview|virman-send {depotNo, stockCode, kg, note?}   SARFIYAT (stok virman) fisi: ayni kurallar
+ *   GET  /api/planning/material/quarantine?status=    HAMMADDE KARANTINASI (yanlis teslimat): kayitlar (Merkez->Karantina sevkiyati + "Iade"de sarf ile dusme)
+ *   POST /api/planning/material/quarantine {stockCode, stockName?, kg, note?}   "Karantinaya aktar": kaydi olusturur VE Merkez(1)->Karantina(5) sevk fisini hemen dener (MIKRO_WRITE_ENABLED kurali ayni)
+ *   POST /api/planning/material/quarantine/:id/retry-transfer   basarisiz sevkiyati elle yeniden dener
+ *   POST /api/planning/material/quarantine/:id/return   "Iade": Karantina depodaki TAM miktari sarf (virman, CIKAN) fisiyle duser
+ *   DELETE /api/planning/material/quarantine/:id   yanlislikla acilmis kaydi sil (Karantina'da GERCEKTEN duran bir kayit silinemez, once Iade edilmeli)
  *   GET  /api/planning/work-orders/:no/depot-status      BITMIS URUN DEPO AKISI durumu (uretilen/Gecici'ye aktarilan, paketlenen/Merkez'e sevk edilen, Gecici'de kalan fark; yalniz yonetici)
  *   POST /api/planning/work-orders/:no/depot/finish-transfer    is emri BITINCE: uretilen adedin gonderilmemis kismi Merkez->Gecici (ayni MIKRO_WRITE_ENABLED kurali)
  *   POST /api/planning/work-orders/:no/depot/packing-transfer   PAKETLENINCE: paketlenen adedin gonderilmemis kismi (delta) Gecici->Merkez
@@ -380,6 +386,11 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         await planning.quarantineDepot.sendGiris(Number(m[1]), { by: who(req) });
         return sendJson(res, 200, planning.quarantine.get(Number(m[1]))), true;
       }
+      // Basarisiz HURDA gonderimini elle yeniden dene (giris/OK'un aksine hurda hic otomatik ertelenip toplanmaz).
+      if (method === 'POST' && (m = /^\/api\/planning\/quarantine\/(\d{1,12})\/depot\/retry-hurda$/.exec(path))) {
+        await planning.quarantineDepot.retryHurda(Number(m[1]), { by: who(req) });
+        return sendJson(res, 200, planning.quarantine.get(Number(m[1]))), true;
+      }
 
       /* ---- olcum cihazlari takip (EYS.LS.006) ---- */
       if (path === '/api/planning/devices') {
@@ -437,7 +448,7 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         if (method === 'GET') {
           const status = url.searchParams.get('status') ?? 'aktif';
           return sendJson(res, 200, planning.listWorkOrders({
-            q: url.searchParams.get('q') ?? '', status: ['aktif', 'planlandi', 'uretimde', 'bitti', 'iptal', 'tumu'].includes(status) ? status : 'aktif',
+            q: url.searchParams.get('q') ?? '', status: ['aktif', 'planlandi', 'uretimde', 'uretimde-bitti', 'bitti', 'iptal', 'tumu'].includes(status) ? status : 'aktif',
             machineId: url.searchParams.get('machine') ?? '', limit: intParam(url, 'limit', 100, { min: 1, max: 500 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
           })), true;
         }
@@ -666,6 +677,21 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         const preview = planning.mikroStock.previewVirman(await readJson(req));
         if (path.endsWith('preview')) return sendJson(res, 200, preview), true;
         return sendJson(res, 200, { preview, result: await planning.mikroStock.send(preview) }), true;
+      }
+
+      /* ---- hammadde karantinasi: tedarikci yanlis hammadde gonderince Merkez->Karantina, "Iade"de sarf ile dusme ---- */
+      if (path === '/api/planning/material/quarantine') {
+        if (method === 'GET') return sendJson(res, 200, { items: planning.materialQuarantine.list({ status: url.searchParams.get('status') ?? '' }) }), true;
+        if (method === 'POST') return sendJson(res, 201, await planning.materialQuarantine.transferIn(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/material\/quarantine\/(\d{1,12})\/retry-transfer$/.exec(path))) {
+        return sendJson(res, 200, await planning.materialQuarantine.retryTransfer(Number(m[1]), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/material\/quarantine\/(\d{1,12})\/return$/.exec(path))) {
+        return sendJson(res, 200, await planning.materialQuarantine.returnToSupplier(Number(m[1]), { by: who(req) })), true;
+      }
+      if (method === 'DELETE' && (m = /^\/api\/planning\/material\/quarantine\/(\d{1,12})$/.exec(path))) {
+        return sendJson(res, 200, planning.materialQuarantine.delete(Number(m[1]))), true;
       }
 
       /* ---- program eslemesi ---- */

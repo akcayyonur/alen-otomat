@@ -27,6 +27,7 @@ import { PriceStudies } from './price-studies.js';
 import { SampleTracking } from './sample-tracking.js';
 import { Quarantine } from './quarantine.js';
 import { QuarantineDepot } from './quarantine-depot.js';
+import { MaterialQuarantine } from './material-quarantine.js';
 import { MeasuringDevices } from './measuring-devices.js';
 import { DrawingTracking } from './drawing-tracking.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
@@ -103,6 +104,8 @@ export class Planning {
     this.mikro = new Mikro({ planning: this, client: mikroClient ?? new MikroClient({}) });
     /** Depolar arası sevkiyat / sarfiyat (virman) fişi (mikro-stock.js): yazma `MIKRO_WRITE_ENABLED=1` olmadan KAPALI, bkz. CLAUDE.md "G aşaması". */
     this.mikroStock = new MikroStock({ client: this.mikro.client });
+    /** Hammadde karantinası (material-quarantine.js): tedarikçi yanlış hammadde gönderince Merkez->Karantina sevkiyatı + "İade"de sarf (virman) ile düşme. Hammadde ekranının kendi Mikro kapısıyla (MIKRO_WRITE_ENABLED) AYNI, PRODUCT_DEPOT_ENABLED'dan BAĞIMSIZ. */
+    this.materialQuarantine = new MaterialQuarantine({ planning: this });
     /** Teknik resim (PDF) ve etiket (Word) klasorleri: dosyalar urun koduna gore urun kartlarina eslenir (doc-folder.js). Iki AYRI klasor. */
     this.drawingFolder = new DocFolder({ planning: this, kind: 'cizim', defaultDir: drawingsDir });
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });
@@ -803,6 +806,10 @@ export class Planning {
       if (note) parts.push(note);
       this.db.addWorkOrderEvent(cur.no, 'elle-bitirildi', parts.join(' · '), { by, now });
     });
+    // `finishWorkOrder` ile AYNI sebep (bkz. asagidaki yorum): bu yol da `bitti` durumuna geçiyor, bu yüzden
+    // üretimdeyken ertelenmiş karantina OK'ü burada da toplanmalı (2026-11-10, kod incelemesinde bulundu:
+    // eskiden yalnız normal `finishWorkOrder` bu çağrıyı yapıyordu, elle bitirme hiç yapmıyordu).
+    this.quarantineDepot.flushPendingOk(cur.no, { by, now }).catch(() => {});
     return { ...this.getWorkOrder(cur.no, { now }), warnings };
   }
 

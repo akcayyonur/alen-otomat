@@ -24,6 +24,7 @@
  * Geçici'ye "doğmaz"; Karantina'dan ayrı bir TRANSFER'le gelirler, iki kez sayılmasınlar diye).
  */
 import { PlanningError } from './errors.js';
+import { parseDateKey, daysBetween, addDays } from '../../shared/shifts.js';
 import { GECICI_DEPO_NO } from './product-depot.js';
 
 /** DEPOLAR (gerçek, SqlVeriOkuV2 ile salt okuma doğrulandı, 2026-11-09): 3=HURDA DEPO, 5=KARANTİNA DEPO. */
@@ -57,6 +58,14 @@ const rowOut = (r) => ({
 });
 
 export class QuarantineDepot {
+  /** İş emri başına (burada: karantina kaydı başına) eşzamanlı gönderimi engeller — `product-depot.js`'teki
+   * `#busy` deseniyle AYNI (2026-11-10, kod incelemesinde bulundu: bu sınıf product-depot.js'in `#send`'ini
+   * kopyalarken bu korumayı almamıştı). `qty` `#sentTotal`'den SENKRON hesaplanır, `await mikroStock.send(...)`'den
+   * ÖNCE: üst üste gelen iki çağrı (ör. `batchQty`'yi art arda iki kez düzelten bir güncelleme, ya da otomatik
+   * `#onLink` tetiklemesiyle çakışan elle "Yeniden dene…") aynı (eski) toplamı görüp aynı delta'yı iki kez
+   * Mikro'ya gönderebilirdi. Reddedilen çağrı veri KAYBETMEZ: delta hâlâ oradadır, bir sonraki çağrı toplar. */
+  #busy = new Set();
+
   /** @param {{planning: import('./planning.js').Planning, enabled?: () => boolean}} deps `enabled`: product-depot.js ile AYNI kapı (ayrı env değişkeni İCAT EDİLMEDİ). */
   constructor({ planning, enabled = () => process.env.PRODUCT_DEPOT_ENABLED === '1' }) {
     this.planning = planning;
@@ -65,10 +74,20 @@ export class QuarantineDepot {
     this.db.exec(SCHEMA);
   }
 
+  /**
+   * Kayıt bir iş emrine bağlıysa Mikro'ya HER ZAMAN iş emrinin kendi (kanonik) stok kodu gönderilir — kaydın
+   * kendi `stockCode`/`productLabel` alanı DEĞİL (serbest metin, boş kalabilir ya da kullanıcı yalnızca "Ürün
+   * tanımı"nı doldurup Alen kodunu boş bırakabilir; `product-depot.js`'in `w.stockCode` kullanmasıyla AYNI ilke).
+   * 2026-11-10, kod incelemesinde bulundu: eskiden `r.stock_code || r.product_label` kullanılıyordu, yani boş
+   * bırakılan Alen kodu durumunda serbest metin ürün tanımı Mikro'ya stok kodu olarak gönderilebiliyordu.
+   */
   #entry(quarantineId) {
     const r = this.db.prepare('SELECT id, wo_no, stock_code, product_label, batch_qty FROM quarantine_entries WHERE id = ?').get(Number(quarantineId));
     if (!r) throw new PlanningError('Karantina kaydı bulunamadı.', 404);
-    return { id: Number(r.id), woNo: r.wo_no, stockCode: r.stock_code || r.product_label, batchQty: r.batch_qty == null ? null : Number(r.batch_qty) };
+    const woNo = r.wo_no || null;
+    const wo = woNo ? this.planning.db.getWorkOrder(woNo) : null;
+    const stockCode = (wo && wo.stockCode) || r.stock_code || r.product_label;
+    return { id: Number(r.id), woNo, stockCode, batchQty: r.batch_qty == null ? null : Number(r.batch_qty) };
   }
 
   #history(quarantineId, kind) {
@@ -86,17 +105,34 @@ export class QuarantineDepot {
     ).run(Number(quarantineId), woNo ?? null, kind, stockCode, qty, fromDepot, toDepot, status, evrakSeri, evrakSira, error, now, by ?? null);
   }
 
-  /** Hurda Girişi ekranının "Hurda deposu" sekmesi: Karantina'dan Hurda'ya GERÇEKTEN gönderilmiş (başarılı) transferler. `from`/`to`: 'yyyy-aa-gg'. */
+  /**
+   * Hurda Girişi ekranının "Hurda deposu" sekmesi: Karantina'dan Hurda'ya GERÇEKTEN gönderilmiş (başarılı)
+   * transferler. `from`/`to`: 'yyyy-aa-gg', ikisi de isteğe bağlı (boşsa o sınır uygulanmaz). Diğer gün-aralığı
+   * uçlarıyla (`sample-tracking.js#dayRange`) AYNI doğrulama: geçersiz biçim/ters aralık/400 günden uzun aralık
+   * reddedilir (eskiden `new Date(...)` ile doğrudan ayrıştırılıyordu: geçersiz girdi sessizce `NaN` üretip SQL'e
+   * öyle gidiyordu — 2026-11-10, kod incelemesinde bulundu).
+   */
   listHurda({ from = '', to = '', limit = 300 } = {}) {
     const conds = ["t.kind = 'hurda'", "t.status = 'basarili'"];
     const args = [];
-    if (from) { conds.push('t.at >= ?'); args.push(new Date(`${from}T00:00:00`).getTime()); }
-    if (to) { conds.push('t.at <= ?'); args.push(new Date(`${to}T23:59:59.999`).getTime()); }
+    if (from || to) {
+      const fromKey = from || to;
+      const toKey = to || from;
+      const p = parseDateKey(fromKey);
+      const q = parseDateKey(toKey);
+      if (!p || !q) throw new PlanningError('Tarih yyyy-aa-gg biçiminde olmalı.');
+      if (fromKey > toKey) throw new PlanningError('Başlangıç tarihi bitişten sonra olamaz.');
+      if (daysBetween(fromKey, toKey) > 400) throw new PlanningError('Aralık en fazla 400 gün olabilir.');
+      const next = parseDateKey(addDays(toKey, 1));
+      if (from) { conds.push('t.at >= ?'); args.push(new Date(p.y, p.m - 1, p.d).getTime()); }
+      if (to) { conds.push('t.at < ?'); args.push(new Date(next.y, next.m - 1, next.d).getTime()); }
+    }
+    const top = Math.min(Math.max(Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 300, 1), 1000);
     const rows = this.db.prepare(
       `SELECT t.*, e.product_label, e.issue FROM quarantine_depot_transfers t
        LEFT JOIN quarantine_entries e ON e.id = t.quarantine_id
        WHERE ${conds.join(' AND ')} ORDER BY t.id DESC LIMIT ?`,
-    ).all(...args, Math.min(Math.max(Number(limit) || 300, 1), 1000));
+    ).all(...args, top);
     return rows.map((r) => ({ ...rowOut(r), quarantineId: Number(r.quarantine_id), productLabel: r.product_label, issue: r.issue }));
   }
 
@@ -107,13 +143,20 @@ export class QuarantineDepot {
     const okSent = this.#sentTotal(e.id, 'ok');
     const hurdaSent = this.#sentTotal(e.id, 'hurda');
     const resolved = this.#resolvedQty(e.id); // tashih ile OK+hurda olarak belirlenen toplam (qdt'den bagimsiz, corrections'tan)
+    const hurdaPending = Math.max(0, resolved.hurda - hurdaSent);
     return {
       configured: this.planning.mikroStock.configured(),
       writeEnabled: this.planning.mikroStock.writeEnabled(),
       flowEnabled: this.enabled(),
-      giris: { history: this.#history(e.id, 'giris'), batchQty: e.batchQty, sent: girisSent, pending: Math.max(0, (e.batchQty ?? 0) - girisSent) },
+      // batchQty henuz BILINMIYORSA (girişte tartılmamış) bekleyen miktar da bilinmiyordur: `0` DEĞİL `null`
+      // (2026-11-10, kod incelemesinde bulundu — "okunamayan alan null, asla 0" kuralı, CLAUDE.md §7).
+      giris: { history: this.#history(e.id, 'giris'), batchQty: e.batchQty, sent: girisSent, pending: e.batchQty == null ? null : Math.max(0, e.batchQty - girisSent) },
       ok: { history: this.#history(e.id, 'ok'), sent: okSent },
-      hurda: { history: this.#history(e.id, 'hurda'), sent: hurdaSent },
+      // "hurda.pending": tashihle hurda cikmis ama HENUZ Mikro'ya gonderilmemis kisim (ok'un "ertelenmis" alanina
+      // benzer, ama hurda hic ertelenmez - yalniz basarisiz bir denemeden sonra burada kalir); UI "Yeniden dene…"
+      // gosterir (2026-11-10, kod incelemesinde bulundu: hurda'nin giris/ok'tan farkli olarak hic kurtarma yolu
+      // yoktu, basarisiz bir Mikro gonderimi sessizce gorunmez kalirdi).
+      hurda: { history: this.#history(e.id, 'hurda'), sent: hurdaSent, pending: hurdaPending },
       stillInQuarantine: Math.max(0, girisSent - resolved.ok - resolved.hurda),
     };
   }
@@ -164,6 +207,24 @@ export class QuarantineDepot {
     });
   }
 
+  /**
+   * Bu karantina kaydının tashihle hurda çıkmış ama HENÜZ Karantina->Hurda gönderilmemiş kısmı — `sendHurda`
+   * `#onCorrection`'dan fire-and-forget çağrılır ve başarısız olursa (ağ/Mikro hatası) kimse yeniden denemezdi
+   * (giriş/OK'un aksine hurda hiç ertelenmez, bu yüzden "iş emri bitince topla" gibi bir doğal tetikleyici de
+   * yok). `pendingOkForWorkOrder` ile AYNI "tashih toplamı - gönderilen toplam" deltası, yalnız tek kayıt için.
+   */
+  pendingHurdaForEntry(quarantineId) {
+    const e = this.#entry(quarantineId);
+    return Math.max(0, this.#resolvedQty(e.id).hurda - this.#sentTotal(e.id, 'hurda'));
+  }
+
+  /** Başarısız/eksik kalan bir hurda gönderimini elle yeniden dener (`retry-giris` ile AYNI kurtarma deseni). */
+  async retryHurda(quarantineId, { by = null, now = Date.now() } = {}) {
+    const pending = this.pendingHurdaForEntry(quarantineId);
+    if (pending <= 0) return this.statusFor(quarantineId);
+    return this.sendHurda(quarantineId, pending, { by, now });
+  }
+
   /** Bu iş emrine bağlı karantina kayıtlarının HİÇ tashih sonucu belirlenmemiş (ne OK ne hurda) kısmı. `product-depot.js`'in `sendFinishTransfer`'ı bunu üretilen adetten düşer. */
   pendingQtyForWorkOrder(woNo) {
     const entries = this.db.prepare('SELECT id, batch_qty FROM quarantine_entries WHERE wo_no = ?').all(String(woNo));
@@ -200,6 +261,10 @@ export class QuarantineDepot {
   async #send({ quarantineId, woNo, kind, stockCode, qty, fromDepot, toDepot, preview, by, now }) {
     if (!this.enabled()) throw new PlanningError('Bitmiş ürün depo akışı (Karantina dahil) şu an kapalı: fabrika PC\'si/paketleme sahada kurulana kadar devre dışı bırakıldı.', 409, 'depot-flow-disabled');
     if (!preview.writeEnabled) throw new PlanningError('Mikro yazma şu an kapalı (inceleme/onay aşaması ya da ağ dışı): MIKRO_WRITE_ENABLED açılmadan hiçbir şey Mikro\'ya gönderilmez.', 409, 'mikro-write-disabled');
+    // Ayni karantina kaydi icin eszamanli gonderimi engelle (bkz. #busy alanindaki not): `qty` zaten SENKRON
+    // hesaplanmisti, asagidaki await'ten once.
+    if (this.#busy.has(quarantineId)) throw new PlanningError('Bu karantina kaydı için Mikro gönderimi zaten sürüyor, bitmesini bekleyin.', 409, 'busy');
+    this.#busy.add(quarantineId);
     try {
       const result = await this.planning.mikroStock.send(preview);
       const evrak = result?.Data?.list?.[0] ?? {};
@@ -213,6 +278,8 @@ export class QuarantineDepot {
     } catch (err) {
       this.#insert({ quarantineId, woNo, kind, stockCode, qty, fromDepot, toDepot, status: 'basarisiz', error: err.message, by, now });
       throw err;
+    } finally {
+      this.#busy.delete(quarantineId);
     }
   }
 }

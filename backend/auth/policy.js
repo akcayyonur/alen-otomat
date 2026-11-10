@@ -94,6 +94,7 @@ export const SCREEN_ROUTES = Object.freeze([
   // karantina deposu (Mikro dep_no=5): "Hurda deposu" sekmesi + basarisiz GIRIS'i elle yeniden deneme
   [['GET'], /^\/api\/planning\/quarantine\/hurda-deposu$/, 'hurda', 'read'],
   [['POST'], /^\/api\/planning\/quarantine\/\d{1,12}\/depot\/retry-giris$/, 'hurda', 'write'],
+  [['POST'], /^\/api\/planning\/quarantine\/\d{1,12}\/depot\/retry-hurda$/, 'hurda', 'write'],
 
   // olcum cihazlari takip (EYS.LS.006): okuma/ekleme/duzenleme role'e; silme ve Excel'den toplu iceri aktarma kayitsiz -> admin
   [['GET'], /^\/api\/planning\/devices$/, 'olcucihazlari', 'read'],
@@ -129,6 +130,9 @@ export const SCREEN_ROUTES = Object.freeze([
   [['POST'], /^\/api\/planning\/material\/mikro\/(?:transfer|virman)-preview$/, 'hammadde', 'read'],
   [['POST'], /^\/api\/planning\/material\/fis(?:\/undo)?$/, 'hammadde', 'write'],
   [['POST'], /^\/api\/planning\/material\/mikro\/(?:transfer|virman)-send$/, 'hammadde', 'write'],
+  // hammadde karantinasi (yanlis teslimat): olustur/yeniden dene/iade yazma; silme kayitsiz -> admin (diger karantina/takip ozellikleriyle AYNI "idari islemler admin'e" deseni)
+  [['POST'], /^\/api\/planning\/material\/quarantine$/, 'hammadde', 'write'],
+  [['POST'], /^\/api\/planning\/material\/quarantine\/\d{1,12}\/(?:retry-transfer|return)$/, 'hammadde', 'write'],
   [['GET'], /^\/api\/planning\/efficiency(?:\.csv)?$/, 'verimlilik', 'read'],
   [['GET'], /^\/api\/planning\/downtime-report(?:\.csv)?$/, 'verimlilik', 'read'],
   [['POST'], /^\/api\/planning\/schedule\/apply$/, 'cizelgeleme', 'write'],

@@ -83,6 +83,7 @@ test('sendOk/sendHurda: Karantina(5)->Geçici(2) ve Karantina(5)->Hurda(3) TRANS
   const { p, calls } = kur();
   const no = bitmisIsEmri(p, 1000);
   const q = p.quarantine.create({ woNo: no, productLabel: 'SR001.013', issue: 'x', enteredBy: 'Ayşe', batchQty: 500 }, { now: NOW });
+  await new Promise((r) => setTimeout(r, 0)); // create()'in fire-and-forget sendGiris'ini bekle (#busy kilidi serbest kalsin)
   await p.quarantineDepot.sendOk(q.id, 300, { now: NOW });
   await p.quarantineDepot.sendHurda(q.id, 200, { now: NOW });
   const okSatir = calls.at(-2).body.evraklar[0].satirlar[0];
@@ -196,6 +197,47 @@ test('addCorrection: iş emri ZATEN BİTMİŞKEN OK sonucu gelirse Karantina->Ge
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(calls.length, beforeCorr + 1, 'is emri zaten bitmisti, OK hemen gonderilmeli');
   assert.equal(p.quarantineDepot.statusFor(q.id).ok.sent, 400);
+});
+
+/* ================================================================================ kod incelemesi (2026-11-10) */
+
+test('stockCode: is emrine bagli kayitta Mikro\'ya HER ZAMAN is emrinin KENDI stok kodu gider, kaydin serbest metin "urun tanimi" alani DEGIL', async () => {
+  const { p, calls } = kur();
+  const no = uretimdeIsEmri(p);
+  // productLabel kasitli olarak is emrinin stockCode'undan (SR001.013) FARKLI: serbest metinli bir aciklama.
+  const q = p.quarantine.create({ woNo: no, productLabel: 'Pirinç somun, çap hatalı (Alen kodu girilmedi)', issue: 'x', enteredBy: 'A', batchQty: 50 }, { now: NOW });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls[0].body.evraklar[0].satirlar[0].sth_stok_kod, 'SR001.013', 'is emrinin kanonik stok kodu gonderilmeli, serbest metin aciklama DEGIL');
+  assert.equal(p.quarantineDepot.statusFor(q.id).giris.sent, 50);
+});
+
+test('statusFor: batchQty henuz BILINMIYORSA (girişte tartılmamış) giris.pending `null` doner, `0` DEGIL', () => {
+  const { p } = kur();
+  const no = uretimdeIsEmri(p);
+  const q = p.quarantine.create({ woNo: no, productLabel: 'SR001.013', issue: 'x', enteredBy: 'A' }, { now: NOW }); // batchQty yok
+  const s = p.quarantineDepot.statusFor(q.id);
+  assert.equal(s.giris.batchQty, null);
+  assert.equal(s.giris.pending, null, 'okunamayan alan null olmali, 0 degil (CLAUDE.md §7)');
+});
+
+test('#busy: ayni karantina kaydina ayni anda iki gonderim cakisirsa ikincisi 409 busy verir, veri KAYBETMEZ (iki kez gonderilmez)', async () => {
+  let resolveFirst;
+  const { p, calls } = kur({ call: async () => new Promise((r) => { resolveFirst = r; }).then(() => ({ Data: { list: [{ evrakno_seri: 'CNCT', evrakno_sira: '1' }] } })) });
+  const no = uretimdeIsEmri(p);
+  const q = p.quarantine.create({ woNo: no, productLabel: 'SR001.013', issue: 'x', enteredBy: 'A', batchQty: 100 }, { now: NOW });
+  await new Promise((r) => setTimeout(r, 0)); // create()'in #onLink'i sendGiris'i baslatti, henuz Mikro cevabi beklemede (asili)
+  await assert.rejects(() => p.quarantineDepot.sendGiris(q.id, { now: NOW }), (e) => e.status === 409 && e.code === 'busy');
+  resolveFirst();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 1, 'yalniz ilk (create tetikledigi) gonderim gitti, reddedilen ikinci deneme AYRICA Mikro\'ya istek atmadi');
+  assert.equal(p.quarantineDepot.statusFor(q.id).giris.sent, 100);
+});
+
+test('listHurda: gecersiz tarih biçimi reddedilir (NaN sessizce SQL\'e gitmez)', () => {
+  const { p } = kur();
+  assert.throws(() => p.quarantineDepot.listHurda({ from: 'abc' }), /yyyy-aa-gg/);
+  assert.throws(() => p.quarantineDepot.listHurda({ from: '2026-11-10', to: '2026-01-01' }), /sonra olamaz/);
+  assert.deepEqual(p.quarantineDepot.listHurda({ from: '2026-01-01', to: '2026-12-31' }), [], 'gecerli aralik hata vermeden bos liste doner');
 });
 
 /* ================================================================================ product-depot.js entegrasyonu */

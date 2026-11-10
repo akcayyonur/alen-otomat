@@ -177,15 +177,25 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
       return `<div class="pl-kpi"><span class="pl-kpi-l">${escapeHtml(label)}</span><span class="pl-kpi-v">${parts.join(' ')}</span></div>`;
     };
     const lastGirisError = d.giris.history.filter((x) => x.status === 'basarisiz').sort((a, b) => b.at - a.at)[0];
+    // Hurda, giris/OK'un aksine HİÇ otomatik ertelenip toplanmaz (2026-11-10, kod incelemesinde bulundu): başarısız
+    // bir deneme elle "Yeniden dene…" dışında kendiliğinden kurtarılmaz, bu yüzden giris ile AYNI şekilde gösterilir.
+    const lastHurdaError = d.hurda.history.filter((x) => x.status === 'basarisiz').sort((a, b) => b.at - a.at)[0];
     return (
       '<h4 class="sub">Mikro karantina deposu</h4><div class="pl-kpis">' +
       row('Karantina girişi', d.giris) +
       (d.ok.sent > 0 ? `<div class="pl-kpi"><span class="pl-kpi-l">Geçici'ye aktarılan (OK)</span><span class="pl-kpi-v">${chip('ok', '✓', `${fmtNum(d.ok.sent)} adet`)}</span></div>` : '') +
-      (d.hurda.sent > 0 ? `<div class="pl-kpi"><span class="pl-kpi-l">Hurda depoya aktarılan</span><span class="pl-kpi-v">${chip('bad', '✕', `${fmtNum(d.hurda.sent)} adet`)}</span></div>` : '') +
+      ((d.hurda.sent > 0 || d.hurda.pending > 0)
+        ? `<div class="pl-kpi"><span class="pl-kpi-l">Hurda depoya aktarılan</span><span class="pl-kpi-v">` +
+          `${d.hurda.sent > 0 ? chip('bad', '✕', `${fmtNum(d.hurda.sent)} adet`) : ''} ${d.hurda.pending > 0 ? chip('warn', '◔', `${fmtNum(d.hurda.pending)} adet bekliyor`) : ''}</span></div>`
+        : '') +
       '</div>' +
       (lastGirisError && d.giris.pending > 0
         ? `<p class="notice notice-sim">Karantina girişi başarısız oldu: ${escapeHtml(lastGirisError.error ?? '')} ` +
           `${editable ? '<button type="button" class="icon-btn icon-btn-sm" data-act="depot-retry-giris">Yeniden dene…</button>' : ''}</p>`
+        : '') +
+      (lastHurdaError && d.hurda.pending > 0
+        ? `<p class="notice notice-sim">Karantina → Hurda aktarımı başarısız oldu: ${escapeHtml(lastHurdaError.error ?? '')} ` +
+          `${editable ? '<button type="button" class="icon-btn icon-btn-sm" data-act="depot-retry-hurda">Yeniden dene…</button>' : ''}</p>`
         : '')
     );
   }
@@ -269,6 +279,10 @@ export async function openQuarantineDialog(id, onDone = () => {}) {
     if (ev.target.closest('[data-act="unlink-wo"]')) { woNo = null; draw(); return; }
     if (ev.target.closest('[data-act="depot-retry-giris"]')) {
       post(`/api/planning/quarantine/${q.id}/depot/retry-giris`).then((r) => { q = r; draw(); }).catch((e) => { error = e.message; draw(); });
+      return;
+    }
+    if (ev.target.closest('[data-act="depot-retry-hurda"]')) {
+      post(`/api/planning/quarantine/${q.id}/depot/retry-hurda`).then((r) => { q = r; draw(); }).catch((e) => { error = e.message; draw(); });
       return;
     }
     if (ev.target.closest('[data-act="reopen"]')) {

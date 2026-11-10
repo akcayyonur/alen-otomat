@@ -213,7 +213,10 @@ export class ProductDepot {
   async clearRemaining(woNo, { by = null, now = Date.now() } = {}) {
     const { w } = this.#load(woNo);
     if (w.status !== 'bitti') throw new PlanningError('Yalnız biten iş emrinde Geçici depoda kalan fark temizlenebilir.', 409, 'bad-status');
-    const remaining = this.#sentTotal(w.no, 'bitis') - this.#sentTotal(w.no, 'paketleme') - this.#sentTotal(w.no, 'temizle');
+    // `statusFor`'un zaten hesapladigi (Math.max(0,...) ile guardli) ayni degeri yeniden kullan - burada ayrica,
+    // guardsiz bir formulle tekrar hesaplanirsa iki kopya zamanla birbirinden sapabilir (2026-11-10, kod
+    // incelemesinde bulundu: bu satir `Math.max` ICERMIYORDU, statusFor'un temizle.remaining'i ICERIYORDU).
+    const { remaining } = this.statusFor(woNo).temizle;
     if (remaining <= 0) throw new PlanningError('Temizlenecek fark yok (paketlenen adet Geçici\'ye aktarılanı karşılıyor).', 409, 'nothing-to-clear');
     return this.#send({
       woNo: w.no, kind: 'temizle', stockCode: w.stockCode, qty: remaining, fromDepot: GECICI_DEPO_NO, toDepot: GECICI_DEPO_NO,

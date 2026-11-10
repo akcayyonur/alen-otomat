@@ -1860,6 +1860,73 @@ ağırlığı (kg). Bugüne kadar bunun yalnız BİR parçası (koli içi adet) 
   formunda yeni ürün akışını nasıl bulduğu); "Satırı düzelt" (updateRow) akışında bu alanların öğrenilmesi
   BİLİNÇLİ OLARAK yapılmıyor (yalnız `addRow`/ilk ekleme — plan kararı).
 
+### Hammadde karantinası — yanlış teslimat (2026-11-10, kullanıcı isteği)
+
+Hammadde ekranına **dördüncü sekme: "Karantina"**. Hurda Girişi/Karantina deposu (`quarantine.js`/`quarantine-depot.js`,
+§6 "Hurda Girişi"/"Karantina deposu") ÜRETİMDE fark edilen hurda/uygunsuz PARÇAYI (adet) izler; bu, bambaşka bir
+senaryo: **tedarikçi yanlış hammadde (kg) gönderdiğinde** teslim alınan miktar karantinaya çekilir. İkisinin
+hedefi aynı Mikro deposu (**KARANTİNA DEPO, dep_no=5**) olsa da kayıt/iş akışı tamamen BAĞIMSIZ — ortak bir
+tablo/kod PAYLAŞILMADI (biri iş emrine bağlı parça sayımı, diğeri serbest bir hammadde teslim alımı; ortak
+soyutlamak yapay olurdu).
+
+- **Akış:** "Karantinaya aktar…" → hammadde ara (Mikro'dan canlı arama, `mikroStock.searchMaterials` — "Depolar
+  arası sevkiyat" dialoğuyla AYNI arama kutusu/sonuç listesi) + kilo + not (isteğe bağlı, ör. tedarikçi/sipariş) →
+  kayıt **hem oluşturulur hem Mikro'ya hemen gönderilir** (tek adım; miktar bu anda bilinir ve bir daha
+  değişmez — Hurda Girişi'ndeki "batchQty genelde girişte bilinmiyor, sonradan girilir" senaryosundan FARKLI,
+  bu yüzden deferred/delta mantığı GEREKMEDİ): Merkez(1)→Karantina(5) **Depolar Arası Sevk Fişi**
+  (`mikroStock.previewTransfer`, aynı evrak türü hammaddenin kendi transfer akışıyla). Liste satırında durum:
+  **✕ aktarılamadı** (Mikro çağrısı başarısız; "Yeniden dene…") / **◔ karantinada** ("İade et…") / **✓ iade edildi**.
+- **"İade et…":** Karantina depodaki **TAM miktarı** (girişteki kg, değiştirilemez — kısmi/parçalı iade YOK,
+  kullanıcı kararı) sarf (stok virman, **ÇIKAN**) fişiyle düşer (`mikroStock.previewVirman({depotNo:
+  KARANTINA_DEPO_NO, direction:'cikan'})`) — Mikro'nun defterinden tamamen çıkar, fiziksel olarak da tedarikçiye
+  geri gönderildi. Geri alınamaz; UI `window.confirm()` ile onay ister (bu kadar basit bir onay yeterli görüldü,
+  Hurda Girişi'ndeki iki adımlı modal onay GEREKMEDİ — tek buton + net uyarı metni).
+- **Her deneme (başarılı/başarısız) kalıcı kaydedilir, elle yeniden denenebilir** — `product-depot.js`/
+  `quarantine-depot.js` ile AYNI felsefe, ama DAHA BASİT uygulama: her kayıt TEK sabit miktar taşıdığı için
+  (delta/kısmi gönderim yok) kendi ayrı bir ledger tablosu YOK, durum doğrudan kayıt satırında tutulur.
+  **Mikro yazma kapalıyken** ("özellik kapalı" gibi — `PRODUCT_DEPOT_ENABLED` BURADA KULLANILMAZ, o kapının
+  gerekçesi "fabrika PC'si/paketleme sahada değil"; bu özellik paketlemeyle ilgisiz, doğrudan ofisten kullanılan
+  bir Hammadde ekranı özelliği, hammaddenin mevcut "Depolar arası sevkiyat" dialoğuyla AYNI kapıyı — yalnız
+  `MIKRO_WRITE_ENABLED` — paylaşır) kayıt yine OLUŞUR ama "aktarılamadı" ile hata metni DB'ye de yazılır (ürünün
+  diğer depo modüllerinden FARKLI: oralarda "kapı kapalı" bir ledger satırı BIRAKMAZ, çünkü kullanıcı orada bir
+  düğmeye basıp sonucu beklemiyor; burada az önce bastı ve "neden aktarılamadı" görmesi gerekiyor).
+- **Silme:** yalnız admin değil, `hammadde:yazabilir` olan her rol (mevcut hammadde yazma yetkisiyle AYNI); ama
+  **Karantina'da GERÇEKTEN duran (sevkiyatı başarılı, henüz iade edilmemiş) bir kayıt SİLİNEMEZ** (409
+  `has-movement`) — bu modülün tek kaydı, Mikro'daki o stok hareketinin TEK takip yeridir, önce "İade et…" gerekir.
+- **Dosyalar:** `backend/planning/material-quarantine.js` (`MaterialQuarantine`, tablo `material_quarantine`,
+  `planlama.db`'de kendi `CREATE TABLE IF NOT EXISTS`'i ile — diğer alt modüllerle aynı desen), `planning.js`
+  (`this.materialQuarantine`), `routes.js`, `dashboard/planning-material.js` (dördüncü sekme + "Karantinaya
+  aktar…" dialoğu — "Depolar arası sevkiyat" dialoğunun hammadde-arama kısmıyla AYNI UI parçaları, depo seçimi
+  YOK çünkü Merkez→Karantina SUNUCUDA sabit). `mikro-stock.js`'teki `kgAmount`/`stockCodeOf` dışa aktarıldı (ayrı
+  bir kopya YAZILMADI — bu özellik aynı kg/stok kodu doğrulama/ayrıştırmasını birebir kullanır).
+- **Uçlar:** `GET /api/planning/material/quarantine?status=` (liste; mevcut `GET /api/planning/material*`
+  joker izniyle zaten okunabilir) · `POST /api/planning/material/quarantine {stockCode, stockName?, kg, note?}`
+  ("Karantinaya aktar", 201) · `POST .../quarantine/:id/retry-transfer` · `POST .../quarantine/:id/return`
+  ("İade et") · `DELETE .../quarantine/:id`. Yazma uçları `hammadde:yazabilir`; silme de dahil (diğer
+  karantina/takip özelliklerindeki "silme kayıtsız → admin" deseninden BİLİNÇLİ SAPMA: burada silinebilirlik
+  zaten Mikro hareket durumuna göre kısıtlı, ayrıca admin'e indirgemeye gerek görülmedi).
+- **Doğrulama:** `backend/planning/material-quarantine.test.js` (10 test: doğru Mikro gövdesi — depo
+  numaraları + evrak türü + Türkçe binlik ayracı, başarısız denemenin kayıt bırakması, yeniden deneme + zaten
+  başarılıyı reddetme, kapı kapalıyken kayıt + hata metni, iade'nin AYNI kg ile sarf fişi göndermesi, iade
+  öncesi/sonrası durum kısıtları, iade başarısız olursa "karantinada" kalıp yeniden denenebilmesi, silme
+  kısıtı, liste süzgeci, uçtan uca HTTP). `npm test` 727/727 yeşil. Tarayıcıda gerçek sunucuya (AUTH_DISABLED)
+  karşı denendi: sekme + boş liste + "Karantinaya aktar…" dialoğu doğru render oldu, hammadde arama kutusu
+  "Depolar arası sevkiyat" dialoğuyla AYNI hata yolunu ("MikroAPI yapılandırılmadı") doğru gösterdi (bu
+  makinede gerçek Mikro bağlantısı yok); hiçbir kayıt oluşturulmadan dialog kapatıldı.
+- **Bu ÖZELLİK için ayrıca gerçek bir Mikro denemesi YAPILMADI, ama kullanıcı kararı (2026-11-10): buna gerek yok**
+  — altta yatan mekanizma zaten gerçek yazmayla kanıtlı: (1) `mikroStock.previewTransfer`/`previewVirman`
+  (hammadde, kg, evraktip=2/tip=2/cins=6 transfer + evraktip=6/tip=1/cins=3 virman-çıkan) **G aşamasında GERÇEK
+  hammadde stok kodlarıyla** (`HM617.AA30.00XYU18.00`, `HM614.AA25.00`) doğrulandı (bkz. yukarıdaki "G aşaması
+  — GERÇEK ilk yazma denemesi" ve "SARFİYAT (VİRMAN) TARAFI DA GERÇEK YAZMAYLA DOĞRULANDI"); (2) **KARANTİNA
+  DEPO (dep_no=5)**'nun kendisi `quarantine-depot.js`'in GİRİŞ/OK/Hurda akışında gerçek yazmayla doğrulanmıştı
+  (bkz. "Karantina deposu — iş emri bağlantısı + Mikro" — orada adet/ürün koduyla, burada kg/hammadde koduyla,
+  ama depo numarasının Mikro tarafındaki davranışı miktarın kg mı adet mi olduğundan bağımsız). Bu özellik bu
+  iki kanıtlı parçayı YENİDEN BİRLEŞTİRİYOR (farklı depo çifti + hammadde stok kodu), yeni bir Mikro çağrı
+  biçimi İCAT ETMİYOR — bu yüzden ayrı bir "yönetici ile ilk deneme" adımı GEREKMİYOR. Hiç denenmedi (tasarım
+  gereği, Mikro riskiyle ilgisiz): kısmi iade ihtiyacı çıkar mı (şimdilik yok); "aktarılamadı" durumundaki bir
+  kaydı silmek yerine düzeltip yeniden denemek isteyen kullanıcı için "düzenle" akışı yok (yalnız sil + yeniden
+  "Karantinaya aktar" ile aç).
+
 **Gerçek tornada henüz DOĞRULANMAYANLAR (ilk kullanımda küçük bir testle bakılmalı):**
 `RNTO`'nun hedefte aynı ad varken davranışı (sahte sunucu reddeder; CE ezebilir → bu yüzden
 gönderme öncesi ve adlandırmadan hemen önce `LIST` ile ikinci çakışma denetimi var, yine de
@@ -1906,7 +1973,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `dashboard/format.js` | Alan tanımları ve etiketler — **arayüzün tek kaynağı**. |
 | `dashboard/config-view.js` | Ayarlar ekranı. |
 | `dashboard/production-view.js` | Tezgah detayındaki vardiya adetleri paneli ve "Üretim raporu" ekranı (makine / ürün / günlük görünümü). |
-| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`) · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, iş emri bağlantısı + Mikro Karantina deposu `quarantine-depot.js`, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Teknik resim takip (`planning-drawing-tracking.js`, `drawing-tracking.js`; her ürünün resim durumu/rev no/tarihleri, EYS.LS.007, §6 "Teknik Resim Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
+| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`; yanlış teslimatta hammadde karantinası `material-quarantine.js`, §6 "Hammadde karantinası"), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`) · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, iş emri bağlantısı + Mikro Karantina deposu `quarantine-depot.js`, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Teknik resim takip (`planning-drawing-tracking.js`, `drawing-tracking.js`; her ürünün resim durumu/rev no/tarihleri, EYS.LS.007, §6 "Teknik Resim Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
 | `backend/planning/packing.js` · `dashboard/planning-packing-form.js` | Paketleme formu (EYS.FR.007): vardiya sayfası, satırlar, hava basıncı, koli içi adet öğrenme/öneri, yazdırma. Bkz. §6 "Paketleme formu". |
 | `backend/planning/packing-specs.js` · `dashboard/planning-packing-list.js` | Paketleme listesi (EYS.LS.005): koli boyutu/kasa özelliği/kat sayısı/koli içi adet/koli etiketi/koli ağırlığı referans kaydı, Paketleme ekranının "Liste" görünümü. Bkz. §6 "Paketleme listesi (EYS.LS.005)". |
 | `backend/planning/doc-folder.js` · `dashboard/planning-docs.js` | Teknik resim klasörü ve etiket klasörü (iki ayrı `DocFolder`): dosyaları ürün koduna göre ürün kartlarına bağlama, eşle penceresi. Bkz. §6 "Teknik resim klasörü ve Etiket klasörü". |
@@ -1955,6 +2022,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `/api/planning/efficiency[.csv]` · `downtime-report[.csv]` | **Verimlilik ve duruş raporları** (yalnız admin): `?from=&to=&machine=` (varsayılan bu ay); verimlilik özeti/matris/günlük satırlar/ürün/gün/tezgah ve termin riski; duruş neden dakikaları ve nedeni belirsiz; CSV `&view=gunluk\|matris\|urun\|tezgah` ve `durus\|durus-kod-gun`. |
 | `POST /api/planning/schedule/suggest` · `schedule/apply` | **Çizelgeleme önerisi** (OR-Tools CP-SAT, yalnız admin; ASLA otomatik uygulanmaz): bekleyen iş emirlerini tezgahlara önerir (gövde yok) · onaylanan atamaları işler (`{assignments: [{no, machineId}]}` → `{applied, skipped}`; başlamış iş emri sessizce atlanır). |
 | `/api/planning/material/need` · `material/consumption[.csv]` · `material/fis` (POST) · `material/fis/undo` (POST) | **Hammadde ve sarfiyat** (yalnız admin): ihtiyaç (planlanan + üretimdeki kalan adet) · gerçekleşen sarfiyat (biten iş emirleri, `?from=&to=&fis=`; CSV `&view=is-emri\|hammadde`) · Mikro sarfiyat fişi "elle girildi" işareti (`orders[], docNo?, kg?, note?`) ve geri alma. |
+| `GET/POST /api/planning/material/quarantine` · `quarantine/:id/retry-transfer` (POST) · `quarantine/:id/return` (POST) · `quarantine/:id` (DELETE) | **Hammadde karantinası** (yanlış teslimat, §6 "Hammadde karantinası"): liste (`?status=`) · "Karantinaya aktar" (`{stockCode, stockName?, kg, note?}`, 201; Merkez(1)→Karantina(5) sevk fişini hemen dener) · başarısız sevkiyatı yeniden dene · "İade et" (Karantina'daki TAM miktarı sarf/virman ÇIKAN ile düşer) · sil (Karantina'da gerçekten duran kayıt silinemez). Hepsi `hammadde:yazabilir` (silme dahil). |
 | `GET /api/planning/work-orders/:no/depot-status` · `POST .../depot/finish-transfer` · `POST .../depot/packing-transfer` | **Bitmiş ürün depo akışı** (Merkez↔Geçici, Mikro; yalnız admin, §6): durum (üretilen/aktarılan, paketlenen/sevk edilen) · iş emri bitince Merkez→Geçici (gönderilmemiş kısım) · paketlenince Geçici→Merkez (DELTA). `MIKRO_WRITE_ENABLED` olmadan 409 `mikro-write-disabled`, hiçbir şey yazılmaz. |
 | `/api/planning/work-orders/:no/cards` (POST) · `work-orders/:no/fields` (POST) | **Ürün tanıtım kartı bas** (tek adım; operatör + yönetici; gövde `{person?, gkkReportNo?, steps?}`: `steps` = yıkama/kurutma/tavlama kutuları) ve **tezgah başından iş emri alanı düzenleme** (ilk onay rapor no, ölçülen net gramaj, GKK rapor no, kullanılan hammadde, açıklama). |
 | `/api/planning/work-orders/:no/measurements` (GET/POST) · `work-orders/:no/measure-plan` (PUT) · `crates/:id/sheet` (GET) | **Ölçü kontrolü** (operatör + yönetici): plan + sütunlar, saatlik ölçüm kaydı, kartın föyü. |

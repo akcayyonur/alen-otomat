@@ -29,7 +29,7 @@
  */
 import { PlanningError } from './errors.js';
 import { foldTr } from './normalize.js';
-import { text, day } from './fields.js';
+import { text, day, number } from './fields.js';
 
 export const STATUS = Object.freeze(['acik', 'kapali']);
 
@@ -102,27 +102,12 @@ const corrRow = (r) => (r == null ? null : {
   manHours: r.man_hours == null ? null : Number(r.man_hours), note: r.note, createdAt: Number(r.created_at), createdBy: r.created_by,
 });
 
-function intRequired(value, label, { max = 1_000_000 } = {}) {
-  const n = Number(String(value ?? '').trim().replace(/\./g, '').replace(',', '.'));
-  if (!Number.isInteger(n) || n <= 0 || n > max) throw new PlanningError(`${label} 1 ile ${max} arasında bir tam sayı olmalı.`);
-  return n;
-}
-function intOptional(value, label, { max = 1_000_000 } = {}) {
-  if (value === undefined || value === null || value === '') return null;
-  const n = Number(String(value).trim().replace(/\./g, '').replace(',', '.'));
-  if (!Number.isInteger(n) || n < 0 || n > max) throw new PlanningError(`${label} 0 ile ${max} arasında bir tam sayı olmalı.`);
-  return n;
-}
-function decOptional(value, label, { max = 10_000 } = {}) {
-  if (value === undefined || value === null || value === '') return null;
-  // Turkce yazim: nokta HER ZAMAN binlik ayracidir (atilir), virgul tek ondalik ayracidir (intOptional/intRequired
-  // ile ayni kural). Once "virgul varsa nokta binlik, yoksa nokta ondalik" idi: "12.500" (on iki bin bes yuz,
-  // EYS.LS.018'den kopyalanan tipik bir tutar) virgulsuz oldugu icin ondalik sayilip 12,5 olarak kaydediliyordu
-  // (1000 kat kucuk, SESSIZCE) - koda bir review atilinca bulundu, 2026-11-06.
-  const n = Number(String(value).trim().replace(/\./g, '').replace(',', '.'));
-  if (!Number.isFinite(n) || n < 0 || n > max) throw new PlanningError(`${label} 0 ile ${max} arasında bir sayı olmalı.`);
-  return n;
-}
+// Tam sayı/ondalık alan ayrıştırması artık `fields.js`'teki PAYLAŞILAN `number()` üzerinden (2026-11-10, kod
+// incelemesinde bulundu: bu üç fonksiyon fields.js'in number()'ıyla neredeyse birebir aynıydı ve buradaki
+// "nokta binlik ayracı" düzeltmesi (2026-11-06) o paylaşılan fonksiyona hiç uygulanmamıştı — artık tek yerde).
+const intRequired = (value, label, { max = 1_000_000 } = {}) => number(value, label, { max, integer: true });
+const intOptional = (value, label, { max = 1_000_000 } = {}) => number(value, label, { max, integer: true, allowZero: true });
+const decOptional = (value, label, { max = 10_000 } = {}) => number(value, label, { max, allowZero: true });
 
 export class Quarantine {
   /** @param {{planning: import('./planning.js').Planning}} deps */
@@ -324,6 +309,7 @@ export class Quarantine {
     const description = text(input.description, 'Yapılan tashihin tanımı', 500);
     if (!description) throw new PlanningError('Yapılan tashihin tanımı gerekli.');
     const qty = intRequired(input.qty, 'Tashih edilen adet');
+    if (qty == null) throw new PlanningError('Tashih edilen adet gerekli.');
     const okQty = intOptional(input.okQty, 'O.K. adedi');
     const scrapQty = intOptional(input.scrapQty, 'Hurda adedi');
     const manHours = decOptional(input.manHours, 'Sarf edilen adam×saat');

@@ -35,6 +35,17 @@ test('previewTransfer: dogru govde kurulur, goturmez (client.call cagrilmaz)', (
   assert.deepEqual(p.assumed, ['sth_tutar'], 'evraktip/tip/cins resmi dogrulandi; hala dogrulanmamis olan yalniz tutar (maliyet)');
 });
 
+test('previewTransfer/previewProductTransfer: Turkce yazim — "." HER ZAMAN binlik ayracidir, virgulsuz de olsa (2026-11-10, kod incelemesinde bulundu: "1.500" kg once 1,5 kg olarak sessizce okunuyordu, gercek Mikro yazma yolunu besliyordu)', () => {
+  const { s } = kur();
+  const kgSatir = s.previewTransfer({ fromDepotNo: 2, toDepotNo: 4, stockCode: 'HM1', kg: '1.500' }).body.evraklar[0].satirlar[0];
+  assert.equal(kgSatir.sth_miktar, 1500, 'virgulsuz nokta binlik ayraci sayilmali, ondalik DEGIL');
+  const kgOndalik = s.previewTransfer({ fromDepotNo: 2, toDepotNo: 4, stockCode: 'HM1', kg: '1.500,25' }).body.evraklar[0].satirlar[0];
+  assert.equal(kgOndalik.sth_miktar, 1500.25);
+
+  const adetSatir = s.previewProductTransfer({ fromDepotNo: 2, toDepotNo: 1, stockCode: 'SR001.013', qty: '1.500' }).body.evraklar[0].satirlar[0];
+  assert.equal(adetSatir.sth_miktar, 1500, 'adet icin de aynen gecerli');
+});
+
 test('previewTransfer: kaynak ve hedef depo ayni olamaz', () => {
   const { s } = kur();
   assert.throws(() => s.previewTransfer({ fromDepotNo: 1, toDepotNo: 1, stockCode: 'HM1', kg: 1 }), (e) => e.code === 'same-depot');

@@ -316,6 +316,34 @@ test('liste: "uretimde-bitti" suzgeci (Hurda Girisi is emri secici) planlandi/ip
   p.close();
 });
 
+test('HTTP: GET /api/planning/work-orders?status=uretimde-bitti aktif\'e DUSMEZ (2026-11-10, kod incelemesinde bulundu: uc, Planning.listWorkOrders dogrudan cagrilarak test edilen bu degeri kendi izin listesinde unutmustu)', async () => {
+  const p = kur();
+  const planning = p;
+  const routes = createPlanningRoutes({ planning });
+  const srv = http.createServer(async (req, res) => {
+    if (!(await routes(req, res, new URL(req.url, 'http://x')))) res.writeHead(404).end();
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const j = async (yol) => { const r = await fetch(base + yol); return { status: r.status, json: await r.json().catch(() => null) }; };
+  try {
+    const planlandi = p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-01' }, { now: NOW });
+    const uretimde = p.startWorkOrder(p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-03' }, { now: NOW }).no, {}, { now: NOW });
+    const bitti = p.finishWorkOrderManually(p.createWorkOrder({ stockCode: 'SR001.013', targetQty: 100, machineId: 'CNC-01' }, { now: NOW }).no, { qty: 100 }, { now: NOW });
+
+    const aktif = (await j('/api/planning/work-orders?status=aktif')).json;
+    assert.ok(aktif.items.some((x) => x.no === planlandi.no), 'aktif planlandi\'yi icerir');
+    assert.ok(!aktif.items.some((x) => x.no === bitti.no), 'aktif bitti\'yi icermez');
+
+    const r = (await j('/api/planning/work-orders?status=uretimde-bitti')).json;
+    assert.deepEqual(r.items.map((x) => x.no).sort(), [uretimde.no, bitti.no].sort(), 'uc, listWorkOrders ile AYNI sonucu vermeli (aktif\'e sessizce dusmemeli)');
+    assert.ok(!r.items.some((x) => x.no === planlandi.no), 'planlandi uretimde-bitti\'de GORUNMEMELI');
+  } finally {
+    srv.close();
+    p.close();
+  }
+});
+
 test('ozet: tezgah listesi ve siradaki numara', () => {
   const p = kur();
   const s = p.summary();

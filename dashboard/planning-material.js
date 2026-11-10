@@ -58,10 +58,11 @@ export function materialPanelHtml(w) {
 /** @param {HTMLElement} host */
 export async function renderMaterial(host) {
   const now = new Date();
-  const st = { view: 'sarfiyat', preset: 'ay', from: PRESETS[1].range(now)[0], to: PRESETS[1].range(now)[1], fis: 'tumu', data: null, need: null, stock: null, selected: new Set(), seq: 0 };
+  const st = { view: 'sarfiyat', preset: 'ay', from: PRESETS[1].range(now)[0], to: PRESETS[1].range(now)[1], fis: 'tumu', data: null, need: null, stock: null, quarantine: null, selected: new Set(), seq: 0 };
   host.innerHTML =
     '<div class="seg pl-tabs" role="group" aria-label="Hammadde bölümleri" data-role="views">' +
-    '<button type="button" data-view="sarfiyat">Sarfiyat ve fiş</button><button type="button" data-view="ihtiyac">İhtiyaç</button><button type="button" data-view="stok">Depo stoğu</button></div>' +
+    '<button type="button" data-view="sarfiyat">Sarfiyat ve fiş</button><button type="button" data-view="ihtiyac">İhtiyaç</button><button type="button" data-view="stok">Depo stoğu</button>' +
+    '<button type="button" data-view="karantina">Karantina</button></div>' +
     '<div class="pl-bar"><button type="button" class="icon-btn" data-act="transfer-dialog">Depolar arası sevkiyat (Mikro)…</button></div>' +
     '<div data-role="body"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
@@ -200,6 +201,151 @@ export async function renderMaterial(host) {
     } catch (err) {
       $('body').innerHTML = `<p class="notice notice-sim">Depo stoğu alınamadı: ${escapeHtml(err.message)}</p>`;
     }
+  }
+
+  /* ------------------------------------------------- hammadde karantinasi (yanlis teslimat) */
+
+  const Q_STATUS_CHIP = {
+    'aktarilamadi': (r) => chip('bad', '✕', 'aktarılamadı'),
+    'karantinada': () => chip('warn', '◔', 'karantinada'),
+    'iade-edildi': () => chip('ok', '✓', 'iade edildi'),
+  };
+
+  function quarantineHtml() {
+    const rows = st.quarantine;
+    const yazabilir = canWrite('hammadde');
+    return (
+      '<p class="hint">Tedarikçi yanlış hammadde gönderdiğinde: "Karantinaya aktar…" Merkez depodaki miktarı Mikro\'da Karantina depoya (Depolar Arası Sevk Fişi) aktarır. ' +
+      'Tedarikçiye geri gönderilince "İade et…" aynı miktarı Karantina depodan sarf (stok virman) fişiyle tamamen düşer.</p>' +
+      (yazabilir ? '<div class="pl-bar"><button type="button" class="icon-btn btn-primary" data-act="q-transfer-dialog">Karantinaya aktar…</button></div>' : '') +
+      (rows.length === 0 ? '<p class="empty">Karantinaya aktarılmış hammadde yok.</p>' :
+        '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Hammadde</th><th class="num">Kilo</th><th>Not</th><th>Durum</th><th>Tarih</th><th></th></tr></thead><tbody>' +
+        rows.map((r) => {
+          const lastErr = r.status === 'aktarilamadi' ? r.transfer.error : r.return?.status === 'basarisiz' ? r.return.error : null;
+          const evrak = r.status === 'iade-edildi' && r.return?.evrakSira ? `<br><small class="hint">iade evrak ${r.return.evrakSeri ? `${escapeHtml(r.return.evrakSeri)}-` : ''}${escapeHtml(r.return.evrakSira)}</small>`
+            : r.status !== 'aktarilamadi' && r.transfer.evrakSira ? `<br><small class="hint">sevk evrak ${r.transfer.evrakSeri ? `${escapeHtml(r.transfer.evrakSeri)}-` : ''}${escapeHtml(r.transfer.evrakSira)}</small>` : '';
+          return `<tr data-id="${r.id}"><td class="mono trunc"${truncCell(r.stockName ? `${r.stockCode} · ${r.stockName}` : r.stockCode)}><b>${escapeHtml(r.stockCode)}</b>${r.stockName ? ` ${cellText(r.stockName)}` : ''}</td>` +
+            `<td class="num">${kg(r.kg)}</td><td class="trunc"${truncCell(r.note)}>${cellText(r.note)}</td>` +
+            `<td>${Q_STATUS_CHIP[r.status](r)}${lastErr ? `<br><small class="hint">${escapeHtml(lastErr)}</small>` : ''}${evrak}</td>` +
+            `<td>${escapeHtml(dateTimeText(r.createdAt))}</td>` +
+            `<td class="nowrap">${!yazabilir ? '' : (r.status === 'aktarilamadi' ? '<button type="button" class="icon-btn icon-btn-sm" data-act="q-retry">Yeniden dene…</button>' : '') +
+              (r.status === 'karantinada' ? '<button type="button" class="icon-btn icon-btn-sm" data-act="q-return">İade et…</button>' : '') +
+              (r.status !== 'karantinada' ? '<button type="button" class="icon-btn icon-btn-sm" data-act="q-delete">Sil</button>' : '')}</td></tr>`;
+        }).join('') + '</tbody></table></div>')
+    );
+  }
+
+  async function loadQuarantine() {
+    try {
+      const r = await api('/api/planning/material/quarantine');
+      st.quarantine = r.items;
+      if (st.view === 'karantina') $('body').innerHTML = quarantineHtml();
+    } catch (err) {
+      $('body').innerHTML = `<p class="notice notice-sim">Karantina listesi alınamadı: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  /** "Karantinaya aktar…" penceresi: hammadde ara (Mikro'dan canlı) + kilo + not, "Önizle" ile Depolar Arası Sevk
+   * Fişi'nin tam gövdesi gösterilir (gerçek gönderme `MIKRO_WRITE_ENABLED` olmadan KAPALI), "Gönder" hem kaydı
+   * oluşturur hem Mikro'ya hemen gönderir. */
+  function openMaterialQuarantineDialog() {
+    const m = openModal({ title: 'Karantinaya aktar (Mikro)', wide: true });
+    const dst = { material: null };
+    m.body.innerHTML =
+      '<form autocomplete="off"><div class="fld-grid">' +
+      '<label class="fld pl-wide"><span>Hammadde (Mikro stok kodu)</span><input data-role="matQ" placeholder="Kod ya da ad ara…" autocomplete="off"></label>' +
+      '<div class="pl-pick-result" data-role="matResult" hidden></div><div data-role="matList"></div>' +
+      '<label class="fld"><span>Kilo</span><input data-role="kg" inputmode="decimal"></label>' +
+      '<label class="fld pl-wide"><span>Not (isteğe bağlı, ör. tedarikçi/sipariş)</span><input data-role="note" maxlength="300"></label>' +
+      '</div><p class="notice notice-sim" data-role="err" hidden></p>' +
+      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="close">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="preview">Önizle</button></div>' +
+      '<div data-role="preview"></div></form>';
+
+    function selectMaterial(mat) {
+      dst.material = mat;
+      const res = m.body.querySelector('[data-role="matResult"]');
+      res.hidden = false;
+      res.innerHTML = `${chip('ok', '✓', 'seçildi')} <span class="mono">${escapeHtml(mat.stockCode)}</span> · ${escapeHtml(mat.name)} <button type="button" class="icon-btn icon-btn-sm" data-act="mat-clear">Değiştir</button>`;
+      m.body.querySelector('[data-role="matList"]').innerHTML = '';
+      m.body.querySelector('[data-role="matQ"]').value = '';
+    }
+
+    const searchMaterials = debounce(async (q) => {
+      const list = m.body.querySelector('[data-role="matList"]');
+      if (!list) return;
+      if (q.trim() === '') { list.innerHTML = ''; return; }
+      list.innerHTML = '<p class="empty">Aranıyor…</p>';
+      try {
+        const r = await api(`/api/planning/material/mikro/materials?${new URLSearchParams({ q, limit: 20 })}`);
+        if (!m.body.contains(list)) return;
+        if (r.items.length === 0) { list.innerHTML = '<p class="empty">Eşleşen hammadde yok.</p>'; return; }
+        list.dataset.cache = JSON.stringify(r.items);
+        list.innerHTML = '<div class="table-wrap"><table class="tbl tbl-pl"><tbody>' +
+          r.items.map((x) => `<tr class="pl-row" data-act="mat-pick" data-code="${escapeHtml(x.stockCode)}" tabindex="0"><td class="mono">${escapeHtml(x.stockCode)}</td><td class="trunc"${truncCell(x.name)}>${cellText(x.name)}</td><td class="num">${cellText(x.unit)}</td></tr>`).join('') +
+          '</tbody></table></div>';
+      } catch (err) {
+        list.innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;
+      }
+    }, 300);
+
+    function currentInput() {
+      return { stockCode: dst.material?.stockCode, stockName: dst.material?.name, kg: parseInput(m.body.querySelector('[data-role="kg"]').value), note: m.body.querySelector('[data-role="note"]').value };
+    }
+
+    function previewHtml(p) {
+      return (
+        (p.writeEnabled
+          ? '<p class="notice">Mikro\'ya gerçek yazma AÇIK: "Gönder" gerçekten fiş oluşturur ve kalıcı bir karantina kaydı açar.</p>'
+          : '<p class="notice notice-sim">Mikro\'ya gerçek yazma şu an KAPALI (inceleme/onay aşaması): "Gönder" yine de kaydı oluşturur ama Mikro\'ya hiçbir şey gitmez, kayıt "aktarılamadı" görünür ve sonra yeniden denenebilir.</p>') +
+        `<pre class="code-view">${escapeHtml(JSON.stringify(p.body, null, 2))}</pre>` +
+        '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="send">Gönder</button></div>'
+      );
+    }
+
+    m.body.addEventListener('input', (ev) => { if (ev.target.dataset.role === 'matQ') searchMaterials(ev.target.value); });
+    m.body.addEventListener('click', async (ev) => {
+      if (ev.target.closest('[data-act="mat-pick"]')) {
+        const row = ev.target.closest('[data-act="mat-pick"]');
+        const items = JSON.parse(m.body.querySelector('[data-role="matList"]').dataset.cache ?? '[]');
+        const found = items.find((x) => x.stockCode === row.dataset.code);
+        if (found) selectMaterial(found);
+        return;
+      }
+      if (ev.target.closest('[data-act="mat-clear"]')) {
+        dst.material = null;
+        const res = m.body.querySelector('[data-role="matResult"]');
+        res.hidden = true;
+        res.innerHTML = '';
+        return;
+      }
+      const err = m.body.querySelector('[data-role="err"]');
+      if (ev.target.closest('[data-act="preview"]')) {
+        err.hidden = true;
+        if (!dst.material) { err.textContent = 'Önce hammadde seçin (arama sonuçlarından tıklayın).'; err.hidden = false; return; }
+        try {
+          // Merkez(1)->Karantina(5): backend/planning/product-depot.js MERKEZ_DEPO_NO / quarantine-depot.js
+          // KARANTINA_DEPO_NO ile AYNI, sabit depo numaraları (gerçek `DEPOLAR` tablosundan, CLAUDE.md'de belgeli).
+          // `POST /api/planning/material/quarantine` zaten bunları sunucuda sabit kullanır; bu yalnız önizleme.
+          const p = await post('/api/planning/material/mikro/transfer-preview', { fromDepotNo: 1, toDepotNo: 5, ...currentInput() });
+          m.body.querySelector('[data-role="preview"]').innerHTML = previewHtml(p);
+        } catch (e) { err.textContent = e.message; err.hidden = false; }
+        return;
+      }
+      const sendBtn = ev.target.closest('[data-act="send"]');
+      if (sendBtn) {
+        err.hidden = true;
+        sendBtn.disabled = true;
+        try {
+          await post('/api/planning/material/quarantine', currentInput());
+          m.close();
+          await loadQuarantine();
+        } catch (e) {
+          m.body.querySelector('[data-role="preview"]').innerHTML += `<p class="notice notice-sim">${escapeHtml(e.message)} <small class="hint">Kayıt yine de oluşturuldu, "Karantina" listesinde "Yeniden dene…" ile tekrar denenebilir.</small></p>`;
+          sendBtn.disabled = false;
+          await loadQuarantine();
+        }
+      }
+    });
   }
 
   /* --------------------------------------------------------------- fiş */
@@ -386,6 +532,7 @@ export async function renderMaterial(host) {
     $('body').innerHTML = '<p class="empty">Yükleniyor…</p>';
     if (view === 'sarfiyat') await loadConsumption();
     else if (view === 'stok') await loadStock();
+    else if (view === 'karantina') await loadQuarantine();
     else await loadNeed();
   }
 
@@ -406,7 +553,8 @@ export async function renderMaterial(host) {
     if (act === 'transfer-dialog') openStockMoveDialog('transfer', {});
     else if (act === 'virman-dialog') {
       const btn = ev.target.closest('[data-act="virman-dialog"]');
-      openStockMoveDialog('virman', { stockQuery: btn.dataset.material, kg: Number(btn.dataset.kg) || undefined, note: no ? `İş emri ${no} sarfiyatı` : '' });
+      const kgAttr = btn.dataset.kg;
+      openStockMoveDialog('virman', { stockQuery: btn.dataset.material, kg: kgAttr === '' || kgAttr == null ? undefined : Number(kgAttr), note: no ? `İş emri ${no} sarfiyatı` : '' });
     } else if (act === 'mark-one') openMarkDialog([no]);
     else if (act === 'mark') openMarkDialog([...st.selected]);
     else if (act === 'select-pending') { st.selected = new Set(st.data.rows.filter((r) => r.fis.status !== 'girildi').map((r) => r.no)); $('body').innerHTML = consumptionHtml(); }
@@ -414,6 +562,19 @@ export async function renderMaterial(host) {
     else if (act === 'undo') {
       if (!window.confirm(`${no} için "Mikro fişi girildi" işareti geri alınsın mı? (Mikro'daki fişi silmez; yalnız bu ekrandaki işareti kaldırır.)`)) return;
       try { await post('/api/planning/material/fis/undo', { orders: [no] }); await loadConsumption(); } catch (e) { window.alert(e.message); }
+    } else if (act === 'q-transfer-dialog') openMaterialQuarantineDialog();
+    else if (act === 'q-retry' || act === 'q-return' || act === 'q-delete') {
+      const id = ev.target.closest('tr[data-id]')?.dataset.id;
+      if (!id) return;
+      if (act === 'q-retry') {
+        try { await post(`/api/planning/material/quarantine/${id}/retry-transfer`, {}); await loadQuarantine(); } catch (e) { window.alert(e.message); }
+      } else if (act === 'q-return') {
+        if (!window.confirm('Bu hammadde Karantina depodan sarf (stok virman, çıkan) fişiyle TAMAMEN düşülecek — Mikro\'nun defterinden çıkar, GERİ ALINAMAZ. Tedarikçiye gerçekten iade edildiyse onaylayın.')) return;
+        try { await post(`/api/planning/material/quarantine/${id}/return`, {}); await loadQuarantine(); } catch (e) { window.alert(e.message); }
+      } else {
+        if (!window.confirm('Bu kayıt silinsin mi? (Yalnız bu listedeki kaydı siler; Mikro\'da gerçekleşmiş bir hareket varsa onu DEĞİŞTİRMEZ.)')) return;
+        try { await api(`/api/planning/material/quarantine/${id}`, { method: 'DELETE' }); await loadQuarantine(); } catch (e) { window.alert(e.message); }
+      }
     }
   };
   host.onchange = async (ev) => {

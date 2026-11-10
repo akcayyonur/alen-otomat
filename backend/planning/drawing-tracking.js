@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS drawing_tracking (
 );
 `;
 
+/** LIKE ozel karakterlerini kacirir (kullanici metni desen olmasin) — `planning-db.js`'teki ayni adli
+ * yardimcinin AYNI tek satiri (orada private, buraya import edilemiyor; her alt modulun kendi kendine yeten
+ * olma ilkesiyle ayni, bkz. CLAUDE.md §7). */
+const likeEscape = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 const DEFAULTS = Object.freeze({
   musteri: null, resimNo: null, kayitTarihi: null, revNo: 0, yayinTarihi: null, revTarihi: null,
   tutuldugu: null, durumu: null, revizyonNedeni: null,
@@ -112,8 +117,35 @@ export class DrawingTracking {
     };
   }
 
-  /** @param {{q?: string, limit?: number, offset?: number}} [f] */
-  list({ q = '', limit = 200, offset = 0 } = {}) {
+  /** EYS.LS.007 kayıtlarında görülen DISTINCT müşteri adları (filtre açılır kutusu için), alfabetik. Yalnız
+   * BU EKRANDAN gelen "musteri" alanı (Excel'deki müşteri ADI) — `products.customer_code` (müşteri ürün KODU)
+   * değil, o ayrı bir alan ve her zaman dolu değil (bkz. dosya başı). */
+  customers() {
+    return this.db.prepare("SELECT DISTINCT musteri FROM drawing_tracking WHERE musteri IS NOT NULL AND musteri != '' ORDER BY musteri COLLATE NOCASE").all().map((r) => r.musteri);
+  }
+
+  /** @param {{q?: string, customer?: string, limit?: number, offset?: number}} [f] `customer`: TAM eşleşme
+   * (açılır kutudan seçilir, `customers()`'ın döndürdüğü değerlerden biri); verilirse yalnız o müşterinin
+   * EYS.LS.007 kaydı olan ürünler listelenir (kaydı hiç olmayan ürün hiçbir müşteriye ait sayılmaz). */
+  list({ q = '', customer = '', limit = 200, offset = 0 } = {}) {
+    if (customer) {
+      const key = foldTr(q);
+      const conds = ['d.musteri = ?'];
+      const args = [customer];
+      if (key !== '') { conds.push("p.search_key LIKE ? ESCAPE '\\'"); args.push(`%${likeEscape(key)}%`); }
+      const where = `WHERE ${conds.join(' AND ')}`;
+      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM products p JOIN drawing_tracking d ON d.code_key = p.code_key ${where}`).get(...args).n);
+      const rows = this.db.prepare(
+        `SELECT p.code_key, p.stock_code, p.name, p.customer_code FROM products p JOIN drawing_tracking d ON d.code_key = p.code_key ${where} ORDER BY p.stock_code COLLATE NOCASE LIMIT ? OFFSET ?`,
+      ).all(...args, limit, offset);
+      const codeKeys = rows.map((r) => r.code_key);
+      const counts = this.planning.quality.db.productFileCounts(codeKeys);
+      const items = rows.map((r) => ({
+        codeKey: r.code_key, stockCode: r.stock_code, name: r.name, customerCode: r.customer_code,
+        drawingCount: counts.get(r.code_key).cizim, ...(this.#raw(r.code_key) ?? DEFAULTS),
+      }));
+      return { total, items };
+    }
     const r = this.planning.db.listProducts({ q, limit, offset });
     const codeKeys = r.items.map((p) => p.codeKey);
     const counts = this.planning.quality.db.productFileCounts(codeKeys);

@@ -125,6 +125,31 @@ test('list: urun listesiyle ayni arama; izlenmeyen urunler varsayilan degerlerle
   p.close();
 });
 
+test('customers: DISTINCT musteri adlarini alfabetik doner; hic kaydi olmayan urun katilmaz', () => {
+  const p = kur();
+  p.drawingTracking.update('SR001.013', { musteri: 'AYVAZ' }, { now: at(10) });
+  p.drawingTracking.update('SR002.014', { musteri: 'Berg Metal' }, { now: at(10) });
+  p.createProduct({ stockCode: 'SR003.015', name: 'ÜÇÜNCÜ ÜRÜN' }, { by: 'test' }); // hic teknik resim takip kaydi yok
+  assert.deepEqual(p.drawingTracking.customers(), ['AYVAZ', 'Berg Metal']);
+  p.close();
+});
+
+test('list: customer ile filtrelenince yalnız o müşterinin kaydı olan ürünler gelir; q ile BİRLİKTE de çalışır', () => {
+  const p = kur();
+  p.drawingTracking.update('SR001.013', { musteri: 'AYVAZ' }, { now: at(10) });
+  p.drawingTracking.update('SR002.014', { musteri: 'Berg Metal' }, { now: at(10) });
+  const r = p.drawingTracking.list({ customer: 'AYVAZ' });
+  assert.equal(r.total, 1);
+  assert.equal(r.items[0].stockCode, 'SR001.013');
+  assert.equal(p.drawingTracking.list({ customer: 'Berg Metal' }).items[0].stockCode, 'SR002.014');
+  assert.equal(p.drawingTracking.list({ customer: 'Olmayan Müşteri' }).total, 0);
+  // q ile birlikte: ayni musteride iki urun olsa bile q eslesen tek urune daraltir
+  p.drawingTracking.update('SR002.014', { musteri: 'AYVAZ' }, { now: at(11) });
+  assert.equal(p.drawingTracking.list({ customer: 'AYVAZ' }).total, 2);
+  assert.equal(p.drawingTracking.list({ customer: 'AYVAZ', q: 'SR001' }).total, 1);
+  p.close();
+});
+
 /* ====================================================================================== Excel'den iceri aktarma (EYS.LS.007) */
 
 const DRAWING_HEADERS = [
@@ -238,6 +263,10 @@ test('HTTP: listele, duzenle, Excel iceri aktar', async () => {
     const duzenle = await j('/api/planning/drawing-tracking/SR001.013', 'PUT', { musteri: 'AYVAZ', resimNo: 'R-1' });
     assert.equal(duzenle.status, 200);
     assert.equal(duzenle.json.musteri, 'AYVAZ');
+
+    assert.deepEqual((await j('/api/planning/drawing-tracking/customers')).json.items, ['AYVAZ']);
+    const musteriyeGore = await j('/api/planning/drawing-tracking?customer=AYVAZ');
+    assert.deepEqual(musteriyeGore.json.items.map((x) => x.stockCode), ['SR001.013']);
 
     assert.equal((await j('/api/planning/drawing-tracking/OLMAYAN', 'PUT', { musteri: 'x' })).status, 404);
 

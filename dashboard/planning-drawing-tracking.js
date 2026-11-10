@@ -6,6 +6,11 @@
  * Ürün adı/stok kodu/müşteri kodu `products`tan gelir (burada tekrar edilmez); rev no normalde SİSTEM
  * tarafından otomatik artırılır (bir ürüne yeni/değişen teknik resim eklendiğinde, bkz. `doc-folder.js`);
  * burada elle de düzeltilebilir (yanlış geldiyse). "Durumu" serbest metindir, bir listeye kısıtlanmaz.
+ *
+ * Müşteriye göre filtre (2026-11-10, kullanıcı isteği): açılır kutu, EYS.LS.007 kaydındaki "Müşteri" (Excel'deki
+ * müşteri ADI — `products.customerCode`, yani müşteri ürün KODU, DEĞİL) alanının gördüğü DISTINCT değerlerden
+ * gelir; yalnız o müşterinin EYS.LS.007 kaydı olan ürünleri listeler (hiç izlenmeyen ürün hiçbir müşteriye ait
+ * sayılmaz). Üstteki serbest arama kutusuyla (stok kodu/ad/müşteri kodu) BİRLİKTE de çalışır.
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
@@ -18,18 +23,32 @@ const PAGE = 100;
 /** @param {HTMLElement} host */
 export function renderDrawingTracking(host) {
   const canEdit = canWrite('teknikresim');
-  const st = { q: '', items: [], total: 0, seq: 0 };
+  const st = { q: '', customer: '', customers: [], items: [], total: 0, seq: 0 };
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="Stok kodu, ürün adı ya da müşteri kodu ara…" aria-label="Ürün ara">' +
+    '<select data-role="customer" aria-label="Müşteriye göre filtrele"><option value="">Tüm müşteriler</option></select>' +
     (isAdminRole() ? '<button type="button" class="icon-btn" data-act="import">Excel\'den içeri aktar…</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>' +
     '<p class="pl-more" data-role="more" hidden><button type="button" class="icon-btn" data-act="more">Daha fazla göster</button></p>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
+  /** Açılır kutu, EYS.LS.007 kaydındaki "Müşteri" (Excel'deki müşteri ADI — `products.customerCode` değil,
+   * bkz. backend/planning/drawing-tracking.js dosya başı) alanının gördüğü DISTINCT değerlerden gelir. */
+  async function loadCustomers() {
+    try {
+      const r = await api('/api/planning/drawing-tracking/customers');
+      st.customers = r.items;
+      const sel = $('customer');
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Tüm müşteriler</option>' + st.customers.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      sel.value = cur;
+    } catch { /* filtre acilir kutusu olmadan da ekran calisir, sessizce gec */ }
+  }
+
   function draw() {
     $('count').textContent = st.total === 0
-      ? (st.q ? 'Eşleşen ürün yok.' : 'Henüz ürün kartı yok.')
+      ? (st.q || st.customer ? 'Eşleşen ürün yok.' : 'Henüz ürün kartı yok.')
       : `${fmtNum(st.total)} ürün${st.items.length < st.total ? ` (ilk ${fmtNum(st.items.length)} gösteriliyor)` : ''}`;
     $('list').innerHTML = st.items.length === 0 ? '' :
       '<table class="tbl tbl-pl"><thead><tr><th>Alen kodu</th><th>Müşteri kodu</th><th>Ürün adı</th><th>Müşteri</th>' +
@@ -49,7 +68,7 @@ export function renderDrawingTracking(host) {
     const seq = ++st.seq;
     const offset = reset ? 0 : st.items.length;
     try {
-      const r = await api(`/api/planning/drawing-tracking?${new URLSearchParams({ q: st.q, limit: PAGE, offset })}`);
+      const r = await api(`/api/planning/drawing-tracking?${new URLSearchParams({ q: st.q, customer: st.customer, limit: PAGE, offset })}`);
       if (seq !== st.seq) return;
       st.total = r.total;
       st.items = reset ? r.items : [...st.items, ...r.items];
@@ -72,6 +91,7 @@ export function renderDrawingTracking(host) {
 
   const search = debounce((value) => { st.q = value.trim(); load(true); }, 250);
   host.oninput = (ev) => { if (ev.target.dataset?.role === 'q') search(ev.target.value); };
+  host.onchange = (ev) => { if (ev.target.dataset?.role === 'customer') { st.customer = ev.target.value; load(true); } };
   host.onclick = (ev) => {
     if (ev.target.closest('[data-act="import"]')) { openImportDialog(() => load(true)); return; }
     if (ev.target.closest('[data-act="more"]')) { load(false); return; }
@@ -85,6 +105,7 @@ export function renderDrawingTracking(host) {
     const row = ev.target.closest?.('.pl-row');
     if (row) openDrawing(row.dataset.code);
   };
+  loadCustomers();
   load(true);
 }
 

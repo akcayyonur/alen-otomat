@@ -1763,6 +1763,17 @@ dosya satırını SİLİP yenisini EKLEDİĞİ için geçmiş iz bırakmadan kay
   listesi yeniden kullanılır, YENİ bir çoklu-dosya ucu YAZILMADI). Ayrı bir **"Düzenle"** düğmesi (satırda zaten
   yüklü veriyle açılır, yeniden sorgulanmaz) Excel'in 9 alanını elle düzeltir — rev no da dahil (yanlış geldiyse).
   Admin-only "Excel'den içeri aktar…" (Ölçüm Cihazları Takip'teki pencereyle aynı desen).
+- **Müşteriye göre filtreleme (2026-11-10, kullanıcı isteği):** serbest arama kutusunun yanına açılır kutu —
+  `drawingTracking.customers()` EYS.LS.007 kaydındaki "Müşteri" (Excel'deki müşteri ADI, `products.customerCode`
+  — müşteri ürün KODU — İLE KARIŞTIRILMASIN) alanının gördüğü DISTINCT değerleri alfabetik döner. Seçilince
+  `list()` artık `products` tablosundan DEĞİL, `products JOIN drawing_tracking WHERE musteri = ?` (TAM eşleşme)
+  üzerinden gider — yalnız o müşterinin EYS.LS.007 kaydı olan ürünler gelir (hiç izlenmeyen ürün hiçbir müşteriye
+  ait sayılmaz); serbest arama kutusuyla (`q`) BİRLİKTE de çalışır (ikisi AND'lenir). Uç: `GET
+  /api/planning/drawing-tracking/customers` (`teknikresim`/okuma) · `GET .../drawing-tracking?customer=`.
+  Testi `drawing-tracking.test.js`'e 2 yeni test (customers() listesi, list()'in customer+q kombinasyonu) +
+  HTTP testine eklendi. **Tarayıcıda gerçek sunucuya (AUTH_DISABLED) karşı gerçek 519 ürün/343 EYS.LS.007
+  kaydıyla uçtan uca denendi:** açılır kutu gerçek müşteri adlarını (AYVAZ, BERG METAL, KUZUFLEX…) doğru
+  listeledi, "KUZUFLEX" seçilince liste 519'dan gerçek 3 ürüne daraldı (hepsi doğru müşteriyle).
 - **Dosyalar:** `backend/planning/drawing-tracking.js` (`DrawingTracking` sınıfı, tablo `drawing_tracking`,
   `planlama.db`'de kendi `CREATE TABLE IF NOT EXISTS`'i ile — diğer alt modüllerle aynı, hangi modülden önce
   ilklenirse ilklensin bağımsız çalışır), `planning.js` (`this.drawingTracking`), `doc-folder.js` (`match()`'teki
@@ -1774,8 +1785,9 @@ dosya satırını SİLİP yenisini EKLEDİĞİ için geçmiş iz bırakmadan kay
   `SCREEN_ROUTES`'a GET `/api/planning/drawing-tracking` ve PUT `.../:kod` (okuma/yazma); **Excel içeri aktarma
   (`POST .../import`) kayıtsız bırakıldı** → varsayılan reddet, admin'e düşer (diğer Excel-içeri-alma
   özellikleriyle aynı desen).
-- **Uçlar:** `GET /api/planning/drawing-tracking?q=&limit=&offset=` (liste) · `PUT .../:kod` (düzenle; satır yoksa
-  oluşturulur) · `POST .../import` (gövde = ham `.xlsx`, admin).
+- **Uçlar:** `GET /api/planning/drawing-tracking?q=&customer=&limit=&offset=` (liste; `customer` TAM eşleşme,
+  müşteriye göre filtre) · `GET .../customers` (DISTINCT müşteri adları, açılır kutu için) · `PUT .../:kod`
+  (düzenle; satır yoksa oluşturulur) · `POST .../import` (gövde = ham `.xlsx`, admin).
 - **Doğrulama:** `backend/planning/drawing-tracking.test.js` (12 test: `recordDrawingChange`'in üç senaryosu —
   hiç izlenmeyen üründe ilk eşleme/revizyon, Excel baseline'ı koruma, gerçek revizyonda +1 — `update` kısmi
   alan değişimi, `list`, Excel içeri aktarma — gerçekçi dosya, ürün kartı olmayan kod, yinelenen kod de-dup,
@@ -2033,7 +2045,7 @@ gerçek torna ile uçtan uca denenmedi (yalnızca FTP komut dizisi torna 8'de el
 | `/api/planning/quarantine` (GET/POST) · `quarantine/:id` (GET/PUT/DELETE) · `quarantine/:id/exit\|reopen\|corrections` (POST) · `quarantine/corrections/:id` (DELETE) | **Hurda girişi** (karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, `products`'a bağlanmaz, §6 "Hurda Girişi"): liste (`?q=&status=`), yeni giriş kaydı (`wo_no?` ile iş emrine bağlanabilir), ayrıntı (tashih geçmişi + toplamlar + `depot`: Mikro Karantina deposu özeti) / düzenle, sil (admin), çıkış yap (`{exitReason, exitedOn?, exitedBy}`), geri al, tashih ekle (`{doneOn?, operator, description, qty, okQty?, scrapQty?, manHours?, note?}` — bağlıysa Mikro'ya otomatik yansır, §6), tashih sil (admin). `hurda` ekranı: GET okuma, POST/PUT/exit/reopen/corrections yazma. |
 | `GET /api/planning/quarantine/hurda-deposu?from=&to=` · `POST quarantine/:id/depot/retry-giris` | **Karantina deposu** (Mikro dep_no=5, §6 "Karantina deposu"): Karantina→Hurda(3) başarılı transferlerin dökümü · başarısız Karantina GİRİŞ'ini elle yeniden dener. `hurda` ekranı: GET okuma, POST yazma. |
 | `/api/planning/devices` (GET/POST) · `devices/import` (POST) · `devices/:id` (GET/PUT/DELETE) | **Ölçüm cihazları takip** (EYS.LS.006, `products`'a bağlanmaz, §6 "Ölçüm Cihazları Takip"): liste (`?q=&active=&usable=&calibration=`, kalibrasyon durumu hesaplanır), yeni cihaz ekle, Excel'den ilk kurulum aktarımı (gövde = ham `.xlsx`, admin), ayrıntı/düzenle, sil (admin). `olcucihazlari` ekranı: GET okuma, POST/PUT yazma; `import` ve `DELETE` kayıtsız → admin. |
-| `GET /api/planning/drawing-tracking?q=&limit=&offset=` · `PUT drawing-tracking/:kod` · `POST drawing-tracking/import` | **Teknik resim takip** (EYS.LS.007, `products`'a bağlı okur ama ayrı tabloda tutar, §6 "Teknik Resim Takip"): sistemdeki her ürünün resim durumu (var/yok, dosya sayısı)/rev no (sistem otomatik artırır)/tarihleri, liste (ürün listesiyle aynı arama), düzenle (satır yoksa oluşturulur), Excel'den ilk/tekrar aktarım (gövde = ham `.xlsx`, admin; Alen koduyla eşler, yinelenen kod en yeniyi baz alır). `teknikresim` ekranı: GET okuma, PUT yazma; `import` kayıtsız → admin. |
+| `GET /api/planning/drawing-tracking?q=&customer=&limit=&offset=` · `GET drawing-tracking/customers` · `PUT drawing-tracking/:kod` · `POST drawing-tracking/import` | **Teknik resim takip** (EYS.LS.007, `products`'a bağlı okur ama ayrı tabloda tutar, §6 "Teknik Resim Takip"): sistemdeki her ürünün resim durumu (var/yok, dosya sayısı)/rev no (sistem otomatik artırır)/tarihleri, liste (ürün listesiyle aynı arama + `customer` ile müşteriye göre TAM eşleşme filtresi), DISTINCT müşteri adları (açılır kutu), düzenle (satır yoksa oluşturulur), Excel'den ilk/tekrar aktarım (gövde = ham `.xlsx`, admin; Alen koduyla eşler, yinelenen kod en yeniyi baz alır). `teknikresim` ekranı: GET okuma, PUT yazma; `import` kayıtsız → admin. |
 | `/api/planning/work-orders/:no/print.pdf` (GET) · `work-orders/:no/drawings.pdf` (GET) · `work-orders/:no/drawings?name=` (POST) · `work-orders/:no/drawings/:id` (DELETE) | **İş emri formu + teknik resimler**: `print.pdf` = form (ön sayfa) + resimler (arka sayfalar) TEK PDF (`application/pdf`, izleyici ve operatör dahil herkes; ekranda gösterilen ve basılan dosya) · `drawings.pdf` = yalnız birleşik resimler · yükle (gövde = ham PDF, yönetici) · kaldır (yönetici). |
 | `/api/planning/measure-reports` · `work-orders/:no/measure-report` · `products/:kod/measure-plan` (PUT) | **Ölçü raporları** (okuma herkes): ölçümü olan iş emirleri ve bir iş emrinin tüm ölçümleri · ürün kartının kalıcı ölçü planı (yönetici). |
 | `/api/planning/work-orders` (+ `/next`, `/sequence`, `/:no`, `/:no/cancel`, `/:no/start`, `/:no/finish`, `/:no/reopen`) | **İş emri** (yalnız admin): liste (`?q=&status=&machine=`), oluştur (POST: `lineId` ya da `stockCode`, `targetQty`, `machineId`, …), sıradaki numara, numara tabanı (PUT), ayrıntı + geçmiş + gerçekleşen üretim (`progress`), düzenle (PUT), iptal (POST, `reason`), **üretime başlat** (`machineId?, startAt?, person?, fields?`), **bitir** (`endAt?, person?`; sonuç dondurulur), **üretime geri al**. |

@@ -122,6 +122,7 @@ export const SCREEN_ROUTES = Object.freeze([
 
   // teknik resim takip (EYS.LS.007): her urunun resim durumu/rev no; Excel'den ilk aktarim kayitsiz -> admin
   [['GET'], /^\/api\/planning\/drawing-tracking$/, 'teknikresim', 'read'],
+  [['GET'], /^\/api\/planning\/drawing-tracking\/customers$/, 'teknikresim', 'read'],
   [['PUT'], /^\/api\/planning\/drawing-tracking\/[^/]+$/, 'teknikresim', 'write'],
 
   [['GET'], /^\/api\/planning\/orders$/, 'siparisler', 'read'],

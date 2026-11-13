@@ -5,7 +5,7 @@
  */
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
-import { cellText, fmtNum, dateText, debounce, chip, truncCell } from './planning-common.js';
+import { DASH, cellText, fmtNum, dateText, debounce, chip, truncCell } from './planning-common.js';
 import { openNewWorkOrder } from './planning-workorders.js';
 
 /** @param {HTMLElement} host */
@@ -19,6 +19,22 @@ export function renderOrders(host) {
     '<div data-role="detail"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
   const groupKey = (o) => `${o.customerKey}\u0001${o.custOrderKey}\u0001${o.docKey}`;
+
+  /* Arama kutusu ürün koduyla/adıyla da eşleşir (backend code_key/item_key, §6); hangi siparişin neden
+     listelendiği belli olsun diye (kullanıcı isteği) eşleşen ürünün kodu/adı satır içinde VURGULANIR. */
+  const searchRe = () => {
+    const q = st.q.trim();
+    return q === '' ? null : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  };
+  /** `cellText` ile AYNI bos/null davranışı (tire), doluysa eşleşen kısmı `<mark>` ile vurgular. */
+  const hlCell = (text) => {
+    if (text === null || text === undefined || text === '') return DASH;
+    const s = String(text);
+    const re = searchRe();
+    const m = re ? re.exec(s) : null;
+    if (!m) return escapeHtml(s);
+    return `${escapeHtml(s.slice(0, m.index))}<mark>${escapeHtml(m[0])}</mark>${escapeHtml(s.slice(m.index + m[0].length))}`;
+  };
 
   function drawList() {
     $('count').textContent = st.orders.length === 0
@@ -61,13 +77,16 @@ export function renderOrders(host) {
         `<h4 class="sub">${escapeHtml(order.customer || '—')} · müşteri sip. no ${escapeHtml(order.custOrderNo || '—')} · evrak ${escapeHtml(order.docNo || '—')} — ${lines.length} satır</h4>` +
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Ürün kodu</th><th>Ürün adı</th><th class="num">Sipariş</th><th class="num">Sevk edilen</th>' +
         '<th class="num">Kalan</th><th>Termin</th><th>Hammadde</th><th class="num">İş emrinde</th><th>Ürün kartı</th><th></th></tr></thead><tbody>' +
-        lines.map((l) =>
-          `<tr><td class="mono"><b>${escapeHtml(l.stockCode)}</b></td><td class="trunc"${truncCell(l.itemName)}>${cellText(l.itemName)}</td><td class="num">${fmtNum(l.qty)}</td>` +
+        lines.map((l) => {
+          const re = searchRe();
+          const isHit = re !== null && (re.test(l.stockCode ?? '') || re.test(l.itemName ?? ''));
+          return `<tr${isHit ? ' class="pl-hit"' : ''}><td class="mono"><b>${hlCell(l.stockCode)}</b></td><td class="trunc"${truncCell(l.itemName)}>${hlCell(l.itemName)}</td><td class="num">${fmtNum(l.qty)}</td>` +
           `<td class="num">${fmtNum(l.shipped)}</td><td class="num">${l.remaining > 0 ? `<b>${fmtNum(l.remaining)}</b>` : fmtNum(l.remaining)}</td>` +
           `<td>${dateText(l.dueDate)}</td><td class="mono trunc"${truncCell(l.material)}>${cellText(l.material)}</td>` +
           `<td class="num">${l.planned > 0 ? fmtNum(l.planned) : '<span class="is-null">0</span>'}</td>` +
           `<td>${l.hasProduct ? chip('ok', '✓', 'var') : chip('none', '·', 'yok (ürün değil ya da kart açılmamış)')}</td>` +
-          `<td class="nowrap">${l.hasProduct ? `<button type="button" class="icon-btn icon-btn-sm" data-act="wo" data-line="${l.id}">İş emri aç</button>` : ''}</td></tr>`).join('') +
+          `<td class="nowrap">${l.hasProduct ? `<button type="button" class="icon-btn icon-btn-sm" data-act="wo" data-line="${l.id}">İş emri aç</button>` : ''}</td></tr>`;
+        }).join('') +
         '</tbody></table></div>';
     } catch (err) {
       box.innerHTML = `<p class="notice notice-sim">Satırlar alınamadı: ${escapeHtml(err.message)}</p>`;

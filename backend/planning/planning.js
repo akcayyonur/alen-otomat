@@ -30,6 +30,7 @@ import { QuarantineDepot } from './quarantine-depot.js';
 import { MaterialQuarantine } from './material-quarantine.js';
 import { MeasuringDevices } from './measuring-devices.js';
 import { DrawingTracking } from './drawing-tracking.js';
+import { Maintenance } from './maintenance.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -98,6 +99,8 @@ export class Planning {
     this.quarantine = new Quarantine({ planning: this });
     /** Ölçüm cihazları takip (EYS.LS.006): mastar/kumpas/mihengir vb. envanteri + kalibrasyon zamanlaması. `products`/ölçü planıyla BAĞLANMAZ. */
     this.measuringDevices = new MeasuringDevices({ planning: this });
+    /** Bakım (EYS.FR.016 + Bakım Sicil Kartları, maintenance.js): makine tipi -> bakım kalemi (periyot ADMIN tarafından ayarlanır) -> makine (asset) başına tik/log geçmişi. `products` ile BAĞLANMAZ. */
+    this.maintenance = new Maintenance({ planning: this });
     /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
     /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */

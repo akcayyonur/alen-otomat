@@ -15,14 +15,14 @@
 import { escapeHtml } from './format.js';
 import { post, folderLabel } from './lib-common.js';
 
-const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
+const NAME_RE = /^[A-Za-z0-9_.() -]{1,40}$/;
 
 /** Sunucudaki kuralin aynasi (sunucu yine kendisi denetler). Sorun yoksa null. */
 export function programRenameProblem(raw, currentName) {
   const name = raw.trim();
   if (name === '') return null;
   if (!NAME_RE.test(name) || name === '.' || name === '..') {
-    return 'Program adı geçersiz: İngilizce harf, rakam, "-", "_" ve "." kullanılabilir (en fazla 40 karakter).';
+    return 'Program adı geçersiz: İngilizce harf, rakam, boşluk, "-", "_", "." ve "()" kullanılabilir (en fazla 40 karakter).';
   }
   if (/^zz(up|rb)/i.test(name)) return '"ZZUP" ve "ZZRB" ile başlayan adlar aktarım için ayrılmıştır.';
   if (name.toLowerCase() === currentName.toLowerCase()) return 'Bu zaten programın şu anki adı.';

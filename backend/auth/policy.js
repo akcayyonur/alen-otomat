@@ -78,12 +78,20 @@ export const SCREEN_ROUTES = Object.freeze([
   [['POST'], /^\/api\/planning\/first-approvals$/, 'ilkonay', 'write'],
 
   // numune takip (EYS.FR.012): olusturma/duzenleme/karar herkese (usta doldurur, ofis karari isaretler); sira tabani/silme kayitsiz -> admin
+  // yeni urun kodu olusturma (2026-11-13): grup listesi + onizleme okuma; Mikro yeniden deneme uclari create/update ile AYNI yazma yetkisi
   [['GET'], /^\/api\/planning\/samples$/, 'numune', 'read'],
   [['GET'], /^\/api\/planning\/samples\/stats$/, 'numune', 'read'],
+  [['GET'], /^\/api\/planning\/samples\/customer-groups$/, 'numune', 'read'],
+  [['GET'], /^\/api\/planning\/samples\/next-stock-code$/, 'numune', 'read'],
   [['POST'], /^\/api\/planning\/samples$/, 'numune', 'write'],
   [['GET'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'read'],
   [['PUT'], /^\/api\/planning\/samples\/\d{1,12}$/, 'numune', 'write'],
-  [['POST'], /^\/api\/planning\/samples\/\d{1,12}\/(?:decide|reopen)$/, 'numune', 'write'],
+  [['POST'], /^\/api\/planning\/samples\/\d{1,12}\/(?:decide|reopen|retry-mikro-product|retry-mikro-weight)$/, 'numune', 'write'],
+  [['GET'], /^\/api\/planning\/samples\/materials$/, 'numune', 'read'],
+  [['GET'], /^\/api\/planning\/samples\/\d{1,12}\/drawings$/, 'numune', 'read'],
+  [['POST'], /^\/api\/planning\/samples\/\d{1,12}\/drawings$/, 'numune', 'write'],
+  [['GET'], /^\/api\/planning\/samples\/\d{1,12}\/drawings\/\d{1,12}$/, 'numune', 'read'],
+  [['DELETE'], /^\/api\/planning\/samples\/\d{1,12}\/drawings\/\d{1,12}$/, 'numune', 'write'],
 
   // hurda girisi (karantina giris-cikis EYS.FR.043 + tashih EYS.FR.049): uretimde fark edilen hurda/uygunsuz parca; silme kayitsiz -> admin
   [['GET'], /^\/api\/planning\/quarantine$/, 'hurda', 'read'],
@@ -101,6 +109,12 @@ export const SCREEN_ROUTES = Object.freeze([
   [['POST'], /^\/api\/planning\/devices$/, 'olcucihazlari', 'write'],
   [['GET'], /^\/api\/planning\/devices\/\d{1,12}$/, 'olcucihazlari', 'read'],
   [['PUT'], /^\/api\/planning\/devices\/\d{1,12}$/, 'olcucihazlari', 'write'],
+
+  // bakim (EYS.FR.016 + Bakim Sicil Kartlari): genel gorunum (tip->makine->kalem) herkese, tik/rutin-arizi log role'e
+  // yazilir; tip/kalem/makine CRUD, log silme ve Excel iceri aktarma kayitsiz -> admin (periyodu SADECE admin ayarlar).
+  [['GET'], /^\/api\/planning\/maintenance$/, 'bakim', 'read'],
+  [['GET'], /^\/api\/planning\/maintenance\/assets\/\d{1,12}\/logs$/, 'bakim', 'read'],
+  [['POST'], /^\/api\/planning\/maintenance\/assets\/\d{1,12}\/logs$/, 'bakim', 'write'],
 
   // olcu raporlari: HER ZAMAN salt okunur (girisler tezgah basindan / `tezgahbasi` ekranindan yapilir)
   [['GET'], /^\/api\/planning\/measure-reports$/, 'olcuraporlari', 'read'],

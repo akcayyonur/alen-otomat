@@ -79,6 +79,11 @@ export function rawMaterial({ qty, grossKg, lengthMm }) {
 export const plannedHours = (qty, sec) => (qty > 0 && sec > 0 ? round((qty * sec) / 3600, 2) : null);
 export const machineNumber = (id) => { const m = /(\d+)\s*$/.exec(String(id ?? '')); return m ? Number(m[1]) : null; };
 
+/** Tezgah <select> seçenekleri (iş emirleri + numune takip ortak kullanır). */
+export const machineOptions = (machines, selected = '', blank = '— seçin —') =>
+  `<option value="">${blank}</option>` + machines.map((m) =>
+    `<option value="${escapeHtml(m.id)}"${m.id === selected ? ' selected' : ''}>${escapeHtml(m.id)}${m.name && m.name !== m.id ? ` · ${escapeHtml(m.name)}` : ''}</option>`).join('');
+
 /** Yerel gun anahtari 'YYYY-MM-DD' (rapor araliklari). */
 export const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 /** Rapor araligi hazir secimleri (Hammadde, Verimlilik): range(simdi) -> [baslangic, bitis] 'YYYY-MM-DD'. */

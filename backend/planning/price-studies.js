@@ -109,9 +109,12 @@ export class PriceStudies {
     const r = this.db.prepare('SELECT sha FROM price_studies WHERE id = ?').get(Number(id));
     if (!r) throw new PlanningError('Fiyat çalışması bulunamadı.', 404);
     this.db.prepare('DELETE FROM price_studies WHERE id = ?').run(Number(id));
+    // dorduncu tuketici sample_drawings de sayilmali (2026-11-13'te eklendi) - yoksa bir numune resmiyle AYNI
+    // PDF'i paylasan bir fiyat calismasi silinince numunenin blob'u YANLISLIKLA silinebilirdi.
     const used = Number(this.db.prepare(
-      'SELECT (SELECT COUNT(*) FROM wo_drawings WHERE sha=?) + (SELECT COUNT(*) FROM product_files WHERE sha=?) + (SELECT COUNT(*) FROM price_studies WHERE sha=?) AS n',
-    ).get(r.sha, r.sha, r.sha).n);
+      `SELECT (SELECT COUNT(*) FROM wo_drawings WHERE sha=?) + (SELECT COUNT(*) FROM product_files WHERE sha=?) +
+              (SELECT COUNT(*) FROM price_studies WHERE sha=?) + (SELECT COUNT(*) FROM sample_drawings WHERE sha=?) AS n`,
+    ).get(r.sha, r.sha, r.sha, r.sha).n);
     if (used === 0) this.db.prepare('DELETE FROM drawing_files WHERE sha = ?').run(r.sha);
   }
 }

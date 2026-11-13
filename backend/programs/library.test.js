@@ -14,7 +14,12 @@ test('program adi: gercek tezgah adlari gecer, tehlikeli adlar reddedilir', () =
   for (const ad of ['ORNEK-013', '100200300', 'O0179', '11-1', '2', 'MUSTERI-001', 'A1ORNEKPROG']) {
     assert.equal(validateProgramName(ad), ad);
   }
-  for (const ad of ['', ' ', 'a/b', '..', '.', 'a\\b', 'a b', 'x'.repeat(41), 'ZZUP123456', 'zzup1', 'ZZRB9', 'a\r\nDELE b', 'ğüş']) {
+  // Bosluk ve parantez KABUL edilir (2026-11-11): gercek tornalarda ayni urunun farkli takimla/bekleme
+  // suresiyle yapilan varyanti "SR001.001 (2)" gibi (Windows'un otomatik ekledigi) adla duruyor.
+  for (const ad of ['a b', 'SR001.001 (2)', 'ORNEK (1)', '(2)']) {
+    assert.equal(validateProgramName(ad), ad, `kabul edilmeli: ${JSON.stringify(ad)}`);
+  }
+  for (const ad of ['', ' ', 'a/b', '..', '.', 'a\\b', 'x'.repeat(41), 'ZZUP123456', 'zzup1', 'ZZRB9', 'a\r\nDELE b', 'ğüş']) {
     assert.throws(() => validateProgramName(ad), ValidationError, `reddedilmeli: ${JSON.stringify(ad)}`);
   }
   assert.equal(validateProgramName('  ORNEK  '), 'ORNEK', 'kenar bosluklari kirpilir');

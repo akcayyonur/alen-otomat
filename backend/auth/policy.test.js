@@ -133,6 +133,21 @@ test('ekran: numune takip (EYS.FR.012) - olustur/duzenle/karar herkese, sira tab
   }
 });
 
+test('ekran: numune - yeni urun kodu olusturma (grup listesi/onizleme okuma, Mikro yeniden deneme yazma)', () => {
+  S('GET', '/api/planning/samples/customer-groups', 'numune', 'read');
+  S('GET', '/api/planning/samples/next-stock-code', 'numune', 'read');
+  S('POST', '/api/planning/samples/5/retry-mikro-product', 'numune', 'write');
+  S('POST', '/api/planning/samples/5/retry-mikro-weight', 'numune', 'write');
+});
+
+test('ekran: numune - hammadde aramasi (Mikro canli) okuma, teknik resim yukleme/silme yazma', () => {
+  S('GET', '/api/planning/samples/materials', 'numune', 'read');
+  S('GET', '/api/planning/samples/5/drawings', 'numune', 'read');
+  S('POST', '/api/planning/samples/5/drawings', 'numune', 'write');
+  S('GET', '/api/planning/samples/5/drawings/9', 'numune', 'read');
+  S('DELETE', '/api/planning/samples/5/drawings/9', 'numune', 'write');
+});
+
 test('ekran: olcu raporlari - HER ZAMAN salt okunur (girisler tezgah basindan)', () => {
   S('GET', '/api/planning/measure-reports', 'olcuraporlari', 'read');
   S('GET', '/api/planning/work-orders/2026001055/measure-report', 'olcuraporlari', 'read');

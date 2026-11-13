@@ -69,7 +69,7 @@ async function renderCrates(host) {
       st.items.map((k) => {
         const canPack = k.state === 'kapali' || k.state === 'paketlendi';
         return `<tr data-id="${k.id}"><td class="mono"><b>${escapeHtml(k.cardNo)}</b></td><td class="mono">${escapeHtml(k.woNo)}</td>` +
-          `<td class="trunc"${truncCell(k.productName)}><span class="mono">${escapeHtml(k.stockCode ?? '')}</span> ${cellText(k.productName)}</td><td class="mono">${escapeHtml(k.machineId)}</td>` +
+          `<td class="prod-cell"><span class="mono">${escapeHtml(k.stockCode ?? '')}</span> <span class="prod-name"${truncCell(k.productName)}>${cellText(k.productName)}</span></td><td class="mono">${escapeHtml(k.machineId)}</td>` +
           `<td>${k.closedAt ? escapeHtml(dateTimeText(k.closedAt)) : '<span class="is-null">açık</span>'}</td><td class="num">${k.countedQty == null ? cellText(null) : `~${fmtNum(k.countedQty)}`}</td>` +
           `<td class="nowrap">${canPack
             ? `<input class="pack-qty" inputmode="numeric" autocomplete="off" aria-label="${escapeHtml(k.cardNo)} paketlenen adet" value="${k.packedQty ?? ''}" placeholder="adet"> ` +

@@ -9,7 +9,7 @@ import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
   put, cellText, fmtNum, dateText, dateTimeText, debounce, openModal, parseInput, gramToKg, chip,
-  rawMaterial, plannedHours, isoDate, fmtDec, woStatusChip, isAdminRole, truncCell,
+  rawMaterial, plannedHours, isoDate, fmtDec, woStatusChip, isAdminRole, truncCell, machineOptions,
 } from './planning-common.js';
 import { openWorkOrderForm } from './planning-wo-form.js';
 import { openProductDialog } from './planning-products.js';
@@ -23,9 +23,6 @@ import { materialPanelHtml } from './planning-material.js';
 import { depotPanelHtml } from './planning-depot.js';
 import { openFormDialog } from './auth-view.js';
 
-const machineOptions = (machines, selected = '', blank = '— seçin —') =>
-  `<option value="">${blank}</option>` + machines.map((m) =>
-    `<option value="${escapeHtml(m.id)}"${m.id === selected ? ' selected' : ''}>${escapeHtml(m.id)}${m.name && m.name !== m.id ? ` · ${escapeHtml(m.name)}` : ''}</option>`).join('');
 const gramInput = (kg) => (kg === null || kg === undefined ? '' : String(Number((kg * 1000).toFixed(4))).replace('.', ','));
 const EVENT_LABEL = Object.freeze({
   olusturuldu: 'oluşturuldu', guncellendi: 'güncellendi', iptal: 'iptal edildi', baslatildi: 'üretime başlatıldı', bitirildi: 'bitirildi', 'yeniden-acildi': 'üretime geri alındı', 'elle-bitirildi': 'elle bitirildi', 'tezgah-duzeltildi': 'tezgah düzeltildi',
@@ -72,7 +69,7 @@ export async function renderWorkOrders(host) {
         const stateClass = w.status === 'iptal' ? ' pl-cancelled' : w.status === 'uretimde' ? ' pl-running' : w.status === 'planlandi' ? ' pl-waiting' : w.status === 'bitti' ? ' pl-done' : '';
         return `<tr class="pl-row${stateClass}" data-no="${no}" tabindex="0">` +
           `<td class="mono"><b>${no}</b></td>` +
-          `<td class="trunc"${truncCell(w.productName)}><span class="mono"><b>${escapeHtml(w.stockCode)}</b></span> ${cellText(w.productName)}</td><td class="mono trunc"${truncCell(w.custOrderNo)}>${cellText(w.custOrderNo)}</td>` +
+          `<td class="prod-cell"><span class="mono"><b>${escapeHtml(w.stockCode)}</b></span> <span class="prod-name"${truncCell(w.productName)}>${cellText(w.productName)}</span></td><td class="mono trunc"${truncCell(w.custOrderNo)}>${cellText(w.custOrderNo)}</td>` +
           `<td class="mono">${w.machineId ? escapeHtml(w.machineId) : '<span class="is-null" title="Tezgah başlatırken seçilir">atanmadı</span>'}</td><td class="num">${fmtNum(w.targetQty)}</td>` +
           `<td class="num">${w.produced == null ? cellText(null) : `${fmtNum(w.produced)} <small class="hint">%${fmtDec(w.pct ?? 0, 0)}</small>`}</td>` +
           `<td>${dateText(w.dueDate)}</td><td>${woStatusChip(w.status)}</td>` +

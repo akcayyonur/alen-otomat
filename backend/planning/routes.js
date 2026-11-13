@@ -33,12 +33,19 @@
  *   GET  /api/planning/price-studies/:id                 ayrinti;  GET .../drawing.pdf  teknik resim;  DELETE .../:id  (yalniz yonetici)
  *   PUT  /api/planning/price-studies/:id/fill {material, plannedSec, note?}   usta hammadde+sure doldurur ('fiyat' ekranina yazabilen rol)
  *   GET  /api/planning/samples?q=&status=                NUMUNE TAKIP listesi (EYS.FR.012; `products` ile baglanmaz, musteri/alen urun kodu serbest metin)
- *   POST /api/planning/samples                            yeni numune formu ac (yalniz musteri zorunlu)
- *   GET/PUT /api/planning/samples/:id                      ayrinti / duzenle (uretim+gonderim alanlari zamanla doldurulur);  DELETE .../:id  (yalniz yonetici)
+ *   POST /api/planning/samples                            yeni numune formu ac (yalniz musteri zorunlu; customerGroupCode+codePrefix birlikte verilirse YENI urun kodu uretir, bkz. asagi)
+ *   GET/PUT /api/planning/samples/:id                      ayrinti / duzenle (uretim+gonderim alanlari + machineId zamanla doldurulur);  DELETE .../:id  (yalniz yonetici)
  *   POST .../samples/:id/decide {status:'onaylandi'|'reddedildi', decidedOn?, note?}   musteriden gelen karar (e-posta ile gelir, elle girilir)
  *   POST .../samples/:id/reopen                            yanlis isaretlenen karari geri al ('bekliyor'a doner)
  *   PUT  /api/planning/samples/sequence {last}              numara tabani (kagittaki SERI NO ile cakismasin; yalniz yonetici)
  *   GET  /api/planning/samples/stats?from=&to=             ret analizi: karar tarihine gore onay/ret dagilimi + ret orani, ayni aralikta talep edilen/bekleyen sayisi (vars. aralik bu ayin basindan bugune)
+ *   GET  /api/planning/samples/customer-groups             YENI URUN KODU icin sabit musteri grubu listesi (19 grup, kodun sonundaki 3 hane)
+ *   GET  /api/planning/samples/next-stock-code?group=&prefix=   siradaki kod ONIZLEMESI (rezerve ETMEZ; prefix: SR|Nİ)
+ *   POST .../samples/:id/retry-mikro-product                 Mikro'da YENI stok karti olusturmayi elle yeniden dener (yalniz auto-generated numunede; GERCEK MIKRO'YA KARSI HENUZ DENENMEDI)
+ *   POST .../samples/:id/retry-mikro-weight                  Mikro'daki stok kartinin agirligini elle yeniden dener (ayni kisit; GERCEK MIKRO'YA KARSI HENUZ DENENMEDI)
+ *   GET  /api/planning/samples/materials?q=&limit=           hammadde ara (Mikro'dan canli, HM%; hammadde ekranindaki ucla AYNI mikroStock.searchMaterials, numune-ozel dar uc)
+ *   GET/POST /api/planning/samples/:id/drawings              numuneye yuklenen teknik resimler (PDF) listesi / yukle (govde = ham PDF, ?name=)
+ *   GET/DELETE .../samples/:id/drawings/:did                 tek PDF'i goruntule/indir / kaldir
  *   GET  /api/planning/quarantine?q=&status=             HURDA GIRISI listesi (karantina giris-cikis, EYS.FR.043; `products` ile baglanmaz)
  *   POST /api/planning/quarantine                         yeni giris-cikis kaydi ac (urun tanimi, uygunsuzluk tanimi, giris tarihi/personeli)
  *   GET/PUT /api/planning/quarantine/:id                   ayrinti (tashih gecmisi + toplamlar) / duzenle;  DELETE .../:id  (yalniz yonetici)
@@ -53,6 +60,17 @@
  *   POST /api/planning/devices                            yeni olcum cihazi ekle (yalniz kategori+tanim zorunlu)
  *   POST /api/planning/devices/import                      Setup kurulumunda ILK SEFER icin EYS.LS.006 Excel'ini iceri aktar (govde = ham .xlsx)
  *   GET/PUT /api/planning/devices/:id                      ayrinti (kalibrasyon durumu hesaplanir) / duzenle;  DELETE .../:id  (yalniz yonetici)
+ *   GET  /api/planning/maintenance?q=                      BAKIM (EYS.FR.016 + Bakim Sicil Kartlari): tip->makine->kalem agaci, durum (tamam/yaklasiyor/gecikti) hesaplanir
+ *   POST /api/planning/maintenance/import                  Setup kurulumunda ILK SEFER icin Bakim Sicil Kartlari Excel'ini iceri aktar (govde = ham .xlsx, yalniz yonetici)
+ *   POST /api/planning/maintenance/types                   yeni makine tipi (yalniz yonetici)
+ *   PUT/DELETE /api/planning/maintenance/types/:id          tip duzenle / sil (makinesi varsa silinemez; yalniz yonetici)
+ *   POST /api/planning/maintenance/types/:id/items          bu tipin bakim kalemi ekle (periyot alanlari dahil; yalniz yonetici)
+ *   PUT/DELETE /api/planning/maintenance/items/:id          kalem duzenle (PERIYODU buradan degisir, ustaya hic gorunmez) / sil (gecmisi varsa silinemez; yalniz yonetici)
+ *   POST /api/planning/maintenance/assets                   yeni makine ekle (yalniz yonetici)
+ *   PUT/DELETE /api/planning/maintenance/assets/:id          makine duzenle / sil (gecmisi varsa silinemez; yalniz yonetici)
+ *   GET  /api/planning/maintenance/assets/:id/logs?itemId=&kind=&limit=   bir makinenin tik/rutin/arizi gecmisi
+ *   POST /api/planning/maintenance/assets/:id/logs          tik at (`itemId` ile) ya da serbest rutin/arizi kayit ekle (`itemId` yok)
+ *   DELETE /api/planning/maintenance/logs/:id                yanlis girilen tik/kayit sil (yalniz yonetici)
  *   GET  /api/planning/drawing-tracking?q=&customer=&limit=&offset=   TEKNIK RESIM TAKIP (EYS.LS.007): sistemdeki her urunun resim durumu/rev no/tarihleri; `customer` TAM eslesme (musteriye gore filtre)
  *   GET  /api/planning/drawing-tracking/customers        EYS.LS.007 kayitlarindaki DISTINCT musteri adlari (filtre acilir kutusu icin)
  *   PUT  /api/planning/drawing-tracking/:kod                izleme alanlarini duzenle (yalniz gonderilen alanlar degisir)
@@ -337,6 +355,10 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       if (method === 'GET' && path === '/api/planning/samples/stats') {
         return sendJson(res, 200, planning.samples.rejectionStats({ from: url.searchParams.get('from') ?? '', to: url.searchParams.get('to') ?? '' })), true;
       }
+      if (method === 'GET' && path === '/api/planning/samples/customer-groups') return sendJson(res, 200, planning.samples.customerGroups()), true;
+      if (method === 'GET' && path === '/api/planning/samples/next-stock-code') {
+        return sendJson(res, 200, planning.samples.nextStockCode({ customerGroupCode: url.searchParams.get('group') ?? '', codePrefix: url.searchParams.get('prefix') ?? '' })), true;
+      }
       if ((m = /^\/api\/planning\/samples\/(\d{1,12})$/.exec(path))) {
         if (method === 'GET') return sendJson(res, 200, planning.samples.get(Number(m[1]))), true;
         if (method === 'PUT') return sendJson(res, 200, planning.samples.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
@@ -347,6 +369,28 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       }
       if (method === 'POST' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/reopen$/.exec(path))) {
         return sendJson(res, 200, planning.samples.reopen(Number(m[1]), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/retry-mikro-product$/.exec(path))) {
+        return sendJson(res, 200, await planning.samples.retryMikroProduct(Number(m[1]))), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/retry-mikro-weight$/.exec(path))) {
+        return sendJson(res, 200, await planning.samples.retryMikroWeight(Number(m[1]))), true;
+      }
+      if (method === 'GET' && path === '/api/planning/samples/materials') {
+        return sendJson(res, 200, { items: await planning.mikroStock.searchMaterials(url.searchParams.get('q') ?? '', intParam(url, 'limit', 30, { min: 1, max: 50 })) }), true;
+      }
+      if ((m = /^\/api\/planning\/samples\/(\d{1,12})\/drawings$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, { drawings: planning.samples.listDrawings(Number(m[1])) }), true;
+        if (method === 'POST') {
+          const data = await readBuffer(req, MAX_DRAWING_BYTES + 4096);
+          return sendJson(res, 201, { drawings: planning.samples.addDrawing(Number(m[1]), { name: url.searchParams.get('name'), data }, { by: who(req) }) }), true;
+        }
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/drawings\/(\d{1,12})$/.exec(path))) {
+        return sendProductFile(res, planning.samples.drawingData(Number(m[2]))), true;
+      }
+      if (method === 'DELETE' && (m = /^\/api\/planning\/samples\/(\d{1,12})\/drawings\/(\d{1,12})$/.exec(path))) {
+        return sendJson(res, 200, { drawings: planning.samples.deleteDrawing(Number(m[1]), Number(m[2])) }), true;
       }
 
       /* ---- hurda girisi (karantina giris-cikis EYS.FR.043 + tashih EYS.FR.049) ---- */
@@ -412,6 +456,50 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         if (method === 'GET') return sendJson(res, 200, planning.measuringDevices.get(Number(m[1]))), true;
         if (method === 'PUT') return sendJson(res, 200, planning.measuringDevices.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
         if (method === 'DELETE') return sendJson(res, 200, planning.measuringDevices.delete(Number(m[1]))), true;
+      }
+
+      /* ---- bakim (EYS.FR.016 + Bakim Sicil Kartlari) ---- */
+      if (method === 'GET' && path === '/api/planning/maintenance') {
+        return sendJson(res, 200, planning.maintenance.overview({ q: url.searchParams.get('q') ?? '' })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/maintenance/import') {
+        const body = await readBuffer(req, MAX_CSV_BYTES);
+        return sendJson(res, 200, planning.maintenance.importXlsx(body, { by: who(req) })), true;
+      }
+      if (path === '/api/planning/maintenance/types') {
+        if (method === 'POST') return sendJson(res, 201, planning.maintenance.createType(await readJson(req), { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/maintenance\/types\/(\d{1,12})$/.exec(path))) {
+        if (method === 'PUT') return sendJson(res, 200, planning.maintenance.updateType(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.maintenance.deleteType(Number(m[1]))), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/maintenance\/types\/(\d{1,12})\/items$/.exec(path))) {
+        return sendJson(res, 201, planning.maintenance.createItem(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/maintenance\/items\/(\d{1,12})$/.exec(path))) {
+        if (method === 'PUT') return sendJson(res, 200, planning.maintenance.updateItem(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.maintenance.deleteItem(Number(m[1]))), true;
+      }
+      if (method === 'POST' && path === '/api/planning/maintenance/assets') {
+        return sendJson(res, 201, planning.maintenance.createAsset(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/maintenance\/assets\/(\d{1,12})\/logs$/.exec(path))) {
+        return sendJson(res, 200, {
+          items: planning.maintenance.listLogs(Number(m[1]), {
+            itemId: url.searchParams.get('itemId') ?? '', kind: url.searchParams.get('kind') ?? '',
+            limit: intParam(url, 'limit', 50, { min: 1, max: 500 }),
+          }),
+        }), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/maintenance\/assets\/(\d{1,12})\/logs$/.exec(path))) {
+        return sendJson(res, 201, planning.maintenance.addLog(Number(m[1]), await readJson(req), { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/maintenance\/assets\/(\d{1,12})$/.exec(path))) {
+        if (method === 'PUT') return sendJson(res, 200, planning.maintenance.updateAsset(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.maintenance.deleteAsset(Number(m[1]))), true;
+      }
+      if (method === 'DELETE' && (m = /^\/api\/planning\/maintenance\/logs\/(\d{1,12})$/.exec(path))) {
+        return sendJson(res, 200, planning.maintenance.deleteLog(Number(m[1]))), true;
       }
 
       /* ---- teknik resim takip (EYS.LS.007) ---- */

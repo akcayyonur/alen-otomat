@@ -267,8 +267,18 @@ export class QualityDb {
     return true;
   }
 
+  /**
+   * `drawing_files` artık DÖRT tüketicisi var: `wo_drawings`, `product_files`, `price_studies.sha` (sütun,
+   * ayrı tablo değil) ve `sample_drawings` (sample-tracking.js). Dördü de SAYILMALI — yalnız ikisini (wo_drawings/
+   * product_files) saymak, ör. bir numune resmiyle AYNI PDF'i paylaşan bir iş emri resmi silinince numunenin
+   * blob'unu da YANLIŞLIKLA silerdi (2026-11-13, sample_drawings eklenirken kod incelemesinde bulundu — o ana
+   * kadar price_studies de SAYILMIYORDU, bu da aynı sınıf bir hataydı, aynı anda düzeltildi).
+   */
   #dropFileIfUnused(sha) {
-    const used = Number(this.db.prepare('SELECT (SELECT COUNT(*) FROM wo_drawings WHERE sha = ?) + (SELECT COUNT(*) FROM product_files WHERE sha = ?) AS n').get(sha, sha).n);
+    const used = Number(this.db.prepare(
+      `SELECT (SELECT COUNT(*) FROM wo_drawings WHERE sha = ?) + (SELECT COUNT(*) FROM product_files WHERE sha = ?) +
+              (SELECT COUNT(*) FROM price_studies WHERE sha = ?) + (SELECT COUNT(*) FROM sample_drawings WHERE sha = ?) AS n`,
+    ).get(sha, sha, sha, sha).n);
     if (used === 0) this.db.prepare('DELETE FROM drawing_files WHERE sha = ?').run(sha);
   }
 

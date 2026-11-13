@@ -26,6 +26,7 @@ import { renderApprovals } from './planning-approvals.js';
 import { renderSamples } from './planning-numune.js';
 import { renderMeasureReports } from './planning-reports.js';
 import { renderDevices } from './planning-devices.js';
+import { renderMaintenance } from './planning-maintenance.js';
 import { renderDrawingTracking } from './planning-drawing-tracking.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
 import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
@@ -43,6 +44,7 @@ const TABS = Object.freeze([
   { key: 'numune', label: 'Numune takip', sub: 'numune talep/takip formu', hint: 'Müşteriye numune üretilip gönderilmesi ve onay/ret takibi (EYS.FR.012).', plain: true, render: renderSamples },
   { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', plain: true, render: renderMeasureReports },
   { key: 'olcucihazlari', label: 'Ölçüm cihazları takip', sub: 'mastar, kumpas, kalibrasyon (EYS.LS.006)', hint: 'Satır rengi kalibrasyon vaktine göre: yeşil/sarı/kırmızı.', plain: true, render: renderDevices },
+  { key: 'bakim', label: 'Bakım', sub: 'makine tipi → bakım kalemi (EYS.FR.016)', hint: 'Periyodu yönetici ayarlar; usta yalnızca tik atar.', plain: true, render: renderMaintenance },
   { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
   { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', render: renderProducts },
   { key: 'teknikresim', label: 'Teknik resim takip', sub: 'resim no, rev no, tarihler (EYS.LS.007)', hint: 'Rev no sistem tarafından otomatik artırılır.', plain: true, render: renderDrawingTracking },
@@ -75,7 +77,7 @@ const NAV_LAYOUT = Object.freeze([
   { id: null, label: null, keys: ['siparisler'] },
   { id: 'g-depo', label: 'Depo', keys: ['paketleme', 'hurda'] },
   { id: 'g-uretim', label: 'Üretim', keys: ['isemirleri', 'numune', 'hammadde', 'fiyat'] },
-  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari'] },
+  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari', 'bakim'] },
   { id: 'g-urunler', label: 'Ürünler', keys: ['programlar', 'urunler', 'teknikresim'] },
   { id: 'g-analiz', label: 'Analiz', keys: ['verimlilik', 'cizelgeleme'] },
 ]);

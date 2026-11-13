@@ -38,7 +38,15 @@ export class ValidationError extends Error {
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
-const NAME_PATTERN = /^[A-Za-z0-9_.-]{1,40}$/;
+// Bosluk ve parantez BILEREK eklendi (2026-11-11, kullanici isteği): gercek tornalarda ayni urunu FARKLI
+// takimla/bekleme suresiyle ureten varyant programlar "SR001.001 (2)" gibi adlandiriliyor (Windows'un "ayni adli
+// dosya var" otomatik eki) - bu adlar daha once reddediliyordu, kutuphaneye hic cekilemiyordu. Tam bir blacklist'e
+// (musteri klasoru FORBIDDEN_FOLDER_CHARS gibi) GECILMEDI: Turkce harfler gibi FTP uzerinde hic denenmemis
+// karakterleri sessizce acmamak icin yalniz gercekte goruldugu ispatlanan iki karakter (bosluk, parantez)
+// whitelist'e eklendi. RETR/STOR/RNFR/RNTO (ftp-client.js) komut satirini duz template string ile kuruyor -
+// FTP'de bosluktan sonraki HER SEY yol argumanidir (RFC 959), ayrica kacis/tirnaklama GEREKMEZ; satir sonu (\r\n)
+// karakterleri bu whitelist'te OLMADIGI icin komut enjeksiyonu hala imkansiz.
+const NAME_PATTERN = /^[A-Za-z0-9_.() -]{1,40}$/;
 const FORBIDDEN_FOLDER_CHARS = /[\\/:*?"<>|\0-\x1f]/;
 
 /** @returns {string} temiz ad; gecersizse ValidationError */
@@ -46,7 +54,7 @@ export function validateProgramName(raw) {
   const name = String(raw ?? '').trim();
   if (!NAME_PATTERN.test(name) || name === '.' || name === '..') {
     throw new ValidationError(
-      `Program adı geçersiz: "${name}". Harf, rakam, "-", "_" ve "." kullanılabilir (en fazla 40 karakter).`,
+      `Program adı geçersiz: "${name}". Harf, rakam, boşluk, "-", "_", "." ve "()" kullanılabilir (en fazla 40 karakter).`,
     );
   }
   if (name.toUpperCase().startsWith(TEMP_PREFIX) || name.toUpperCase().startsWith('ZZRB')) {

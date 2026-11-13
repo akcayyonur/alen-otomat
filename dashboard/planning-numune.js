@@ -15,6 +15,7 @@ import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import {
   put, del, cellText, fmtNum, fmtDec, dateKey, dateText, debounce, openModal, chip, canWrite, isAdminRole, printModal, openListPrint, truncCell,
+  machineOptions, sizeText,
 } from './planning-common.js';
 import { openGkkPicker } from './planning-gkk.js';
 
@@ -194,8 +195,17 @@ const FIELD_LABEL = Object.freeze({
   producedQty: 'Üretim miktarı', sampleSetQty: 'Ayrılan örnek miktarı', producedOn: 'Üretim tarihi', sentQty: 'Gönderilen miktar',
 });
 
+/** Mikro gönderim durumu için küçük bir çip (CLAUDE.md §7: renk tek başına değil, ikon+etiket). */
+const mikroChip = (sent, error) => (sent ? chip('ok', '✓', 'gönderildi') : error ? chip('bad', '✕', 'gönderilemedi') : chip('warn', '◔', 'bekliyor'));
+
 /**
  * Numune formu: yeni (id=null) ya da düzenle. Salt okuma rolü (yalnız 'read') formu görür, değiştiremez.
+ *
+ * Yeni ürün kodu oluşturma (2026-11-13, kullanıcı isteği): yalnız YENİ form açarken (düzenlemede gösterilmez —
+ * kod oluşunca sabitlenir, iş emri numarasıyla AYNI ilke), müşteri (sabit 19 grup) + kod öneki (SR/Nİ) seçilince
+ * "Alen ürün kodu" alanı sunucudan gelen önizlemeyle dolar ve KİLİTLENİR (elle yazılan değer zaten sunucuda göz
+ * ardı edilir, kullanıcı yanılmasın diye alan da devre dışı bırakılır). Her iki seçim de boşaltılırsa alan yine
+ * serbest metne döner (eski akış — elle ya da hiç kod girmeden numune açma).
  * @param {number|null} id @param {() => void} [onDone]
  */
 export async function openSampleDialog(id, onDone = () => {}) {
@@ -203,33 +213,225 @@ export async function openSampleDialog(id, onDone = () => {}) {
   const m = openModal({ title: id ? `Numune formu düzenle` : 'Yeni numune formu', wide: true });
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
   let s = null;
-  if (id) {
-    try { s = await api(`/api/planning/samples/${id}`); } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`; return; }
+  let machines = [];
+  let groups = [];
+  try {
+    const [meta, grp] = await Promise.all([api('/api/planning/summary').catch(() => ({ machines: [] })), api('/api/planning/samples/customer-groups').catch(() => [])]);
+    machines = meta.machines ?? [];
+    groups = grp ?? [];
+    if (id) {
+      s = await api(`/api/planning/samples/${id}`);
+      s.drawings = (await api(`/api/planning/samples/${id}/drawings`).catch(() => ({ drawings: [] }))).drawings;
+    }
+  } catch (err) {
+    m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`;
+    return;
   }
   let error = null;
   let decideMode = null; // 'onaylandi' | 'reddedildi' | null
+  let mikroBusy = null; // 'product' | 'weight' | null
+  // Yeni kod uretme (yalniz yeni formda anlamli): secimler + sunucudan gelen onizleme.
+  const gen = { group: '', prefix: '', code: '', err: null, loading: false };
+  // Hammadde secimi (Mikro'dan canli arama; "elle yazilmasin" - kullanici isteği, 2026-11-13): deger `s`'den
+  // ilk acilista alinir, sonrasinda BU state'ten okunur (gen-group deseniyle AYNI gerekce: create modunda `v()`
+  // hep null doner, degisiklikler diger alanlari silmeden yalniz bu alana yansitilmali).
+  const matState = { material: (s ? s.material : null) ?? '', altMaterial: (s ? s.altMaterial : null) ?? '' };
 
   const v = (key) => (s ? s[key] : null);
   const txt = (key, label, max, extra = '') => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${key}" value="${escapeHtml(v(key) ?? '')}" maxlength="${max}" autocomplete="off"${editable ? '' : ' readonly'}${extra}></label>`;
   const num = (key, label, extra = '') => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${key}" inputmode="decimal" value="${escapeHtml(decInput(v(key)))}" autocomplete="off"${editable ? '' : ' readonly'}${extra}></label>`;
   const dt = (key, label) => `<label class="fld"><span>${escapeHtml(label)}</span><input name="${key}" type="date" value="${isoDate(v(key))}"${editable ? '' : ' disabled'}></label>`;
 
+  function groupLabel(code) {
+    const g = groups.find((x) => x.code === code);
+    return g ? `${g.code} — ${g.name}` : code;
+  }
+
+  function newCodeBlockHtml() {
+    if (s || !editable) return ''; // yalniz YENI formda; duzenlemede kod sabittir
+    const groupOpts = '<option value="">— seçilmedi —</option>' + groups.map((g) => `<option value="${escapeHtml(g.code)}"${g.code === gen.group ? ' selected' : ''}>${escapeHtml(g.code)} — ${escapeHtml(g.name)}</option>`).join('');
+    const prefixOpts = ['', 'SR', 'Nİ'].map((p) => `<option value="${escapeHtml(p)}"${p === gen.prefix ? ' selected' : ''}>${p === '' ? '— seçilmedi —' : escapeHtml(p)}</option>`).join('');
+    return (
+      '<h4 class="sub">Yeni ürün kodu oluştur (isteğe bağlı)</h4>' +
+      '<div class="fld-grid">' +
+      `<label class="fld"><span>Müşteri (kod grubu)</span><select data-role="gen-group">${groupOpts}</select></label>` +
+      `<label class="fld"><span>Kod öneki</span><select data-role="gen-prefix">${prefixOpts}</select></label>` +
+      '</div>' +
+      `<p class="hint" data-role="gen-hint">${gen.loading ? 'Hesaplanıyor…' : gen.err ? `✕ ${escapeHtml(gen.err)}` : gen.code ? `Sıradaki kod: <b class="mono">${escapeHtml(gen.code)}</b> (kaydedince kesinleşir)` : 'Müşteri ve kod öneki seçilirse Alen ürün kodu otomatik oluşturulur; boş bırakılırsa aşağıya elle de girilebilir.'}</p>`
+    );
+  }
+
+  function mikroPanelHtml() {
+    if (!s || !s.autoGenerated) return '';
+    const weightKnown = s.sampleNetG != null;
+    const weightSent = weightKnown && s.mikroWeightSentG === s.sampleNetG;
+    return (
+      '<h4 class="sub">Mikro</h4>' +
+      '<div class="pl-kpis">' +
+      `<div class="pl-kpi"><span class="pl-kpi-l">Müşteri grubu</span><span class="pl-kpi-v mono">${escapeHtml(groupLabel(s.customerGroupCode))} · ${escapeHtml(s.codePrefix ?? '')}</span></div>` +
+      `<div class="pl-kpi"><span class="pl-kpi-l">Mikro ürün kartı</span><span class="pl-kpi-v">${mikroChip(s.mikroProductSent, s.mikroProductError)}</span>` +
+      (s.mikroProductError ? `<br><small class="hint">${escapeHtml(s.mikroProductError)}</small>` : '') +
+      (editable && !s.mikroProductSent ? `<button type="button" class="icon-btn icon-btn-sm" data-act="retry-product"${mikroBusy ? ' disabled' : ''}>${mikroBusy === 'product' ? 'Deneniyor…' : 'Yeniden dene'}</button>` : '') + '</div>' +
+      `<div class="pl-kpi"><span class="pl-kpi-l">Mikro net ağırlık</span><span class="pl-kpi-v">${weightKnown ? mikroChip(weightSent, s.mikroWeightError) : '<span class="is-null">numune net ağırlığı girilince gönderilir</span>'}</span>` +
+      (s.mikroWeightError ? `<br><small class="hint">${escapeHtml(s.mikroWeightError)}</small>` : '') +
+      (editable && weightKnown && !weightSent ? `<button type="button" class="icon-btn icon-btn-sm" data-act="retry-weight"${mikroBusy ? ' disabled' : ''}>${mikroBusy === 'weight' ? 'Deneniyor…' : 'Yeniden dene'}</button>` : '') + '</div>' +
+      '</div>'
+    );
+  }
+
+  /** Hammadde/Alternatif hammadde: elle yazılmaz, yalnız Mikro aramasından seçilir (kullanıcı isteği, 2026-11-13).
+   * `readonly` giriş + "Seç…"/"Değiştir"/"Temizle" düğmeleri; değer `matState`'te tutulur (bkz. yukarıdaki not). */
+  function matField(key, label) {
+    return `<label class="fld"><span>${escapeHtml(label)}</span><span class="fld-row" data-mat="${key}">` +
+      `<input name="${key}" value="${escapeHtml(matState[key])}" maxlength="80" readonly placeholder="— seçilmedi —">` +
+      matFieldButtons(key) + '</span></label>';
+  }
+
+  function matFieldButtons(key) {
+    if (!editable) return '';
+    const val = matState[key];
+    return `<button type="button" class="icon-btn icon-btn-sm" data-act="pick-material" data-field="${key}">${val ? 'Değiştir' : 'Seç…'}</button>` +
+      (val ? `<button type="button" class="icon-btn icon-btn-sm" data-act="clear-material" data-field="${key}">Temizle</button>` : '');
+  }
+
+  /** Seçim/temizleme sonrası SADECE o alanın girişini + düğmelerini günceller (tam `draw()` diğer alanları silerdi, gen-group'taki AYNI gerekçe). */
+  function refreshMatField(key) {
+    const row = m.body.querySelector(`[data-mat="${key}"]`);
+    if (!row) return;
+    row.querySelector('input').value = matState[key];
+    row.querySelectorAll('button').forEach((b) => b.remove());
+    row.insertAdjacentHTML('beforeend', matFieldButtons(key));
+  }
+
+  /** Teknik resimler (PDF) — yalnız var olan numunede (yeni formda kayıt henüz yok, önce "Formu oluştur" gerekir). */
+  function drawingsHtml() {
+    if (!s) return '';
+    const list = s.drawings ?? [];
+    return (
+      '<section class="dr-box" data-role="drawings"><h4 class="sub">Teknik resimler (PDF)</h4>' +
+      (list.length === 0
+        ? '<p class="hint">Henüz PDF yok.</p>'
+        : `<ol class="dr-list">${list.map((d) =>
+          `<li><span class="dr-name">${escapeHtml(d.name)}</span> <small class="hint">${d.pages} sayfa · ${escapeHtml(sizeText(d.size))}</small> ` +
+          `<a href="/api/planning/samples/${s.id}/drawings/${d.id}" target="_blank" rel="noopener">Aç</a>` +
+          (editable ? ` <button type="button" class="icon-btn icon-btn-sm" data-act="dr-del" data-id="${d.id}" aria-label="${escapeHtml(d.name)} dosyasını kaldır">Kaldır</button>` : '') +
+          '</li>').join('')}</ol>`) +
+      (editable ? (list.length >= 8
+        ? '<p class="hint">En çok 8 PDF eklenebilir.</p>'
+        : '<label class="dr-up"><span class="icon-btn">PDF yükle…</span><input type="file" accept="application/pdf,.pdf" multiple data-role="dr-file" aria-label="Teknik resim PDF dosyaları"></label>') : '') +
+      '<p class="notice notice-sim" data-role="dr-err" hidden></p></section>'
+    );
+  }
+
+  function refreshDrawings() {
+    const sec = m.body.querySelector('[data-role="drawings"]');
+    if (sec) sec.outerHTML = drawingsHtml();
+  }
+
+  /** `wireDrawings` (planning-drawings.js, iş emri teknik resimleri) ile AYNI desen: sırayla yükle, hata çıkınca dur. */
+  async function uploadDrawings(files) {
+    const box = m.body.querySelector('[data-role="drawings"]');
+    const err = (msg) => { const e = box?.querySelector('[data-role="dr-err"]'); if (e) { e.textContent = msg ?? ''; e.hidden = !msg; } };
+    err(null);
+    box?.querySelector('.dr-up')?.classList.add('is-busy');
+    for (const f of files) {
+      if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') { err(`${f.name}: PDF değil.`); break; }
+      try {
+        const r = await api(`/api/planning/samples/${s.id}/drawings?${new URLSearchParams({ name: f.name })}`, { method: 'POST', headers: { 'content-type': 'application/pdf' }, body: f });
+        s.drawings = r.drawings;
+        refreshDrawings();
+      } catch (e) {
+        err(`${f.name}: ${e.message}`);
+        break;
+      }
+    }
+  }
+
+  /** Hammadde seç: Mikro'dan canlı arama (`openGkkPicker` ile AYNI desen; dar, numune-özel uç). */
+  async function openMaterialPicker({ current = '', onPick }) {
+    const pm = openModal({ title: 'Hammadde seç', wide: true });
+    pm.body.innerHTML =
+      (current ? `<p class="notice">Şu an seçili: <b class="mono">${escapeHtml(current)}</b></p>` : '') +
+      '<input type="search" class="pl-search pl-search-big" data-role="q" placeholder="Hammadde kodu ya da adı…" aria-label="Hammadde ara" autocomplete="off">' +
+      '<div class="table-wrap pl-pick" data-role="list"><p class="hint">Aramak için yazın.</p></div>';
+    const $$ = (r) => pm.body.querySelector(`[data-role="${r}"]`);
+    let seq = 0;
+    const rowHtml = (x) =>
+      `<tr><td class="mono"><b>${escapeHtml(x.stockCode)}</b></td><td>${escapeHtml(x.name ?? '')}</td><td>${escapeHtml(x.unit ?? '')}</td>` +
+      `<td><button type="button" class="icon-btn shop-btn btn-primary" data-pick="${escapeHtml(x.stockCode)}">Seç</button></td></tr>`;
+    async function load() {
+      const my = ++seq;
+      const q = $$('q').value.trim();
+      if (!q) { $$('list').innerHTML = '<p class="hint">Aramak için yazın.</p>'; return; }
+      try {
+        const r = await api(`/api/planning/samples/materials?${new URLSearchParams({ q, limit: 30 })}`);
+        if (my !== seq) return;
+        $$('list').innerHTML = r.items.length === 0
+          ? '<p class="empty">Eşleşen hammadde yok.</p>'
+          : `<table class="tbl tbl-pl"><thead><tr><th>Stok kodu</th><th>Ad</th><th>Birim</th><th></th></tr></thead><tbody>${r.items.map(rowHtml).join('')}</tbody></table>`;
+      } catch (err) {
+        if (my === seq) $$('list').innerHTML = `<p class="notice notice-sim">${escapeHtml(err.message)}</p>`;
+      }
+    }
+    const search = debounce(load, 200);
+    pm.body.addEventListener('input', (ev) => { if (ev.target.dataset?.role === 'q') search(); });
+    pm.body.addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-pick]');
+      if (!b) return;
+      pm.close();
+      onPick(b.dataset.pick);
+    });
+    $$('q').focus();
+  }
+
+  /** Grup/önek secimi degisince SADECE ipucu + Alen kodu alanini guncelle — tam `draw()` kullanicinin o ana kadar
+   * yazdigi diger alanlari (musteri numune kodu, miktar...) silerdi (`v()` create modunda hep `s`'den okur, `s` null). */
+  function refreshGenUI() {
+    const hint = m.body.querySelector('[data-role="gen-hint"]');
+    if (hint) {
+      hint.innerHTML = gen.loading ? 'Hesaplanıyor…'
+        : gen.err ? `✕ ${escapeHtml(gen.err)}`
+        : gen.code ? `Sıradaki kod: <b class="mono">${escapeHtml(gen.code)}</b> (kaydedince kesinleşir)`
+        : 'Müşteri ve kod öneki seçilirse Alen ürün kodu otomatik oluşturulur; boş bırakılırsa aşağıya elle de girilebilir.';
+    }
+    const stockInput = m.body.querySelector('input[name="stockCode"]');
+    if (stockInput) {
+      if (gen.code) { stockInput.value = gen.code; stockInput.readOnly = true; }
+      else stockInput.readOnly = !editable;
+    }
+  }
+
+  const fetchGenPreview = debounce(() => {
+    if (!gen.group || !gen.prefix) { gen.code = ''; gen.err = null; gen.loading = false; refreshGenUI(); return; }
+    gen.loading = true; gen.err = null; refreshGenUI();
+    api(`/api/planning/samples/next-stock-code?${new URLSearchParams({ group: gen.group, prefix: gen.prefix })}`)
+      .then((r) => { gen.loading = false; gen.code = r.stockCode; gen.err = null; refreshGenUI(); })
+      .catch((e) => { gen.loading = false; gen.code = ''; gen.err = e.message; refreshGenUI(); });
+  }, 200);
+
   function draw() {
     m.body.innerHTML =
       (s ? `<p class="pl-wohead"><b class="mono">${escapeHtml(s.code)}</b> · ${dateText(s.requestedOn)} · ${STATUS_CHIP[s.status]}</p>` : '') +
       '<form autocomplete="off"><h4 class="sub">Numune tanımlama</h4><div class="fld-grid">' +
       txt('customer', 'Müşteri *', 120, ' required') + txt('customerSampleCode', 'Müşteri numune kodu', 60) +
-      txt('customerCode', 'Müşteri ürün kodu', 60) + txt('stockCode', 'Alen ürün kodu', 40) +
+      txt('customerCode', 'Müşteri ürün kodu', 60) +
+      `<label class="fld"><span>Alen ürün kodu</span><input name="stockCode" value="${escapeHtml(gen.code || v('stockCode') || '')}" maxlength="40" autocomplete="off"${!editable || (!s && gen.code) || (s && s.autoGenerated) ? ' readonly' : ''}` +
+      `${s && s.autoGenerated ? ' title="Otomatik oluşturulan kod sonradan değiştirilemez (ürün kartı ve Mikro kaydı bu kodla bağlı)."' : ''}></label>` +
       txt('sampleQty', 'Numune miktarı', 40, ' placeholder="ör. 1.100 AD."') + dt('dueDate', 'Teslim tarihi') +
-      '</div><h4 class="sub">Numune üretim bilgileri</h4><div class="fld-grid">' +
+      `<label class="fld"><span>Tezgah</span><select name="machineId"${editable ? '' : ' disabled'}>${machineOptions(machines, v('machineId') ?? '', '— seçilmedi —')}</select></label>` +
+      '</div>' +
+      newCodeBlockHtml() +
+      mikroPanelHtml() +
+      '<h4 class="sub">Numune üretim bilgileri</h4><div class="fld-grid">' +
       num('quoteNetG', 'Fiyat teklif net ağırlığı (gr)') + num('sampleNetG', 'Numune net ağırlığı (gr)') +
-      num('productionSec', 'Üretim süresi (sn)') + txt('material', 'Hammadde', 80) + txt('altMaterial', 'Alternatif hammadde', 80) +
+      num('productionSec', 'Üretim süresi (sn)') + matField('material', 'Hammadde') + matField('altMaterial', 'Alternatif hammadde') +
       txt('gauges', 'Kullanılan mastar/lar', 120) + num('producedQty', 'Üretim miktarı') + num('sampleSetQty', 'Ayrılan örnek miktarı') +
       dt('producedOn', 'Üretim tarihi') +
       `<label class="fld"><span>GKK rapor no</span><span class="fld-row"><input name="gkkReportNo" maxlength="40" autocomplete="off" value="${escapeHtml(v('gkkReportNo') ?? '')}"${editable ? '' : ' readonly'}>` +
       (editable ? '<button type="button" class="icon-btn icon-btn-sm" data-act="pick-gk">Listeden seç…</button>' : '') + '</span></label>' +
       num('sentQty', 'Gönderilen miktar') +
       '</div>' +
+      drawingsHtml() +
       `<label class="fld"><span>Müşteri geri bildirim</span><textarea name="customerFeedback" rows="3" maxlength="2000"${editable ? '' : ' readonly'}>${escapeHtml(v('customerFeedback') ?? '')}</textarea></label>` +
       `<label class="fld"><span>Not</span><input name="note" maxlength="500" autocomplete="off" value="${escapeHtml(v('note') ?? '')}"${editable ? '' : ' readonly'}></label>` +
       (decideMode
@@ -272,7 +474,55 @@ export async function openSampleDialog(id, onDone = () => {}) {
     if (ev.target.closest('[data-act="delete"]')) {
       if (!window.confirm(`"${s.code}" numaralı numune kaydı silinsin mi? Bu geri alınamaz.`)) return;
       del(`/api/planning/samples/${s.id}`).then(() => { onDone(); m.close(); }).catch((e) => { error = e.message; draw(); });
+      return;
     }
+    if (ev.target.closest('[data-act="retry-product"]') || ev.target.closest('[data-act="retry-weight"]')) {
+      const which = ev.target.closest('[data-act="retry-product"]') ? 'product' : 'weight';
+      mikroBusy = which; error = null; draw();
+      post(`/api/planning/samples/${s.id}/retry-mikro-${which}`)
+        .then((r) => { s = r; mikroBusy = null; draw(); })
+        .catch((e) => { mikroBusy = null; error = e.message; draw(); });
+      return;
+    }
+    const matBtn = ev.target.closest('[data-act="pick-material"]');
+    if (matBtn) {
+      const field = matBtn.dataset.field;
+      openMaterialPicker({ current: matState[field], onPick: (code) => { matState[field] = code; refreshMatField(field); } });
+      return;
+    }
+    const clearBtn = ev.target.closest('[data-act="clear-material"]');
+    if (clearBtn) {
+      const field = clearBtn.dataset.field;
+      matState[field] = '';
+      refreshMatField(field);
+      return;
+    }
+    const drDel = ev.target.closest('[data-act="dr-del"]');
+    if (drDel) {
+      const d = (s.drawings ?? []).find((x) => x.id === Number(drDel.dataset.id));
+      if (!window.confirm(`${d?.name ?? 'Bu PDF'} bu numuneden kaldırılsın mı?`)) return;
+      del(`/api/planning/samples/${s.id}/drawings/${drDel.dataset.id}`)
+        .then((r) => { s.drawings = r.drawings; refreshDrawings(); })
+        .catch((e) => { const errEl = m.body.querySelector('[data-role="dr-err"]'); if (errEl) { errEl.textContent = e.message; errEl.hidden = false; } });
+    }
+  });
+  m.body.addEventListener('change', (ev) => {
+    if (ev.target.closest('[data-role="dr-file"]')) {
+      const files = [...ev.target.files];
+      ev.target.value = '';
+      uploadDrawings(files);
+      return;
+    }
+    const role = ev.target.dataset?.role;
+    if (role !== 'gen-group' && role !== 'gen-prefix') return;
+    if (role === 'gen-group') {
+      gen.group = ev.target.value;
+      const g = groups.find((x) => x.code === gen.group);
+      if (g) { const cust = m.body.querySelector('input[name="customer"]'); if (cust) cust.value = g.name; }
+    } else {
+      gen.prefix = ev.target.value;
+    }
+    fetchGenPreview();
   });
   m.body.addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -292,6 +542,8 @@ export async function openSampleDialog(id, onDone = () => {}) {
           material: f.elements.material.value, altMaterial: f.elements.altMaterial.value, gauges: f.elements.gauges.value,
           producedQty: f.elements.producedQty.value, sampleSetQty: f.elements.sampleSetQty.value, producedOn: f.elements.producedOn.value || null,
           gkkReportNo: f.elements.gkkReportNo.value, sentQty: f.elements.sentQty.value, customerFeedback: f.elements.customerFeedback.value, note: f.elements.note.value,
+          machineId: f.elements.machineId.value,
+          ...(!s && gen.group && gen.prefix ? { customerGroupCode: gen.group, codePrefix: gen.prefix } : {}),
         };
         s = s ? await put(`/api/planning/samples/${s.id}`, body) : await post('/api/planning/samples', body);
       }
@@ -323,7 +575,8 @@ function sampleFormHtml(s) {
     row('FİYAT TEKLİF NET AĞIRLIĞI (gr)', decInput(s.quoteNetG)) + row('NUMUNE NET AĞIRLIĞI (gr)', decInput(s.sampleNetG)) +
     row('ÜRETİM SÜRESİ (sn)', decInput(s.productionSec)) + row('HAMMADDE', s.material) + row('ALTERNATİF HAMMADDE', s.altMaterial) +
     row('KULLANILAN MASTAR/LAR', s.gauges) + row('ÜRETİM MİKTARI', s.producedQty) + row('AYRILAN ÖRNEK MİKTARI', s.sampleSetQty) +
-    row('ÜRETİM TARİHİ', s.producedOn ? dateText(s.producedOn) : null) + row('GKK RAPOR NO', s.gkkReportNo) + row('GÖNDERİLEN MİKTAR', s.sentQty) +
+    row('ÜRETİM TARİHİ', s.producedOn ? dateText(s.producedOn) : null) + row('TEZGAH', s.machineId) +
+    row('GKK RAPOR NO', s.gkkReportNo) + row('GÖNDERİLEN MİKTAR', s.sentQty) +
     sec('Müşteri geri bildirim') +
     row('GERİ BİLDİRİM', s.customerFeedback, 'pl-nf-note') +
     sec('Sonuç') +

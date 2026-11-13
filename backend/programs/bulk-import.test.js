@@ -30,7 +30,7 @@ function tohum(s) {
   s.put('MUSTERI_B/DIFF-1', C);
   s.put('MUSTERI_B/EOL-1', EOL_LF);
   s.put('AA/NEW-2', A);
-  s.put('MUSTERI_B/BAD NAME', A);
+  s.put('MUSTERI_B/BAD*NAME', A); // bosluk artik GECERLI (2026-11-11); "*" hala Windows/FTP icin yasak
   s.put('MUSTERI_B/ZZUP123456', A);
   s.put('MUSTERI_B/BIG-1', Buffer.alloc(1_100_000, 65));
   s.put('MUSTERI_B/BIN-1', Buffer.from([65, 0, 66]));
@@ -67,9 +67,9 @@ test('plan: yeni / ayni / cakisma / alinamaz siniflanir; tornaya YALNIZ OKUMA; i
     assert.deepEqual(p.ayni.map((x) => x.name), ['SAME-1']);
     assert.equal(p.ayni[0].versionNo, 1);
     assert.deepEqual(p.cakisma.map((x) => x.name).sort(), ['DIFF-1', 'EOL-1']);
-    assert.deepEqual(p.atlanan.map((x) => x.name).sort(), ['BAD NAME', 'BIG-1', 'BIN-1', 'EMPTY-1', 'ZZUP123456']);
+    assert.deepEqual(p.atlanan.map((x) => x.name).sort(), ['BAD*NAME', 'BIG-1', 'BIN-1', 'EMPTY-1', 'ZZUP123456']);
     const neden = Object.fromEntries(p.atlanan.map((x) => [x.name, x.reason]));
-    assert.match(neden['BAD NAME'], /Program adı geçersiz/);
+    assert.match(neden['BAD*NAME'], /Program adı geçersiz/);
     assert.match(neden['ZZUP123456'], /aktarım artığı/);
     assert.match(neden['BIG-1'], /çok büyük/);
     assert.match(neden['BIN-1'], /ikili/);
@@ -99,7 +99,7 @@ test('plan: torna envanteri tazelenir (matris hemen dogru), SHA\'lar islenir', a
     const inv = t.library.db.getInventory('CNC-08');
     assert.equal(inv.length, 12);
     assert.equal(inv.find((e) => e.name === 'NEW-1').sha256, sha256(A));
-    assert.equal(inv.find((e) => e.name === 'BAD NAME').sha256, null, 'indirilmeyenin SHA\'si yok');
+    assert.equal(inv.find((e) => e.name === 'BAD*NAME').sha256, null, 'indirilmeyenin SHA\'si yok');
     assert.equal(t.library.db.getScan('CNC-08').status, 'tamam');
     assert.deepEqual(t.library.db.getFolders('CNC-08'), ['AA', 'MUSTERI_B']);
     const durum = Object.fromEntries(t.library.compareMachine('CNC-08').entries.map((e) => [`${e.customer}/${e.name}`, e.status]));

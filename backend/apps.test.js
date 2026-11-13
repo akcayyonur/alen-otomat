@@ -38,7 +38,7 @@ test('her uygulamanin adresi var ve benzersiz', () => {
 test('planlama sekmeleri: izleyici yalniz okunan bolumleri gorur, operator fabrika PC\'sinin bolumlerini, admin hepsini', () => {
   assert.deepEqual(tabsForUser(VIEWER), ['tezgahbasi', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari']);
   assert.deepEqual(tabsForUser(OPERATOR), ['tezgahbasi', 'paketleme', 'isemirleri', 'gkk', 'ilkonay', 'olcuraporlari', 'programlar']);
-  assert.equal(tabsForUser(ADMIN).length, 17, 'admin her sekmeyi gorur (fiyat, numune, hurda, olcucihazlari, teknikresim dahil)');
+  assert.equal(tabsForUser(ADMIN).length, 18, 'admin her sekmeyi gorur (fiyat, numune, hurda, olcucihazlari, bakim, teknikresim dahil)');
   assert.deepEqual(tabsForUser(ADMIN).slice(0, 4), ['tezgahbasi', 'paketleme', 'hurda', 'isemirleri']);
   assert.ok(tabsForUser(ADMIN).includes('fiyat'));
   for (const gizli of ['paketleme', 'verimlilik', 'cizelgeleme', 'hammadde', 'urunler', 'siparisler', 'programlar', 'fiyat']) {

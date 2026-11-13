@@ -113,7 +113,7 @@ export async function renderMaterial(host) {
           const yazabilir = canWrite('hammadde');
           return `<tr data-no="${escapeHtml(r.no)}"><td>${done || !yazabilir ? '' : `<input type="checkbox" data-role="pick" aria-label="${escapeHtml(r.no)} seç"${st.selected.has(r.no) ? ' checked' : ''}>`}</td>` +
             `<td class="mono"><b>${escapeHtml(r.no)}</b></td><td>${escapeHtml(dateTimeText(r.finishedAt))}</td><td class="mono">${escapeHtml(r.machineId)}</td>` +
-            `<td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}${materialFlag(r)}</td><td class="num">${fmtNum(r.produced)}</td>` +
+            `<td class="prod-cell"><span class="mono">${escapeHtml(r.stockCode)}</span> <span class="prod-name"${truncCell(r.productName)}>${cellText(r.productName)}</span></td><td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}${materialFlag(r)}</td><td class="num">${fmtNum(r.produced)}</td>` +
             `<td class="num"><b>${kg(r.kg)}</b></td><td class="num">${r.bars == null ? cellText(null) : fmtDec(r.bars, 2)}</td><td class="num">${kg(r.scrapKg)}</td>` +
             `<td>${done ? `${chip('ok', '✓', 'girildi')} ${r.fis.docNo ? `<span class="mono">${escapeHtml(r.fis.docNo)}</span>` : ''}<br><small class="hint">${kg(r.fis.kg)} kg</small>` : chip('none', '◔', 'bekliyor')}</td>` +
             `<td class="nowrap">${!yazabilir ? '' : done ? '<button type="button" class="icon-btn icon-btn-sm" data-act="undo">Geri al</button>' : '<button type="button" class="icon-btn icon-btn-sm" data-act="mark-one">Girildi…</button>'}` +
@@ -121,7 +121,7 @@ export async function renderMaterial(host) {
         }).join('') + '</tbody></table></div>') +
       (d.inProgress.length === 0 ? '' :
         '<h4 class="sub">Üretimdeki iş emirleri (henüz fiş yok)</h4><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Tezgah</th><th>Ürün</th><th>Hammadde</th><th class="num">Şimdiye kadar adet</th><th class="num">Sarfiyat (kg)</th></tr></thead><tbody>' +
-        d.inProgress.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td>` +
+        d.inProgress.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td class="prod-cell"><span class="mono">${escapeHtml(r.stockCode)}</span> <span class="prod-name"${truncCell(r.productName)}>${cellText(r.productName)}</span></td>` +
           `<td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}${materialFlag(r)}</td><td class="num">${fmtNum(r.produced)}</td><td class="num">${kg(r.kg)}</td></tr>`).join('') + '</tbody></table></div>')
     );
   }
@@ -163,7 +163,7 @@ export async function renderMaterial(host) {
       (n.rows.length === 0 ? '' :
         '<div class="table-wrap table-wrap-tall"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Durum</th><th>Tezgah</th><th>Ürün</th><th>Hammadde</th><th>Alternatif</th><th class="num">Hedef</th><th class="num">Kalan</th><th class="num">İhtiyaç (kg)</th><th class="num">Çubuk</th><th>Termin</th></tr></thead><tbody>' +
         n.rows.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td>${r.status === 'uretimde' ? chip('info', '▶', 'üretimde') : chip('none', '◔', 'planlandı')}</td><td class="mono">${escapeHtml(r.machineId)}</td>` +
-          `<td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}</td><td class="mono trunc"${truncCell(r.altMaterial)}>${cellText(r.altMaterial)}</td>` +
+          `<td class="prod-cell"><span class="mono">${escapeHtml(r.stockCode)}</span> <span class="prod-name"${truncCell(r.productName)}>${cellText(r.productName)}</span></td><td class="mono trunc"${truncCell(r.material)}>${cellText(r.material)}</td><td class="mono trunc"${truncCell(r.altMaterial)}>${cellText(r.altMaterial)}</td>` +
           `<td class="num">${fmtNum(r.targetQty)}</td><td class="num">${fmtNum(r.remaining)}</td><td class="num"><b>${kg(r.kg)}</b></td><td class="num">${r.bars == null ? cellText(null) : fmtDec(r.bars, 2)}</td><td>${dateText(r.dueDate)}</td></tr>`).join('') + '</tbody></table></div>')
     );
   }

@@ -84,7 +84,7 @@ export async function renderEfficiency(host) {
       warnings(d.warnings) +
       (d.atRisk.length
         ? '<h4 class="sub">Termin riski olan iş emirleri</h4><div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>İş emri</th><th>Tezgah</th><th>Ürün</th><th class="num">Kalan</th><th>Termin</th><th>Tahmini bitiş</th></tr></thead><tbody>' +
-          d.atRisk.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td class="trunc"${truncCell(r.productName)}><span class="mono">${escapeHtml(r.stockCode)}</span> ${cellText(r.productName)}</td><td class="num">${fmtNum(r.remaining)}</td><td>${dateText(r.dueDate)}</td><td>${escapeHtml(dateTimeText(r.etaMs))} ${chip('bad', '▲', 'termin riski')}</td></tr>`).join('') + '</tbody></table></div>'
+          d.atRisk.map((r) => `<tr><td class="mono"><b>${escapeHtml(r.no)}</b></td><td class="mono">${escapeHtml(r.machineId)}</td><td class="prod-cell"><span class="mono">${escapeHtml(r.stockCode)}</span> <span class="prod-name"${truncCell(r.productName)}>${cellText(r.productName)}</span></td><td class="num">${fmtNum(r.remaining)}</td><td>${dateText(r.dueDate)}</td><td>${escapeHtml(dateTimeText(r.etaMs))} ${chip('bad', '▲', 'termin riski')}</td></tr>`).join('') + '</tbody></table></div>'
         : '') +
       (d.days.length === 0 && d.machines.every((m) => m.efficiency == null) ? '' :
         '<div class="charts">' +
@@ -100,7 +100,7 @@ export async function renderEfficiency(host) {
         (d.products.filter((p) => p.efficiency != null).length === 0 ? '' :
           `<figure class="chart"><figcaption>Ürün bazında verimlilik<span class="unit">adede göre ilk ${Math.min(10, d.products.filter((p) => p.efficiency != null).length)}</span></figcaption><div class="chart-host" data-role="products"></div></figure>`) +
         '<div class="table-wrap"><table class="tbl tbl-pl"><thead><tr><th>Ürün</th><th class="num">Ayrılan (sa)</th><th class="num">Adet</th><th class="num">Planlanan (sn)</th><th class="num">Ölçülen çevrim (sn)</th><th class="num">Gerçekleşen (sn)</th><th>Verimlilik</th><th class="num">A</th><th class="num">P</th><th></th></tr></thead><tbody>' +
-        d.products.map((p) => `<tr><td class="trunc"${truncCell(p.productName)}><span class="mono"><b>${escapeHtml(p.stockCode)}</b></span> ${cellText(p.productName)}</td><td class="num">${hours(p.allottedSec)}</td><td class="num">${fmtNum(p.qty)}</td><td class="num">${p.plannedSec == null ? cellText(null) : fmtDec(p.plannedSec, 1)}</td>` +
+        d.products.map((p) => `<tr><td class="prod-cell"><span class="mono"><b>${escapeHtml(p.stockCode)}</b></span> <span class="prod-name"${truncCell(p.productName)}>${cellText(p.productName)}</span></td><td class="num">${hours(p.allottedSec)}</td><td class="num">${fmtNum(p.qty)}</td><td class="num">${p.plannedSec == null ? cellText(null) : fmtDec(p.plannedSec, 1)}</td>` +
           `<td class="num">${p.measuredCycleSec == null ? cellText(null) : fmtDec(p.measuredCycleSec, 1)}</td><td class="num">${p.realizedSec == null ? cellText(null) : fmtDec(p.realizedSec, 1)}</td><td>${effCell(p.efficiency)}</td><td class="num">${pct(p.availability)}</td><td class="num">${pct(p.performance)}</td>` +
           `<td class="nowrap">${p.suggestion ? `<button type="button" class="icon-btn icon-btn-sm" data-act="suggest" data-code="${escapeHtml(p.stockCode)}" data-sec="${p.suggestion.plannedSec}">Planlanan süreyi ${fmtDec(p.suggestion.plannedSec, 1)} sn yap…</button>` : ''}</td></tr>`).join('') + '</tbody></table></div>') +
       '<h4 class="sub">Gün bazında (tüm tezgahlar)</h4>' +
@@ -171,7 +171,7 @@ export async function renderEfficiency(host) {
         const eff = planned ? (x.qty * planned) / x.allottedSec : null;
         const avail = x.observedSec > 0 ? x.runningSec / x.observedSec : null;
         const perf = planned && x.cycleSum > 0 ? (planned * x.cycleN) / x.cycleSum : null;
-        return `<tr><td>${escapeHtml(dayText(x.date))}</td><td>${escapeHtml(x.label)}</td><td class="mono">${escapeHtml(x.machineId)}</td><td class="mono">${escapeHtml(x.woNo)}</td><td class="trunc"${truncCell(x.productName)}><span class="mono">${escapeHtml(x.stockCode)}</span> ${cellText(x.productName)}</td>` +
+        return `<tr><td>${escapeHtml(dayText(x.date))}</td><td>${escapeHtml(x.label)}</td><td class="mono">${escapeHtml(x.machineId)}</td><td class="mono">${escapeHtml(x.woNo)}</td><td class="prod-cell"><span class="mono">${escapeHtml(x.stockCode)}</span> <span class="prod-name"${truncCell(x.productName)}>${cellText(x.productName)}</span></td>` +
           `<td class="num">${hours(x.allottedSec)}</td><td class="num">${planned == null ? cellText(null) : fmtDec(planned, 1)}</td><td class="num">${planned ? fmtNum(Math.round(x.allottedSec / planned)) : cellText(null)}</td><td class="num"><b>${fmtNum(x.qty)}</b>${x.approxQty ? ' *' : ''}</td>` +
           `<td>${effCell(eff)}</td><td class="num">${pct(avail)}</td><td class="num">${pct(perf)}</td>` +
           `<td class="num">${x.grossKg == null ? cellText(null) : kgText(x.qty * x.grossKg)}</td><td class="num">${x.netKg == null ? cellText(null) : kgText(x.qty * x.netKg)}</td><td class="num">${x.grossKg == null || x.netKg == null ? cellText(null) : kgText(x.qty * (x.grossKg - x.netKg))}</td></tr>`;

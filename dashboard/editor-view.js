@@ -14,7 +14,7 @@ import { escapeHtml, num } from './format.js';
 import { api, post, userName, kb, programLabel, folderLabel, announce, byLocked } from './lib-common.js';
 import { diffTable } from './diff-render.js';
 
-const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
+const NAME_RE = /^[A-Za-z0-9_.() -]{1,40}$/;
 const FORBIDDEN_FOLDER = /[\\/:*?"<>|\u0000-\u001f]/;
 const MAX_BYTES = 1_000_000;
 
@@ -257,7 +257,7 @@ function metaProblem() {
     return 'Müşteri klasörü adı geçersiz (\\ / : * ? " < > | karakterleri ve 64 karakterden uzun ad olmaz).';
   }
   if (n === '') return null;
-  if (!NAME_RE.test(n) || n === '.' || n === '..') return 'Program adı geçersiz: İngilizce harf, rakam, "-", "_" ve "." kullanılabilir (en fazla 40 karakter).';
+  if (!NAME_RE.test(n) || n === '.' || n === '..') return 'Program adı geçersiz: harf, rakam, boşluk, "-", "_", "." ve "()" kullanılabilir (en fazla 40 karakter).';
   if (/^zz(up|rb)/i.test(n)) return '"ZZUP" ve "ZZRB" ile başlayan adlar aktarım için ayrılmıştır.';
   if (ed.existing.has(keyOf(c, n))) return `"${programLabel(c, n)}" kütüphanede zaten var. Var olan programı değiştirmek için programı açıp "Düzenle"yi kullanın; yeni program için başka ad seçin.`;
   return null;

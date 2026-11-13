@@ -222,7 +222,7 @@ test('HTTP: editor kaydi 201/200, 409 govdesinde code, tam onizleme ?full=1, 400
       assert.equal(tam.body.lineEnding, 'LF');
       assert.equal(tam.body.encodingId, 'utf-8');
 
-      assert.equal((await post(j, '/api/library/programs/text', { customer: 'AA', name: 'BAD NAME', text: 'x' })).status, 400);
+      assert.equal((await post(j, '/api/library/programs/text', { customer: 'AA', name: 'BAD*NAME', text: 'x' })).status, 400);
       assert.equal((await post(j, '/api/library/programs/text', { customer: 'AA', name: 'OK2', text: 'x'.repeat(MAX_PROGRAM_BYTES + 10) })).status, 413);
       const bozuk = await j('/api/library/programs/text', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{bozuk' });
       assert.equal(bozuk.status, 400);

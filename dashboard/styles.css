@@ -380,6 +380,10 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 .tbl td.num,.tbl th.num{text-align:right;font-variant-numeric:tabular-nums;}
 .tbl tbody tr:hover{background:var(--surface-2);}
 .tbl td.trunc{max-width:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* Urun kodu + adi tek hucrede: kod HICBIR ZAMAN kirpilmez, yalniz ad (gerekirse) kisalir (sabit max-width ile -
+   .trunc'taki max-width:1px hilesi TUM hucreyi kirpiyordu, dar sutunda kod bile "SR018..." gibi kesiliyordu). */
+.prod-cell{white-space:nowrap;}
+.prod-cell .prod-name{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;}
 .raw .fg-row dd{font-size:12.5px;}
 
 /* ---------- ayarlar: surucu kartlari ---------- */
@@ -513,6 +517,15 @@ details.grp{border:1px solid var(--line);border-radius:14px;margin:6px 0;backgro
 details.grp>summary{cursor:pointer;padding:8px 11px;font-size:13px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;}
 details.grp[open]>summary{border-bottom:1px solid var(--line);}
 .grp-body{padding:4px 8px 8px;max-height:420px;overflow:auto;}
+/* Bakım ekranı (planning-maintenance.js): dış grup (makine tipi) iç içe makine kartları taşır, 420px'e kırpılmasın. */
+.mnt-grp>.grp-body{max-height:none;overflow:visible;}
+.mnt-asset{margin:6px 0;}
+.mnt-item-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:7px 4px;border-top:1px solid var(--line);}
+.mnt-item-row:first-child{border-top:none;}
+.mnt-item-desc{flex:1 1 220px;min-width:0;}
+.mnt-item-meta{font-size:12px;color:var(--ink-soft);}
+.mnt-months{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 10px;margin:6px 0;}
+.mnt-months label{display:flex;align-items:center;gap:6px;font-size:13px;}
 
 /* gonderme penceresi */
 dialog.modal{
@@ -637,7 +650,7 @@ dialog.modal.modal-wide{width:min(1120px,96vw);}
 }
 .tbl-prod td.prod-none{color:var(--ink-faint);font-size:11.5px;font-weight:400;}
 .pg-search{min-width:15em;flex:1 1 15em;}
-.grp mark{background:color-mix(in srgb,var(--st-idle) 38%,transparent);color:inherit;padding:0 2px;border-radius:6px;font-weight:700;}
+mark{background:color-mix(in srgb,var(--st-idle) 38%,transparent);color:inherit;padding:0 2px;border-radius:6px;font-weight:700;}
 .prod-sub-h{margin:1.1em 0 .4em;font-size:13.5px;}
 .prod-runs-head{align-items:center;margin-top:.4em;}
 .prod-runs-head .prod-sub-h{margin:0;}
@@ -783,6 +796,9 @@ dialog.pl-form-dlg .modal-body{background:var(--surface-2);overflow:hidden;}
 /* Numune takip: reddedildi (kirmizi) - pl-cancelled'dan AYRI (o ustu-cizili/soluk "iptal" icindir, bu "onaylanmadi"). */
 .tbl-pl tbody tr.pl-rejected{background:rgba(208,59,59,.08);}
 .tbl-pl tbody tr.pl-rejected:hover{background:rgba(208,59,59,.08);}
+/* Siparisler: aramanin eslestigi urun satiri (kod/ad icindeki <mark> tek basina kucuk kalabilir, satir da hafifce vurgulanir). */
+.tbl-pl tbody tr.pl-hit{background:var(--accent-soft);}
+.tbl-pl tbody tr.pl-hit:hover{background:var(--accent-soft);}
 /* Numune formu (EYS.FR.012, A4 dikey): .pl-form'un genel sayfa cercevesini kullanir, kendi satir/deger tablosu. */
 .pl-nf-t{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px;}
 .pl-nf-t th,.pl-nf-t td{border:1px solid #111;padding:5px 8px;text-align:left;vertical-align:top;}

@@ -704,7 +704,14 @@ mark{background:color-mix(in srgb,var(--st-idle) 38%,transparent);color:inherit;
 .pl-f-table th,.pl-f-table td{border:1px solid #111;padding:0 4px;height:25px;font-size:9px;text-align:center;font-weight:700;}
 .pl-f-table td{height:26px;}
 .pl-f-foot{margin:8px 0 0;font-size:9px;color:#555;text-align:right;}
-dialog.pl-form-dlg .modal-body{background:var(--surface-2);overflow:hidden;}
+/* Yazdirma onizlemesi olan pencereler (numune/hurda/kart/paketleme formu/fiyat/olcu/liste yazdirma): govde normal
+   kaydirir (.modal-body'nin varsayilan overflow:auto'su yeterli) - once BURADA da overflow:hidden idi, uzun
+   onizlemeler (ornegin Urun tanitim karti) asagi kaydirilamiyor, icerik kesiliyordu (2026-11-13'te kullanici
+   bildirdi). Yalniz .pl-f-pdf'in (is emri formu + PDF, planning-wo-form.js) KENDI ic kaydirmasi olan bir
+   iframe'i var - oradaki govde CIDDEN overflow:hidden olmali ki tek bir kaydirma sahibi kalsin (asagidaki
+   .pl-form-dlg-pdf, o TEK dialog icin, DAHA OZGUL secici ile bu varsayilani geri alir). */
+dialog.pl-form-dlg .modal-body{background:var(--surface-2);}
+dialog.pl-form-dlg-pdf .modal-body{overflow:hidden;}
 .pl-form-actions{justify-content:flex-end;margin:0;}
 
 @media print {

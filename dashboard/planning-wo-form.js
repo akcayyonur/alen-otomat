@@ -18,7 +18,9 @@ import { printUrl } from './planning-drawings.js';
  */
 export async function openWorkOrderForm(no, { onEdit = null } = {}) {
   const m = openModal({ title: `İş emri formu · ${no}`, wide: true });
-  m.dlg.classList.add('pl-form-dlg');
+  // pl-form-dlg-pdf: yalnız bu pencerede gövde overflow:hidden kalır, çünkü PDF iframe'in (.pl-f-pdf) KENDİ iç
+  // kaydırması var (styles.css'teki açıklamaya bkz.) - diğer pl-form-dlg pencereleri normal kaydırır.
+  m.dlg.classList.add('pl-form-dlg', 'pl-form-dlg-pdf');
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
   let w;
   try {

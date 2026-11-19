@@ -70,7 +70,7 @@ const productText = (x) => `<b>${escapeHtml(x.stockCode)}</b>${x.fields?.length 
 function refreshResultHtml(r) {
   const t = r.totals;
   const c = r.changes;
-  const changed = t.lines.added + t.lines.updated + t.products.added + t.products.updated + t.gkk.added + t.gkk.updated + t.approvals.added + t.approvals.updated
+  const changed = t.lines.added + t.lines.updated + t.lines.removed + t.products.added + t.products.updated + t.gkk.added + t.gkk.updated + t.approvals.added + t.approvals.updated
     + t.stock.added + t.stock.updated + t.stock.removed;
   const checked = r.files.length;
   let head;
@@ -79,6 +79,7 @@ function refreshResultHtml(r) {
   else if (changed === 0 && r.failed === 0) head = `<div class="notice"><b>${n(r.processed)} dosya işlendi</b>, ama uygulamadaki kayıtlarda değişiklik çıkmadı.</div>`;
   else head = `<div class="notice"><b>${n(r.processed)} dosya işlendi.</b> ${[
     t.lines.added + t.lines.updated > 0 ? `Siparişler: <b>${n(t.lines.added)}</b> yeni satır, <b>${n(t.lines.updated)}</b> güncellendi.` : '',
+    t.lines.removed > 0 ? `<b>${n(t.lines.removed)}</b> sipariş satırı artık Mikro'da yok ("tam döküm" ile listeden kaldırıldı).` : '',
     t.products.added + t.products.updated > 0 ? `Ürün kartları: <b>${n(t.products.added)}</b> yeni, <b>${n(t.products.updated)}</b> güncellendi.` : '',
     t.gkk.added + t.gkk.updated > 0 ? `GKK rapor no: <b>${n(t.gkk.added)}</b> yeni, <b>${n(t.gkk.updated)}</b> güncellendi.` : '',
     t.approvals.added + t.approvals.updated > 0 ? `İlk onay: <b>${n(t.approvals.added)}</b> yeni, <b>${n(t.approvals.updated)}</b> güncellendi.` : '',

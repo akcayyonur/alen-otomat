@@ -45,12 +45,17 @@ function listBlock(title, items, total, fmt) {
 function mikroResultHtml(r) {
   const t = r.totals;
   const c = r.changes;
-  const changed = t.lines.added + t.lines.updated + t.products.added + t.products.updated;
+  const changed = t.lines.added + t.lines.updated + t.lines.removed + t.products.added + t.products.updated;
   let head;
   if (r.rows === 0) head = '<div class="notice notice-sim"><b>Mikro\'dan hiç satır gelmedi.</b> SIPARISLER sorgusu boş döndü.</div>';
   else if (changed === 0) head = `<div class="notice"><b>${n(r.rows)} satır okundu</b>, uygulamadaki kayıtlarda değişiklik çıkmadı.</div>`;
   else head = `<div class="notice"><b>${n(r.rows)} satır okundu.</b> ${[
     t.lines.added + t.lines.updated > 0 ? `Siparişler: <b>${n(t.lines.added)}</b> yeni satır, <b>${n(t.lines.updated)}</b> güncellendi.` : '',
+    // staleMarked (2026-11-19, kullanici bulgusu): bu cekilista hic gorunmeyen, daha once var olan satirlar -
+    // Mikro'da GERCEKTEN silinmis demektir (SIPARIS_SQL tarih/LIMIT filtresi tasimiyor, tam dokum). Liste ekraninda
+    // (searchOrders stale=0 filtreler) artik gorunmezler; itemized liste yok, yalniz sayi (hangi satirlar oldugu
+    // onemli degil, "N satir artik yok" bilgisi yeterli).
+    t.lines.removed > 0 ? `<b>${n(t.lines.removed)}</b> sipariş satırı artık Mikro'da yok (silinmiş görünüyor, listeden kaldırıldı).` : '',
     t.products.added + t.products.updated > 0 ? `Ürün kartları: <b>${n(t.products.added)}</b> yeni, <b>${n(t.products.updated)}</b> güncellendi.` : '',
   ].filter(Boolean).join(' ')}</div>`;
 

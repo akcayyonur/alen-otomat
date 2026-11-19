@@ -8,6 +8,7 @@
 ;     runtime\node.exe        gomulu Node (makinede Node kurulu olmasi gerekmez)
 ;     runtime\python\         gomulu Python + OR-Tools (Cizelgeleme onerisi; backend bunu ihtiyac
 ;                              olunca child_process ile cagirir, surekli calisan hizmet degildir)
+;     runtime\tesseract\      gomulu Tesseract OCR + tur/eng/osd (taranmis siparis PDF'leri)
 ;     backend\ shared\ dashboard\ config\ optimizer\   proje kodu
 ;     agent\                  syntec-agent.exe + Syntec DLL'leri, 11TB ailesi (BIRLIKTE - bolunmez)
 ;     agent22\                ayni ajan + 22TB ailesinin Syntec paketi (varsa)

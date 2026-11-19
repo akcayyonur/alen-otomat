@@ -24,6 +24,23 @@ export const ACTIVE = Object.freeze(['aktif', 'pasif']);
 /** Hesaplanan durum (DB'de saklanmaz): `null` = periyot tanımsız/okunamıyor. */
 export const DUE_STATUS = Object.freeze(['tamam', 'yaklasiyor', 'gecikti']);
 
+/**
+ * OTOMATİK TİK (2026-11-19, kullanıcı bulgusu): usta bu ekranı GÜNLÜK KULLANMIYOR — tikler yalnız DENETİM
+ * geldiğinde doldurulup gösteriliyor. Kullanıcı bunu otomatikleştirmek istedi: periyodu gelince sistem
+ * KENDİSİ, HER MAKİNE İÇİN BAĞIMSIZ RASTGELE bir saatte "kontrol" tik'i atsın; istenirse kapatılabilsin.
+ * `AUTO_PERSON` kaydın `person`/`created_by` alanına yazılır (ayrı bir sütun İCAT EDİLMEDİ) — admin'in kendi
+ * ekranında hangi tiklerin otomatik olduğunu ayırt edebilmesi için (bu ekranın bir yazdırma/form çıkışı YOK,
+ * bu yüzden "görünmesi" bir sorun değil, bkz. CLAUDE.md §6 "Bakım").
+ */
+export const AUTO_PERSON = 'Otomatik';
+const AUTO_SETTING_KEY = 'bakim.otomatikTik';
+/** Zaten gecikmiş (grace=0, ör. günlük/vardiya) bir kalem için "şimdiden ne kadar sonraya kadar" rastgele yakalama penceresi. */
+const AUTO_CATCHUP_MAX_MS = 6 * 3_600_000;
+/** Ateşlenmiş kuyruk satırları bu kadar süre sonra silinir (diğer veri saklama sürelerinin BENZERİ — gerçek bilgi `maintenance_logs`'ta kalıcı kalır, bu yalnız planlama kuyruğu). */
+const AUTO_FIRED_RETENTION_MS = 400 * 86_400_000;
+/** Bir pencere için planlanıp hiç ATEŞLENMEDEN kalan (ör. usta elle tiklediği için o pencere artık geçersiz olan) satırlar bu kadar sonra temizlenir. */
+const AUTO_ORPHAN_RETENTION_MS = 30 * 86_400_000;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS maintenance_types (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +105,16 @@ CREATE TABLE IF NOT EXISTS maintenance_logs (
   created_by  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_maint_logs_asset_item ON maintenance_logs (asset_id, item_id, done_on);
+CREATE TABLE IF NOT EXISTS maintenance_auto_queue (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id   INTEGER NOT NULL REFERENCES maintenance_assets(id),
+  item_id    INTEGER NOT NULL REFERENCES maintenance_items(id),
+  due_at     INTEGER NOT NULL,
+  target_at  INTEGER NOT NULL,
+  fired_at   INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_maint_auto_queue_window ON maintenance_auto_queue (asset_id, item_id, due_at);
 `;
 
 /* --------------------------------------------------------------------------- durum hesabı */
@@ -677,6 +704,70 @@ export class Maintenance {
       out.push({ ...type, items, assets, worstStatus: worstStatus(assets.map((a) => a.worstStatus)) });
     }
     return { types: out };
+  }
+
+  /* --------------------------------------------------------------------------------------------- otomatik tik */
+
+  /** Otomatik tik AÇIK mı — ayar hiç ayarlanmamışsa (ilk kurulum) VARSAYILAN AÇIKTIR (özelliğin asıl amacı bu). */
+  autoTickEnabled() {
+    return this.planning.db.getSetting(AUTO_SETTING_KEY) !== '0';
+  }
+
+  /** Bakım ekranının kendi üst çubuğundan (admin) çağrılır — `routes.js`'te kayıtsız bırakıldı, admin'e düşer. */
+  setAutoTickEnabled(on) {
+    this.planning.db.setSetting(AUTO_SETTING_KEY, on ? '1' : '0');
+    return { enabled: this.autoTickEnabled() };
+  }
+
+  /**
+   * `server.js`'teki periyodik bir `setInterval` tarafından çağrılır (bkz. CLAUDE.md §6 "Bakım: otomatik tik").
+   * Anahtar KAPALIYSA hiçbir şey yapmaz (ne yeni bir rastgele an PLANLANIR ne de önceden planlanmış biri
+   * ATEŞLENİR — kapatınca GERÇEKTEN durmalı). Her (makine, kalem) çifti kendi kuyruk satırını taşır; HER MAKİNE
+   * İÇİN BAĞIMSIZ bir rastgele an seçilir (`random`, testlerde enjekte edilebilir — `schedule.js#suggest({run})`
+   * ile AYNI ilke). Zaten `dueStatus()`'un var olan "yaklaşıyor/gecikti" mantığına biner: bir kalem yalnız KENDİ
+   * grace penceresi açıldığında (ör. haftalıkta son 2 gün) ya da zaten gecikmişse ele alınır — ayrı bir "tüm
+   * periyot" penceresi İCAT EDİLMEDİ.
+   * @returns {{scheduled:number, fired:number}}
+   */
+  runAutoTick({ now = Date.now(), random = Math.random } = {}) {
+    if (!this.autoTickEnabled()) return { scheduled: 0, fired: 0 };
+    let scheduled = 0;
+    let fired = 0;
+    const assets = this.db.prepare("SELECT * FROM maintenance_assets WHERE active = 'aktif'").all().map((r) => this.#asset(r));
+    const itemsByType = new Map();
+    for (const asset of assets) {
+      if (!itemsByType.has(asset.typeId)) {
+        itemsByType.set(asset.typeId, this.listItems(asset.typeId).filter((it) => it.active === 'aktif' && PERIOD_UNITS.includes(it.periodUnit)));
+      }
+      for (const item of itemsByType.get(asset.typeId)) {
+        const doneAtList = this.db.prepare(
+          "SELECT done_on FROM maintenance_logs WHERE asset_id = ? AND item_id = ? AND kind = 'kontrol' ORDER BY done_on ASC",
+        ).all(asset.id, item.id).map((r) => Number(r.done_on));
+        const referenceAt = Math.max(asset.createdAt, item.createdAt);
+        const due = nextDueAt(item, doneAtList, { referenceAt, now });
+        if (due == null || dueStatus(due, item.periodUnit, now) === 'tamam') continue; // henuz sira gelmedi
+        const existing = this.db.prepare('SELECT * FROM maintenance_auto_queue WHERE asset_id = ? AND item_id = ? AND due_at = ?').get(asset.id, item.id, due);
+        if (!existing) {
+          // bu pencere icin ilk kez goruluyor: HER MAKINE icin BAGIMSIZ rastgele bir an sec.
+          const windowEnd = due > now ? due : now + AUTO_CATCHUP_MAX_MS;
+          const target = now + Math.floor(random() * Math.max(1, windowEnd - now));
+          try {
+            this.db.prepare('INSERT INTO maintenance_auto_queue (asset_id, item_id, due_at, target_at, created_at) VALUES (?,?,?,?,?)')
+              .run(asset.id, item.id, due, target, now);
+            scheduled += 1;
+          } catch { /* ayni (makine,kalem,pencere) icin es zamanli ikinci bir cagri - benzersizlik index'i reddetti, yoksay */ }
+        } else if (!existing.fired_at && Number(existing.target_at) <= now) {
+          this.addLog(asset.id, { itemId: item.id, kind: 'kontrol' }, { by: AUTO_PERSON, now });
+          this.db.prepare('UPDATE maintenance_auto_queue SET fired_at = ? WHERE id = ?').run(now, existing.id);
+          fired += 1;
+        }
+      }
+    }
+    // temizlik: atesleneni uzun sure sakla (ateslenmemis bilgi degil), ATESLENMEDEN kalan (ustanin elle tikledigi
+    // icin o pencerenin due_at'i artik gecersiz oldugu — hic yeniden sorgulanmayacak) satirlari daha cabuk at.
+    this.db.prepare('DELETE FROM maintenance_auto_queue WHERE fired_at IS NOT NULL AND fired_at < ?').run(now - AUTO_FIRED_RETENTION_MS);
+    this.db.prepare('DELETE FROM maintenance_auto_queue WHERE fired_at IS NULL AND created_at < ?').run(now - AUTO_ORPHAN_RETENTION_MS);
+    return { scheduled, fired };
   }
 
   /* ---------------------------------------------------------------------------------------- Excel'den ilk kurulum */

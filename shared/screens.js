@@ -13,16 +13,19 @@ export const SCREENS = Object.freeze([
   { id: 'paketleme', label: 'Paketleme', app: 'planlama', writable: true },
   { id: 'hurda', label: 'Hurda girişi', app: 'planlama', writable: true },
   { id: 'isemirleri', label: 'İş emirleri', app: 'planlama', writable: false },
+  { id: 'siparisfisi', label: 'Sipariş fişi', app: 'planlama', writable: true }, // atolye malzeme/takim talebi, musteri siparisiyle (siparisler) ilgisi yok
   { id: 'gkk', label: 'GKK rapor no', app: 'planlama', writable: true },
   { id: 'ilkonay', label: 'İlk onay raporu', app: 'planlama', writable: true },
   { id: 'numune', label: 'Numune takip', app: 'planlama', writable: true },
   { id: 'olcuraporlari', label: 'Ölçü raporları', app: 'planlama', writable: false },
   { id: 'olcucihazlari', label: 'Ölçüm cihazları takip', app: 'planlama', writable: true },
   { id: 'bakim', label: 'Bakım', app: 'planlama', writable: true },
+  { id: 'takimtakip', label: 'Takım ve Pens Takip', app: 'planlama', writable: true },
   { id: 'programlar', label: 'Program eşleme', app: 'planlama', writable: true },
   { id: 'urunler', label: 'Ürün kartları', app: 'planlama', writable: true },
   { id: 'teknikresim', label: 'Teknik resim takip', app: 'planlama', writable: true },
   { id: 'siparisler', label: 'Siparişler', app: 'planlama', writable: false }, // yalniz Excel/Mikro'dan gelir, elle satır yazma yok
+  { id: 'yenisiparis', label: 'Yeni siparişler', app: 'planlama', writable: true }, // mail/PDF'ten TASLAK cikarma + onay; Mikro'ya YAZMAZ (henuz)
   { id: 'hammadde', label: 'Hammadde', app: 'planlama', writable: true },
   { id: 'verimlilik', label: 'Verimlilik', app: 'planlama', writable: false }, // rapor; öneri "ürünler" ekranına yazar
   { id: 'cizelgeleme', label: 'Çizelgeleme', app: 'planlama', writable: true },

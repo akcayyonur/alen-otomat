@@ -7,11 +7,37 @@
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
-import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, canWrite, rememberedPerson, rememberPerson, openListPrint, woStatusChip, truncCell } from './planning-common.js';
+import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, canWrite, rememberedPerson, rememberPerson, openListPrint, printModal, woStatusChip, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
 import { openGkkPicker } from './planning-gkk.js';
 
 const plainDate = (ms) => (ms ? new Date(ms).toLocaleDateString('tr-TR') : '');
+
+/**
+ * "İLK ONAY ETİKETİ" (2026-11-18, kullanıcı isteği): numara alınınca üretimden ayrılan 2 numune/ilk baskı
+ * parçasına yapıştırılan A5 yapışkan etiket — EYS.FR.013'ün KENDİ verisidir (ayrı bir kayıt/kod İCAT EDİLMEDİ),
+ * yalnız tek-kayıtlık görünümü farklı. Ürün Tanıtım Kartı'yla (`planning-card.js` `cardHtml`) AYNI A5 boyut ve
+ * `.pl-card`/`.pl-c-table`/`page:kart` CSS'i yeniden kullanılır — ayrı bir stil İCAT EDİLMEDİ.
+ * @param {{approvedOn?: number|null, code: string, customerCode?: string|null, woNo?: string|null, gkCode?: string|null, operator?: string|null, cncNo?: number|null}} a
+ */
+export function approvalLabelHtml(a) {
+  const row = (label, value) => `<tr><th scope="row">${label}</th><td>${value == null || value === '' ? '&nbsp;' : escapeHtml(String(value))}</td></tr>`;
+  return (
+    '<div class="pl-card">' +
+    '<div class="pl-c-head"><div class="pl-c-title">İLK ONAY ETİKETİ</div></div>' +
+    '<table class="pl-c-table"><tbody>' +
+    row('TARİH', plainDate(a.approvedOn)) +
+    row('İLK BASKI / NUMUNE NO', a.code) +
+    row('MÜŞTERİ ÜRÜN KODU', a.customerCode) +
+    row('İŞ EMRİ NO', a.woNo) +
+    row('GKK RAPOR NO', a.gkCode) +
+    row('OPERATÖR İSMİ', a.operator) +
+    row('CNC NO', a.cncNo) +
+    '</tbody></table>' +
+    `<p class="pl-c-foot">EYS.FR.013 · Sistemden basıldı ${escapeHtml(new Date().toLocaleString('tr-TR', { hour12: false }))}</p>` +
+    '</div>'
+  );
+}
 
 /** @param {HTMLElement} host */
 export function renderApprovals(host) {
@@ -97,6 +123,7 @@ export function renderApprovals(host) {
  */
 export async function createFirstApproval(woNo, onDone = () => {}) {
   const m = openModal({ title: `İlk onay numarası al · ${woNo}` });
+  m.dlg.classList.add('pl-form-dlg'); // basari ekranindaki etiketi yazdirabilmek icin (styles.css body.pl-printing)
   m.body.innerHTML = '<p class="empty">Yükleniyor…</p>';
   let w;
   try { w = await api(`/api/planning/work-orders/${encodeURIComponent(woNo)}`); } catch (err) { m.body.innerHTML = `<p class="notice notice-sim">Alınamadı: ${escapeHtml(err.message)}</p>`; return; }
@@ -124,12 +151,15 @@ export async function createFirstApproval(woNo, onDone = () => {}) {
     try {
       const a = await post('/api/planning/first-approvals', { woNo, person: form.elements.person.value, ...(have.length ? { again: true } : {}) });
       m.body.innerHTML =
-        '<div class="notice"><b>İlk onay numarası alındı</b></div>' +
-        `<p class="pl-bigcode">${escapeHtml(a.code)}</p>` +
-        `<p class="hint">Ürün <span class="mono">${escapeHtml(a.stockCode ?? '')}</span> · GK <span class="mono">${escapeHtml(a.gkCode ?? '—')}</span> · iş emri <span class="mono">${escapeHtml(a.woNo ?? '')}</span> · CNC ${a.cncNo ?? '—'} · ${escapeHtml(plainDate(a.approvedOn))}${a.operator ? ` · ${escapeHtml(a.operator)}` : ''}. ` +
-        'İş emrinin "ilk onay rapor no" alanına yazıldı; ölçüm raporuna/numuneye bu kodu yazın.</p>' +
-        '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="close">Tamam</button></div>';
+        '<div class="pl-form-actions">' +
+        `<div class="notice"><b>İlk onay numarası alındı:</b> <span class="mono">${escapeHtml(a.code)}</span></div>` +
+        '<p class="hint">İş emrinin "ilk onay rapor no" alanına yazıldı. Üretimden ayrılan 2 numune/ilk baskı parçasına bu etiketi yapıştırın.</p>' +
+        '<div class="dt-actions"><button type="button" class="icon-btn btn-primary" data-act="print">Yeniden yazdır</button><button type="button" class="icon-btn" data-act="close">Kapat</button></div>' +
+        '</div>' +
+        approvalLabelHtml(a);
+      m.body.addEventListener('click', (ev) => { if (ev.target.closest('[data-act="print"]')) printModal(); });
       onDone(a);
+      setTimeout(printModal, 80); // etiket çizildikten sonra çıktı doğrudan alınır (ürün tanıtım kartıyla AYNI desen)
     } catch (e2) {
       err.textContent = e2.message;
       err.hidden = false;

@@ -123,6 +123,8 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 }
 .mi-grp[open]>summary::before{transform:rotate(45deg);}
 .mi-grp-b{display:flex;flex-direction:column;}
+/* grup kapaliyken de alttaki ogede bekleyen bir sey oldugu belli olsun (2026-11-18, "bildirim gibi" istegi) */
+.mi-grp-dot{width:7px;height:7px;border-radius:50%;background:var(--st-alarm);display:inline-block;margin-left:auto;flex:0 0 auto;}
 
 .mi{
   width:100%;display:flex;align-items:center;gap:9px;
@@ -137,6 +139,8 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
 .mi-main{display:flex;flex-direction:column;min-width:0;flex:1;}
 .mi-name{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .mi-sub{font-family:var(--mono);font-size:11px;color:var(--ink-faint);}
+/* "Fiyat çalışması" bekleyen sayısı: gerçek bir bildirim değil, yalnız nav'da küçük bir rozet (2026-11-18 istegi). */
+.mi-badge{flex:0 0 auto;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--st-alarm);color:#fff;font-size:10.5px;font-weight:700;line-height:18px;text-align:center;}
 .mi-state{font-size:11px;font-weight:600;white-space:nowrap;}
 
 /* Durum noktasi: renk + ikon birlikte (renk tek basina degil) */
@@ -378,6 +382,7 @@ h1,h2,h3,h4{margin:0;letter-spacing:-.01em;}
   font-family:var(--font-cond);font-size:11px;letter-spacing:.07em;
   text-transform:uppercase;color:var(--ink-faint);font-weight:600;}
 .tbl td.num,.tbl th.num{text-align:right;font-variant-numeric:tabular-nums;}
+.tbl td.ctr,.tbl th.ctr{text-align:center;}
 .tbl tbody tr:hover{background:var(--surface-2);}
 .tbl td.trunc{max-width:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 /* Urun kodu + adi tek hucrede: kod HICBIR ZAMAN kirpilmez, yalniz ad (gerekirse) kisalir (sabit max-width ile -
@@ -671,6 +676,19 @@ mark{background:color-mix(in srgb,var(--st-idle) 38%,transparent);color:inherit;
 .pl-list li{margin:.25em 0;}
 .pl-wide{grid-column:1/-1;}
 .pl-picker{max-height:50vh;overflow:auto;margin-top:8px;}
+.pl-paste-area{min-height:140px;max-height:40vh;overflow:auto;border:1px dashed var(--line-strong);border-radius:14px;padding:12px;margin:.4em 0;font-size:13px;color:var(--ink-soft);}
+
+/* Fiyat çalışması: toplu PDF yükleme dropzone (2026-11-18) */
+.pl-drop{
+  display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;
+  min-height:64px;border:2px dashed var(--line-strong);border-radius:14px;padding:14px;margin:.6em 0;
+  color:var(--ink-soft);font-size:13.5px;cursor:pointer;background:var(--surface-2);
+}
+.pl-drop.is-over{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);}
+/* ana ekrana (dialog acilmadan) surukle-birak: tum listeyi hafifce vurgula */
+.pl-drop-over{outline:2px dashed var(--accent);outline-offset:-2px;border-radius:14px;}
+.pl-paste-area:empty::before{content:"Buraya yapıştırın (Ctrl+V)";}
+.pl-paste-area:focus{outline:2px solid var(--accent);outline-offset:2px;}
 .tbl-pl td{vertical-align:middle;}
 .tbl-pl tbody tr.is-selected{background:var(--accent-soft);}
 

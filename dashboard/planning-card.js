@@ -84,7 +84,7 @@ export function cardHtml(c) {
     stepRows(c.steps ?? emptySteps()) +
     rejectRow(!!c.reject) +
     '</tbody></table>' +
-    `<p class="pl-c-foot">Sistemden basıldı ${escapeHtml(new Date(when).toLocaleString('tr-TR', { hour12: false }))}${c.state === 'iptal' ? ' · İPTAL EDİLDİ' : ''}</p>` +
+    `<p class="pl-c-foot">EYS.FR.001 · Sistemden basıldı ${escapeHtml(new Date(when).toLocaleString('tr-TR', { hour12: false }))}${c.state === 'iptal' ? ' · İPTAL EDİLDİ' : ''}</p>` +
     '</div>'
   );
 }
@@ -119,6 +119,9 @@ export async function openIssueCard(woNo, onDone = null) {
     return;
   }
   // "Ek işlem var mı?" (2026-11-06, kullanıcı isteği): kart basmadan önce VAR/YOK açıkça seçilmeli - boş geçilemez.
+  // **2026-11-18'de DÜZELTİLDİ (kullanıcı isteği): "Ek işlem" YIKAMA/KURUTMA/TAVLAMA ile AYNI ŞEY DEĞİL** — bu
+  // kutular artık "Ek işlem var mı?" cevabından TAMAMEN BAĞIMSIZ, her zaman işaretlenebilir ("Yok" seçiliyken de).
+  // Eskiden "Yok" seçilince kutular kilitlenip sıfırlanıyordu; bu YANLIŞTI, kaldırıldı.
   // Bu ürünün geçmiş kartlarında yıkama/kurutma/tavlama'ya GİDECEK işaretlenmişse (cardStepDefaults) önerilen
   // cevap otomatik VAR + o kutular tikli gelir (ör. SR001.001 hep yıkanıyorsa kutu hep tikli gelsin), kullanıcı
   // isterse kapatabilir; geçmiş yoksa (ilk kart) BOŞ başlar, bilinçli bir seçim zorunlu.
@@ -131,17 +134,19 @@ export async function openIssueCard(woNo, onDone = null) {
   };
   const preview = () => ({ cardNo: null, stockCode: w.stockCode, customerCode: w.customerCode, machineId: w.machineId, woNo: w.no, gkkReportNo: st.gkk, firstApprovalNo: w.firstApprovalNo, steps: st.steps, reject: st.reject });
 
-  /** İşlem kutuları (kartı basarken tiklenir): önce "Ek işlem var mı?" (VAR/YOK, zorunlu), sonra her işlem için "gidecek" ve "yapıldı". */
+  /**
+   * İşlem kutuları: "Ek işlem var mı?" (VAR/YOK, zorunlu bir ayrı alan — AŞAĞIDAKİ YIKAMA/KURUTMA/TAVLAMA
+   * kutularını ETKİLEMEZ, ikisi bağımsızdır), ardından her işlem için "gidecek" ve "yapıldı" (her zaman açık).
+   */
   const stepsBox = () => {
-    const locked = st.ekIslem !== 'var'; // YOK ya da henüz seçilmediyse alt kutular pasif (YOK iken boş, seçilmediyse zaten emptySteps)
     return '<fieldset class="pl-steps"><legend>Kartta işaretlenecekler</legend>' +
       '<div class="pl-steps-row pl-steps-ek"><b>Ek işlem var mı? *</b>' +
       `<label class="pl-steps-opt"><input type="radio" name="ekIslem" value="var"${st.ekIslem === 'var' ? ' checked' : ''}> Var</label>` +
       `<label class="pl-steps-opt"><input type="radio" name="ekIslem" value="yok"${st.ekIslem === 'yok' ? ' checked' : ''}> Yok</label></div>` +
       CARD_STEPS.map((s) =>
         `<div class="pl-steps-row"><b>${s.label}</b>` +
-        `<label class="pl-steps-opt"><input type="checkbox" name="${s.key}To"${st.steps[`${s.key}To`] ? ' checked' : ''}${locked ? ' disabled' : ''}> ${escapeHtml(s.to)}</label>` +
-        `<label class="pl-steps-opt"><input type="checkbox" name="${s.key}Done"${st.steps[`${s.key}Done`] ? ' checked' : ''}${locked ? ' disabled' : ''}> ${escapeHtml(s.done)}</label></div>`).join('') +
+        `<label class="pl-steps-opt"><input type="checkbox" name="${s.key}To"${st.steps[`${s.key}To`] ? ' checked' : ''}> ${escapeHtml(s.to)}</label>` +
+        `<label class="pl-steps-opt"><input type="checkbox" name="${s.key}Done"${st.steps[`${s.key}Done`] ? ' checked' : ''}> ${escapeHtml(s.done)}</label></div>`).join('') +
       '<div class="pl-steps-row pl-steps-reject"><b>ÜRÜN RET</b>' +
       `<label class="pl-steps-opt"><input type="checkbox" name="reject"${st.reject ? ' checked' : ''}> Ürün ret edildi (paketlemeye gitmez)</label></div>` +
       '<p class="hint" data-role="steps-hint"></p></fieldset>';
@@ -179,9 +184,8 @@ export async function openIssueCard(woNo, onDone = null) {
   m.body.addEventListener('change', (ev) => {
     const name = ev.target.name;
     if (name === 'ekIslem') {
-      st.ekIslem = ev.target.value; // 'var' | 'yok'
-      if (st.ekIslem === 'yok') for (const s of CARD_STEPS) { st.steps[`${s.key}To`] = false; st.steps[`${s.key}Done`] = false; }
-      draw(); // alt kutuların disabled durumu ve "Kartı oluştur" butonu da degisiyor - tam yeniden ciz
+      st.ekIslem = ev.target.value; // 'var' | 'yok' — YIKAMA/KURUTMA/TAVLAMA kutularını ETKİLEMEZ, sıfırlamaz
+      draw(); // yalniz "Kartı oluştur" butonunun etkinligi degisiyor - tam yeniden ciz
       return;
     }
     if (ev.target.type !== 'checkbox' || !(name in st.steps || name === 'reject')) return;

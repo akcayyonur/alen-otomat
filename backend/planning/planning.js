@@ -18,19 +18,24 @@ import { Sources } from './sources.js';
 import { Mikro } from './mikro.js';
 import { MikroClient } from './mikro-client.js';
 import { MikroStock } from './mikro-stock.js';
+import { MikroOrders } from './mikro-order.js';
 import { ProductDepot } from './product-depot.js';
 import { DocFolder } from './doc-folder.js';
+import { GkkFolder } from './gkk-folder.js';
 import { Packing } from './packing.js';
 import { PackingSpecs } from './packing-specs.js';
 import { Schedule } from './schedule.js';
 import { PriceStudies } from './price-studies.js';
 import { SampleTracking } from './sample-tracking.js';
 import { Quarantine } from './quarantine.js';
+import { SupplyRequests } from './supply-requests.js';
 import { QuarantineDepot } from './quarantine-depot.js';
 import { MaterialQuarantine } from './material-quarantine.js';
 import { MeasuringDevices } from './measuring-devices.js';
+import { ToolInventory } from './tool-inventory.js';
 import { DrawingTracking } from './drawing-tracking.js';
 import { Maintenance } from './maintenance.js';
+import { IncomingOrders } from './incoming-orders.js';
 import { foldTr, cleanCode, parseDate } from './normalize.js';
 import { programKey, suggestProducts } from './program-map.js';
 import { rawMaterial, plannedHours, machineNumber } from './calc.js';
@@ -87,7 +92,7 @@ export class Planning {
   constructor({
     dbFile = 'data/planlama.db', listSeenPrograms = () => [], listMachines = () => [], productionEvents = () => [], liveMachine = () => null,
     spans = () => [], downtimeConfig = { groups: [], codes: [] }, downtimeMinMs = DEFAULT_MIN_STOP_MS, sourcesDir = null, programRuns = () => [],
-    drawingsDir = null, stickersDir = null, mikroClient = null, listLibraryPrograms = () => [],
+    drawingsDir = null, stickersDir = null, gkkFilesDir = null, mikroClient = null, listLibraryPrograms = () => [],
   } = {}) {
     this.db = new PlanningDb(dbFile);
     /** GKK rapor numaralari, ilk onay raporlari ve teknik resimler (ayni veritabani dosyasi). */
@@ -97,21 +102,34 @@ export class Planning {
     this.samples = new SampleTracking({ planning: this });
     /** Hurda girişi: üretimde fark edilen hurda/uygunsuz parçanın karantina giriş-çıkış süreci (EYS.FR.043 + tashih EYS.FR.049). `products` ile BAĞLANMAZ. */
     this.quarantine = new Quarantine({ planning: this });
+    /** Sipariş fişi (atölye malzeme/takım talebi, supply-requests.js): kalemler (adet/malın cinsi/marka) + durum (bekliyor/verildi/geldi). `products` ile BAĞLANMAZ. */
+    this.supplyRequests = new SupplyRequests({ planning: this });
     /** Ölçüm cihazları takip (EYS.LS.006): mastar/kumpas/mihengir vb. envanteri + kalibrasyon zamanlaması. `products`/ölçü planıyla BAĞLANMAZ. */
     this.measuringDevices = new MeasuringDevices({ planning: this });
+    /** Takım ve Pens Takip (EYS.LS.026 + Takım Uçları/Tutucuları): kesici takım/pens/uç/tutucu envanteri. `products` ile BAĞLANMAZ. */
+    this.toolInventory = new ToolInventory({ planning: this });
     /** Bakım (EYS.FR.016 + Bakım Sicil Kartları, maintenance.js): makine tipi -> bakım kalemi (periyot ADMIN tarafından ayarlanır) -> makine (asset) başına tik/log geçmişi. `products` ile BAĞLANMAZ. */
     this.maintenance = new Maintenance({ planning: this });
+    /** Mail'den sipariş girişi (incoming-orders.js): PDF/e-posta tablosu -> taslak sipariş satırı, musteri koduyla eslenir,
+     * revizyon var olan `order_lines` ile karsilastirilir. Mikro'ya YAZMA (`mikroOrders`) ARASTIRILDI ama HENUZ
+     * GERCEK DENENMEDI (bkz. CLAUDE.md "mikro-order.js"). */
+    this.incomingOrders = new IncomingOrders({ planning: this });
     /** Kaynak klasoru: Mikro / GKK Excel dosyalarini sabit bir klasorden okuyup "Yenile" ile uygular (sources.js). `sourcesDir`: varsayilan klasor. */
     this.sources = new Sources({ planning: this, defaultDir: sourcesDir });
     /** MikroAPI (canli SQL okuma): Kaynak klasorune PARALEL, Excel'in yerine degil (bkz. CLAUDE.md "MikroAPI"). `mikroClient` verilmezse yapilandirilmamis sayilir. */
     this.mikro = new Mikro({ planning: this, client: mikroClient ?? new MikroClient({}) });
     /** Depolar arası sevkiyat / sarfiyat (virman) fişi (mikro-stock.js): yazma `MIKRO_WRITE_ENABLED=1` olmadan KAPALI, bkz. CLAUDE.md "G aşaması". */
     this.mikroStock = new MikroStock({ client: this.mikro.client });
+    /** Mail'den gelen taslak siparişi gerçek bir Mikro siparişine (SiparisKaydetV2) çevirme (mikro-order.js) — ARAŞTIRILDI,
+     * GERÇEK Mikro'ya karşı HENÜZ DENENMEDİ; AYNI `MIKRO_WRITE_ENABLED` kapısı. */
+    this.mikroOrders = new MikroOrders({ client: this.mikro.client });
     /** Hammadde karantinası (material-quarantine.js): tedarikçi yanlış hammadde gönderince Merkez->Karantina sevkiyatı + "İade"de sarf (virman) ile düşme. Hammadde ekranının kendi Mikro kapısıyla (MIKRO_WRITE_ENABLED) AYNI, PRODUCT_DEPOT_ENABLED'dan BAĞIMSIZ. */
     this.materialQuarantine = new MaterialQuarantine({ planning: this });
     /** Teknik resim (PDF) ve etiket (Word) klasorleri: dosyalar urun koduna gore urun kartlarina eslenir (doc-folder.js). Iki AYRI klasor. */
     this.drawingFolder = new DocFolder({ planning: this, kind: 'cizim', defaultDir: drawingsDir });
     this.stickerFolder = new DocFolder({ planning: this, kind: 'etiket', defaultDir: stickersDir });
+    /** GKK kalite raporu klasoru: hammaddenin uretici sertifikasi PDF'leri dosya adindan cikan HAMMADDE CINSINE gore GKK kayitlarina baglanir (gkk-folder.js). Tek seferlik. */
+    this.gkkFolder = new GkkFolder({ planning: this, defaultDir: gkkFilesDir });
     /** Teknik resim TAKIBI (EYS.LS.007): her urunun resminin ne zaman kayda girdigi / revize oldugu (drawing-tracking.js); `drawingFolder`'in match()'i bunu cagirir. */
     this.drawingTracking = new DrawingTracking({ planning: this });
     /** Paketleme formu (EYS.FR.007): urun kodu uzerinden satirlar, koli ici adet ogrenme/oneri (packing.js). */
@@ -336,11 +354,15 @@ export class Planning {
     if (!this.db.deleteProgramMap(programKey(programName))) throw new PlanningError('Bu program için eşleme yok.', 404);
   }
 
-  /** Belirsizlik olmayan (tek ve kesin: stok koduyla birebir) onerilerin hepsini onaylar. */
-  confirmExactSuggestions({ by = null } = {}) {
+  /**
+   * Belirsizlik olmayan (tek adayli) onerilerin hepsini onaylar. `kind`: 'kod' (stok koduyla birebir, varsayilan)
+   * ya da 'musteri-kodu' (musteri urun koduyla birebir, tek adayli oldugunda ayni kesinlikte sayilir).
+   */
+  confirmExactSuggestions({ by = null, kind = 'kod' } = {}) {
+    if (kind !== 'kod' && kind !== 'musteri-kodu') throw new PlanningError('Geçersiz öneri türü.', 400);
     let n = 0;
     for (const row of this.listPrograms().programs) {
-      if (row.status === 'oneri' && row.suggestionKind === 'kod' && row.suggestions.length === 1) {
+      if (row.status === 'oneri' && row.suggestionKind === kind && row.suggestions.length === 1) {
         this.mapProgram(row.program, row.suggestions[0].stockCode, { by });
         n += 1;
       }
@@ -873,6 +895,44 @@ export class Planning {
   }
 
   /**
+   * GECICI OZELLIK (kullanici karari, 2026-11-18): BITMIS bir is emrinde dondurulmus adedi "Uretime geri al" +
+   * yeniden bitirme dongusune girmeden DOGRUDAN duzeltir. Gerekce: ustalar sistemi yeni kullaniyor ve "Bitir"
+   * ekraninda yanlis adet girebiliyor (oryantasyon surecinin dogal bir sonucu); bitmis urun depo akisi
+   * (product-depot.js, Geciciye aktarim) HENUZ `PRODUCT_DEPOT_ENABLED` ile KAPALI oldugu icin bu duzeltme
+   * simdilik Mikro'ya hic dokunmaz. **O akis acilinca bu yol KALDIRILMALI ya da kisitlanmali**: duzeltilen adet,
+   * Geciciye ZATEN gonderilmis bir miktari geriye donuk degistiremez (sendFinishTransfer'in delta'si bunu kirmaz
+   * -azalis "zaten aktarildi" der, negatif gondermez- ama Mikro'daki eski miktar kendiliginden duzelmez de).
+   * @param {{qty: number, note?: string}} input
+   */
+  correctFinishedQty(no, input = {}, { by = null, now = Date.now() } = {}) {
+    const cur = this.#get(no);
+    if (cur.status !== 'bitti') throw new PlanningError('Yalnız bitmiş iş emrinde adet düzeltilebilir.', 409, 'bad-status');
+    const qty = Number(input.qty);
+    if (!Number.isInteger(qty) || qty < 0 || qty > 10_000_000) throw new PlanningError('Adet 0 ile 10.000.000 arasında bir tam sayı olmalı.');
+    const note = text(input.note, 'Not', 500);
+    const prev = cur.result ?? {};
+    const prevQty = Number.isInteger(prev.produced) ? prev.produced : 0;
+    if (qty === prevQty) throw new PlanningError('Adet zaten bu değerde.', 400);
+    const result = prev.source === 'elle'
+      ? { ...prev, produced: qty } // tamamen elle bitirilmisti (telemetriden hic sayilmadi): oyle kalir
+      : { ...prev, produced: qty, telemetryProduced: prev.telemetryProduced ?? prevQty, source: 'elle-adet' };
+
+    const warnings = [];
+    if (qty < cur.targetQty) warnings.push(`Hedefin altında: ${qty} / ${cur.targetQty} adet.`);
+    else if (qty > cur.targetQty) warnings.push(`Hedefin üzerinde: ${qty} / ${cur.targetQty} adet.`);
+    const sentToDepot = this.productDepot.statusFor(cur.no).bitis.sent;
+    if (sentToDepot > 0) warnings.push(`Bu iş emrinden Mikro'ya zaten ${sentToDepot} adet "Geçici depoya aktarıldı": bu düzeltme o gönderimi değiştirmez.`);
+
+    this.db.tx(() => {
+      this.db.updateWorkOrder(cur.no, { result_json: JSON.stringify(result) }, { by, now });
+      const parts = [`${prevQty} → ${qty} adet`];
+      if (note) parts.push(note);
+      this.db.addWorkOrderEvent(cur.no, 'adet-duzeltildi', parts.join(' · '), { by, now });
+    });
+    return { ...this.getWorkOrder(cur.no, { now }), warnings };
+  }
+
+  /**
    * Yanlislikla bitirilen is emrini uretime geri alir (donmus sonuc silinir; aralik yeniden acik). Sonraki bir
    * is emriyle cakisiyorsa 409. ELLE bitirilmis (hic baslatilmamis) is emri PLANLANDI'ya doner, UretIMDE'ye
    * degil - baslangici sahteydi (bitis aniyla ayni), gercek bir uretim penceresi hic olmadi.
@@ -1144,6 +1204,7 @@ export class Planning {
         segs.push(...orderSegments({
           wo, from: s, to: e, events: this.productionEvents(wo.machineId, s, e), spans: this.spans(wo.machineId, s, e),
           eventAfter: wo.startedAt >= rangeFrom ? wo.startedAt : -Infinity,
+          reasons: this.db.downtimeReasonsFor(wo.machineId, s, e),
         }));
       }
     }
@@ -1159,6 +1220,7 @@ export class Planning {
     const lowCoverage = segs.filter((x) => x.allottedSec > 0 && x.observedSec / x.allottedSec < 0.8);
     if (lowCoverage.length > 0) warnings.push(`${lowCoverage.length} iş emri × vardiya parçasında tezgah verisi ayrılan sürenin %80'inden azını kapsıyor: kullanılabilirlik ve adet eksik olabilir.`);
     if (total.approxQty > 0) warnings.push(`${total.approxQty} adet veri kopukluğundan sonra sayıldı (adet gerçek, vardiyası yaklaşık).`);
+    if (total.excludedSec > 0) warnings.push(`${Math.round(total.excludedSec / 60)} dk "Ürün değişikliği" (D1) nedeniyle verimlilik hesabından çıkarıldı.`);
     return {
       from: range.fromKey, to: range.toKey, machine: machineId || null, now,
       totals: { ...total, days, avgDailyQty: days > 0 ? Math.round(total.qty / days) : null },

@@ -9,15 +9,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Planning } from './planning.js';
 
-/** @param {object[]} rows bir sonraki refresh()'te client.sqlQuery'nin donecegi satirlar */
-function kur(rows = []) {
-  let sonSorgu = null;
+/**
+ * @param {object[]} rows bir sonraki refresh()'te SIPARIS_SQL icin donecek satirlar
+ * @param {object[]} stokRows ayni refresh()'teki (siparisten BAGIMSIZ) STOK_SQL icin donecek satirlar - varsayilan
+ *   bos: cogu test yalniz SIPARIS_SQL yolunu sinadigi icin stok senkronu "0 satir" doner, mevcut beklentileri degistirmez.
+ */
+function kur(rows = [], stokRows = []) {
+  const sorgular = [];
   const client = {
     configured: () => true, host: '192.168.1.112', port: 8094,
-    sqlQuery: async (sql) => { sonSorgu = sql; return rows; },
+    sqlQuery: async (sql) => { sorgular.push(sql); return sql.includes('SIPARISLER') ? rows : stokRows; },
   };
   const p = new Planning({ dbFile: ':memory:', listMachines: () => [], productionEvents: () => [], liveMachine: () => null, mikroClient: client });
-  return { p, client, sonSorgu: () => sonSorgu, bitir: () => p.close() };
+  // sorgular(): bu refresh()'te yapilan TUM sqlQuery cagrilari (artik iki tane - SIPARIS_SQL + STOK_SQL);
+  // sonSorgu(): geriye donuk uyumluluk icin SONUNCUSU (eskiden tek cagri oldugu icin yeterliydi).
+  return { p, client, sorgular: () => sorgular, sonSorgu: () => sorgular[sorgular.length - 1], bitir: () => p.close() };
 }
 
 const satir = (over = {}) => ({
@@ -40,7 +46,7 @@ test('refresh: siparis satiri + urun karti ipuclari ayni importSiparis yolundan 
   try {
     const r = await k.p.mikro.refresh({ by: 'ayse' });
     assert.equal(r.source, 'mikro');
-    assert.deepEqual(r.totals.lines, { added: 2, updated: 0 });
+    assert.deepEqual(r.totals.lines, { added: 2, updated: 0, removed: 0 });
     assert.deepEqual(r.totals.products, { added: 2, updated: 0, protected: 0 });
     assert.deepEqual(r.changes.lines.added.map((x) => x.stockCode), ['SR001.001', 'SR002.001']);
     assert.equal(r.rows, 2);
@@ -55,9 +61,11 @@ test('refresh: siparis satiri + urun karti ipuclari ayni importSiparis yolundan 
     assert.equal(kart.plannedSec, 30, 'SN');
     assert.equal(kart.lengthMm, 40, 'TAM BOY');
 
-    // SQL'de tip filtresi (sip_tip = 0) ve STOKLAR_USER join'i gercekten gonderiliyor mu
-    assert.match(k.sonSorgu(), /sip_tip = 0/);
-    assert.match(k.sonSorgu(), /STOKLAR_USER/);
+    // SQL'de tip filtresi (sip_tip = 0) ve STOKLAR_USER join'i gercekten gonderiliyor mu (SIPARIS_SQL'in KENDISI -
+    // artik STOK_SQL de ayrica gonderiliyor, sonSorgu() ikincisini doner, bu yuzden sorgular() icinden aranir).
+    const siparisSorgusu = k.sorgular().find((s) => s.includes('SIPARISLER'));
+    assert.match(siparisSorgusu, /sip_tip = 0/);
+    assert.match(siparisSorgusu, /STOKLAR_USER/);
 
     const st = k.p.mikro.status();
     assert.equal(st.configured, true);
@@ -65,11 +73,98 @@ test('refresh: siparis satiri + urun karti ipuclari ayni importSiparis yolundan 
   } finally { k.bitir(); }
 });
 
-test('refresh: bos sonuc (satir yok) cokmez, hicbir seyi silmez (keepOld=true ile ayni davranis)', async () => {
+/** 'isemri' bicimindeki basliklarla (STOK_SQL'in dondurdugu sekil) tek bir stok karti satiri. */
+const stokSatir = (over = {}) => ({
+  'ALEN KOD': 'SR004.019', 'MAMÜL ADI': 'DN40 ÇİFT TARAFLI NİPEL', HAMMADDE: 'HM2', 'ÜRETİM SN': '45',
+  'BRÜT GR': '0,0300', 'NET GR': '0,0150', 'TAM BOY': '25', ...over,
+});
+
+test('refresh: siparisi hic olmayan SR kodu (STOK_SQL, siparisten BAGIMSIZ) da urun kartina islenir - gercek SR004/SR005.019 bulgusu', async () => {
+  const k = kur([], [stokSatir()]); // SIPARIS_SQL bos (hic siparis yok), STOK_SQL bu kodu getiriyor
+  try {
+    const r = await k.p.mikro.refresh({ by: 'ayse' });
+    assert.deepEqual(r.totals.lines, { added: 0, updated: 0, removed: 0 }, 'siparis satiri yok, hic olmamali');
+    assert.deepEqual(r.totals.products, { added: 1, updated: 0, protected: 0 });
+    assert.equal(r.rows, 1, 'SIPARIS_SQL 0 + STOK_SQL 1');
+    assert.deepEqual(r.changes.products.added.map((x) => x.stockCode), ['SR004.019']);
+
+    const kart = k.p.getProduct('SR004.019');
+    assert.equal(kart.name, 'DN40 ÇİFT TARAFLI NİPEL');
+    assert.equal(kart.material, 'HM2');
+    assert.equal(kart.plannedSec, 45);
+    assert.equal(kart.grossKg, 0.03, 'BRUT GR');
+    assert.equal(kart.netKg, 0.015, 'NET GR');
+    assert.equal(kart.lengthMm, 25, 'TAM BOY - isemri bicimine 2026-11-16da eklenen istege bagli alan');
+
+    // Alen kod bicimine uyan stok kodlari icin dogru WHERE kosulu gonderiliyor mu (iki harf + 3 rakam + nokta + 3 rakam)
+    assert.match(k.sonSorgu(), /\[0-9\]\[0-9\]\[0-9\]\.\[0-9\]\[0-9\]\[0-9\]/);
+    assert.match(k.sonSorgu(), /STOKLAR_USER/);
+  } finally { k.bitir(); }
+});
+
+test('refresh: ayni urun hem siparisten hem STOK_SQL\'den gelirse cakismaz - ikinci gecis sadece "unchanged" sayilir', async () => {
+  const k = kur([satir()], [stokSatir({ 'ALEN KOD': 'SR001.001', 'MAMÜL ADI': '0010010000 PARCA', HAMMADDE: 'HM1', 'ÜRETİM SN': '30', 'BRÜT GR': '0,0200', 'NET GR': '0,0100', 'TAM BOY': '40' })]);
+  try {
+    const r = await k.p.mikro.refresh();
+    // siparis tarafi karti zaten ekledi (BR/NT/SN ayni degerlerle) - STOK_SQL gecisi "zaten ayni" der, ikinci kez eklemez
+    assert.deepEqual(r.totals.products, { added: 1, updated: 0, protected: 0 });
+    assert.equal(k.p.getProduct('SR001.001').material, 'HM1');
+  } finally { k.bitir(); }
+});
+
+test('refresh: bos sonuc (satir yok) cokmez; daha once HIC siparis yoksa markStale\'in isaretleyecegi bir satir da yok', async () => {
   const k = kur([]);
   try {
     const r = await k.p.mikro.refresh();
-    assert.deepEqual([r.rows, r.totals.lines, r.totals.products], [0, { added: 0, updated: 0 }, { added: 0, updated: 0, protected: 0 }]);
+    assert.deepEqual([r.rows, r.totals.lines, r.totals.products], [0, { added: 0, updated: 0, removed: 0 }, { added: 0, updated: 0, protected: 0 }]);
+  } finally { k.bitir(); }
+});
+
+/* ============================================================================ Mikro'da silinen siparis (2026-11-19) */
+/* Kullanici bulgusu: Mikro'dan bir siparis silinince ("SPR-755" gercek ornegi) "Siparişler" ekraninda SONSUZA
+ * DEK kalmaya devam ediyordu - sources.js'in (Excel) "kismi export olabilir, gizleme" ihtiyati mikro.js'e
+ * (MikroAPI SQL, TAM dokum, tarih/LIMIT filtresi yok) kopyalanmisti (`keepOld: true`). Duzeltme: mikro.js artik
+ * `keepOld: false` gecirir - bu cekilista HIC GORUNMEYEN bir satir GERCEKTEN silinmis sayilir (`markStale`). */
+
+test('refresh: ONCEKI senkronda gelen bir siparis SONRAKI senkronda HIC GORUNMUYORSA stale isaretlenir, "Siparişler" listesinden kalkar', async () => {
+  const k = kur([satir(), satir({ Mamul_Kodu: 'SR002.001', Evrak_No: 'SPR-1' })]);
+  try {
+    await k.p.mikro.refresh();
+    assert.equal(k.p.searchOrders({ q: 'SPR-1' }).length, 1, 'ilk senkrondan sonra siparis listede gorunur');
+
+    // ikinci senkronda Mikro'dan BOS donuyor (gercek SPR-755 gibi: evrak Mikro'dan tamamen silindi)
+    k.client.sqlQuery = async (sql) => (sql.includes('SIPARISLER') ? [] : []);
+    const r2 = await k.p.mikro.refresh();
+    assert.equal(r2.totals.lines.removed, 2, 'iki satir da (SR001.001 + SR002.001) artik gorunmuyor, ikisi de eski isaretlenir');
+    assert.equal(k.p.searchOrders({ q: 'SPR-1' }).length, 0, 'silinen siparis artik listede YOK');
+
+    // satirlar SILINMEDI, yalniz stale=1 isaretlendi (markStale'in dosya basindaki ilkesi: "ileride is emirleri
+    // bunlara baglanacak" - ham tabloda hala duruyorlar, yalniz orderLines()/searchOrders() artik gostermiyor).
+    const ham = k.p.db.db.prepare('SELECT stale FROM order_lines WHERE doc_key = ?').all('SPR-1');
+    assert.equal(ham.length, 2);
+    assert.equal(ham.every((x) => x.stale === 1), true);
+  } finally { k.bitir(); }
+});
+
+test('refresh: siparis AYNEN devam ediyorsa (her senkronda da geliyorsa) stale isaretlenmez', async () => {
+  const k = kur([satir()]);
+  try {
+    await k.p.mikro.refresh();
+    const r2 = await k.p.mikro.refresh(); // ayni satir yine geliyor
+    assert.equal(r2.totals.lines.removed, 0);
+    assert.equal(k.p.searchOrders({ q: 'SPR-1' }).length, 1);
+  } finally { k.bitir(); }
+});
+
+test('refresh: BAZI siparisler kalkar BAZILARI kalirsa yalniz kalkanlar stale isaretlenir', async () => {
+  const k = kur([satir(), satir({ Mamul_Kodu: 'SR002.001', Evrak_No: 'SPR-2', Must_Sip_No: 'MS-2' })]);
+  try {
+    await k.p.mikro.refresh();
+    k.client.sqlQuery = async (sql) => (sql.includes('SIPARISLER') ? [satir()] : []); // yalniz SPR-1 kaliyor, SPR-2 kalkti
+    const r2 = await k.p.mikro.refresh();
+    assert.equal(r2.totals.lines.removed, 1);
+    assert.equal(k.p.searchOrders({ q: 'SPR-1' }).length, 1, 'hala gelen siparis listede kalir');
+    assert.equal(k.p.searchOrders({ q: 'SPR-2' }).length, 0, 'artik gelmeyen siparis listeden kalkar');
   } finally { k.bitir(); }
 });
 
@@ -137,16 +232,24 @@ test('refresh: yeni acilan kart Mikro gercekten degismedikce bir sonraki senkron
 });
 
 test('refresh: ayni anda iki senkron 409 busy verir', async () => {
-  let cozBekleyeni;
+  // refresh() artik SIRAYLA IKI sqlQuery cagrisi yapiyor (SIPARIS_SQL + STOK_SQL, bkz. dosya basi) - her cagri
+  // kendi bekleyen Promise'ini kuyruga ekler, biri cozulunce digeri HEMEN acilmayabilir (bir sonraki await'e kadar
+  // mikrogorev bekler); bu yuzden tek "cozBekleyeni" yerine bir kuyruk + "birinci tamamlanana kadar coz" dongusu.
+  const bekleyenler = [];
   const client = {
     configured: () => true, host: 'x', port: 1,
-    sqlQuery: () => new Promise((r) => { cozBekleyeni = () => r([]); }),
+    sqlQuery: () => new Promise((r) => { bekleyenler.push(() => r([])); }),
   };
   const p = new Planning({ dbFile: ':memory:', listMachines: () => [], productionEvents: () => [], liveMachine: () => null, mikroClient: client });
   try {
     const birinci = p.mikro.refresh();
     await assert.rejects(() => p.mikro.refresh(), (e) => e.status === 409 && e.code === 'busy');
-    cozBekleyeni();
+    let bitti = false;
+    birinci.then(() => { bitti = true; }, () => { bitti = true; });
+    while (!bitti) {
+      if (bekleyenler.length > 0) bekleyenler.shift()();
+      await new Promise((r) => setImmediate(r));
+    }
     await birinci;
   } finally { p.close(); }
 });

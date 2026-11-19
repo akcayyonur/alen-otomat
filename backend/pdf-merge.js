@@ -27,12 +27,12 @@ export const MAX_PAGES_PER_FILE = 500;
 
 /* ===================================================================== değer türleri */
 
-class Name { constructor(name) { this.name = name; } }
-class Ref { constructor(num, gen = 0) { this.num = num; this.gen = gen; } }
-class PStr { constructor(bytes) { this.bytes = bytes; } }
+export class Name { constructor(name) { this.name = name; } }
+export class Ref { constructor(num, gen = 0) { this.num = num; this.gen = gen; } }
+export class PStr { constructor(bytes) { this.bytes = bytes; } }
 /** Sözcük (obj, endobj, stream ...): `value()` bunları değer olarak vermez, çağıran karar verir. */
-class Kw { constructor(word) { this.word = word; } }
-class Stream { constructor(dict, raw) { this.dict = dict; this.raw = raw; } }
+export class Kw { constructor(word) { this.word = word; } }
+export class Stream { constructor(dict, raw) { this.dict = dict; this.raw = raw; } }
 
 const isWs = (c) => c === 0 || c === 9 || c === 10 || c === 12 || c === 13 || c === 32;
 const isDelim = (c) => c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 123 || c === 125 || c === 47 || c === 37;
@@ -41,7 +41,7 @@ const isDigit = (c) => c >= 48 && c <= 57;
 
 /* ========================================================================== sözcük çözümleyici */
 
-class Lexer {
+export class Lexer {
   /** @param {Buffer} buf @param {number} pos */
   constructor(buf, pos = 0) { this.buf = buf; this.p = pos; }
 
@@ -190,7 +190,7 @@ class Lexer {
   }
 }
 
-const nameOf = (v) => (v instanceof Name ? v.name : null);
+export const nameOf = (v) => (v instanceof Name ? v.name : null);
 
 /* ============================================================================== akış çözme */
 
@@ -547,6 +547,26 @@ export function describePages(buf) {
     }).join('\n');
     return { mediaBox: Array.isArray(box) ? box.map((x) => doc.resolve(x)) : null, hasResources: page.has('Resources'), content: text };
   });
+}
+
+/**
+ * Metin çıkarma (backend/planning/pdf-text.js, sipariş PDF'lerini okumak için) için: belgeyi açar,
+ * sayfa sözlüklerini, başvuru çözücüyü (resolve) ve akış çözücüyü (decode: Ref/Stream -> çözülmüş bayt
+ * ya da akış değilse/çözülemiyorsa null) verir. Nesne modeli (xref/ObjStm/onarma) burada AYNEN
+ * kullanılır — ayrı bir PDF ayrıştırıcı YAZILMAZ.
+ * @param {Buffer} buf @returns {{pages: Map<string, any>[], resolve: (v:any)=>any, decode: (v:any)=>(Buffer|null)}}
+ */
+export function openForText(buf) {
+  const { doc, pages } = open(buf);
+  return {
+    pages,
+    resolve: (v) => doc.resolve(v),
+    decode: (v) => {
+      const s = doc.resolve(v);
+      if (!(s instanceof Stream)) return null;
+      try { return decodeStream(s, doc); } catch { return null; }
+    },
+  };
 }
 
 /* ============================================================================ yazma tarafı */

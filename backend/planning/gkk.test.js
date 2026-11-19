@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCsv } from './csv-read.js';
-import { parseGkNo, formatGkNo, parseMaterial, parseErpMaterial, matchMaterials, compareMaterials, readGkkSheet, findGkkHeader, compactKey } from './gkk.js';
+import { parseGkNo, findGkNoIn, formatGkNo, parseMaterial, parseErpMaterial, matchMaterials, compareMaterials, readGkkSheet, findGkkHeader, compactKey } from './gkk.js';
 import { parseApprovalCode, formatApprovalCode, readApprovalSheet } from './first-approval.js';
 
 test('GK numarası: biçim, tolerans, geçersizler', () => {
@@ -15,6 +15,15 @@ test('GK numarası: biçim, tolerans, geçersizler', () => {
   assert.equal(formatGkNo(2026, 7), 'GK26.007');
   for (const bad of ['', null, 'GK26', 'GK2026.1', 'XX26.001', 'GK26.0', 'GK26.12345', '26.001']) assert.equal(parseGkNo(bad), null, String(bad));
   assert.equal(compactKey('AA24 X 13 - PB3'), 'AA24X13PB3');
+});
+
+test('findGkNoIn: serbest metinde (dosya adı) geçen GK numarasını bulur, rakam dizisini YARIM yakalamaz', () => {
+  assert.equal(findGkNoIn('AA24 X 13 - PB3 - GK25.093.pdf')?.no, 'GK25.093', 'hammadde + GK no sırası');
+  assert.equal(findGkNoIn('GK26.353 - AA37 X 21 - PB2.pdf')?.no, 'GK26.353', 'GK no + hammadde sırası (ters)');
+  assert.equal(findGkNoIn('AA10 - PB3 - GK25.10.pdf')?.no, 'GK25.010', 'sıfır dolgusuz, 2 haneli sıra');
+  assert.equal(findGkNoIn('AA100 - PB3 - GK25.100.pdf')?.no, 'GK25.100', '"GK25.10" rakam dizisinin İÇİNE sıkışıp YARIM yakalanmaz');
+  assert.equal(findGkNoIn('rastgele.pdf'), null, 'GK numarası yok');
+  assert.equal(findGkNoIn('sertifika.pdf'), null);
 });
 
 test('hammadde cinsi çözümleme: kayıt tarafı', () => {

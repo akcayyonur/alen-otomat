@@ -37,12 +37,14 @@ export function renderPrograms(host) {
     if (st.error) { host.innerHTML = `<p class="notice notice-sim">Programlar alınamadı: ${escapeHtml(st.error)}</p>`; return; }
     const { programs, counts } = st.data;
     const exact = programs.filter((r) => r.status === 'oneri' && r.suggestionKind === 'kod' && r.suggestions.length === 1).length;
+    const exactCustomer = programs.filter((r) => r.status === 'oneri' && r.suggestionKind === 'musteri-kodu' && r.suggestions.length === 1).length;
     host.innerHTML =
       '<p class="hint">Tornalarda parça üretmiş programlar. Program adı ürün kartına bağlanınca raporlar ve iş emirleri o ürünü tanır. ' +
       'Öneri, onaylamadan uygulanmaz.</p>' +
       `<p class="pl-counts">${chip('ok', '✓', `${fmtNum(counts.mapped)} eşli`)} ${chip('warn', '▲', `${fmtNum(counts.suggested)} öneri var`)} ` +
       `${chip('none', '✕', `${fmtNum(counts.unmatched)} eşleşmemiş`)}` +
-      (exact > 0 ? ` <button type="button" class="icon-btn btn-primary" data-act="confirm-exact">Stok koduyla birebir tutan ${fmtNum(exact)} öneriyi onayla</button>` : '') + '</p>' +
+      (exact > 0 ? ` <button type="button" class="icon-btn btn-primary" data-act="confirm-exact">Stok koduyla birebir tutan ${fmtNum(exact)} öneriyi onayla</button>` : '') +
+      (exactCustomer > 0 ? ` <button type="button" class="icon-btn btn-primary" data-act="confirm-customer-code">Müşteri koduyla tutan ${fmtNum(exactCustomer)} öneriyi onayla</button>` : '') + '</p>' +
       (programs.length === 0 ? '<p class="empty">Henüz parça üretimi kaydedilmiş program yok (tornalar çalışınca burada görünür).</p>' :
         '<div class="table-wrap table-wrap-tall"><table class="tbl tbl-pl"><thead><tr><th>Program</th><th>Tezgah</th><th class="num">Üretilen parça</th>' +
         '<th>Son görülme</th><th>Durum</th><th>Ürün / eylem</th></tr></thead><tbody>' +
@@ -75,6 +77,7 @@ export function renderPrograms(host) {
     if (act === 'map') run(() => put('/api/planning/programs/map', { program, stockCode: code }));
     else if (act === 'unmap') run(() => del(`/api/planning/programs/map?${new URLSearchParams({ program })}`));
     else if (act === 'confirm-exact') run(() => post('/api/planning/programs/confirm-exact', {}));
+    else if (act === 'confirm-customer-code') run(() => post('/api/planning/programs/confirm-exact', { kind: 'musteri-kodu' }));
     else if (act === 'pick') openProductPicker(program, (stockCode) => run(() => put('/api/planning/programs/map', { program, stockCode })));
   };
   load();

@@ -25,7 +25,7 @@ import { openFormDialog } from './auth-view.js';
 
 const gramInput = (kg) => (kg === null || kg === undefined ? '' : String(Number((kg * 1000).toFixed(4))).replace('.', ','));
 const EVENT_LABEL = Object.freeze({
-  olusturuldu: 'oluşturuldu', guncellendi: 'güncellendi', iptal: 'iptal edildi', baslatildi: 'üretime başlatıldı', bitirildi: 'bitirildi', 'yeniden-acildi': 'üretime geri alındı', 'elle-bitirildi': 'elle bitirildi', 'tezgah-duzeltildi': 'tezgah düzeltildi',
+  olusturuldu: 'oluşturuldu', guncellendi: 'güncellendi', iptal: 'iptal edildi', baslatildi: 'üretime başlatıldı', bitirildi: 'bitirildi', 'yeniden-acildi': 'üretime geri alındı', 'elle-bitirildi': 'elle bitirildi', 'tezgah-duzeltildi': 'tezgah düzeltildi', 'adet-duzeltildi': 'adet düzeltildi',
   'kart-basildi': 'ürün tanıtım kartı basıldı', 'olcu-kontrol': 'ölçü kontrolü girildi', 'olcu-plani': 'ölçü planı güncellendi', 'kasa-acildi': 'kasa açıldı', 'kasa-kapandi': 'kasa kapandı', 'kasa-paketlendi': 'kasa paketlendi', 'kasa-iptal': 'kasa iptal edildi',
   'fis-girildi': 'Mikro fişi girildi', 'fis-geri-alindi': 'Mikro fişi işareti geri alındı',
   'cizim-eklendi': 'teknik resim eklendi', 'cizim-silindi': 'teknik resim kaldırıldı',
@@ -484,10 +484,17 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
       (w.status === 'uretimde' ? '<button type="button" class="icon-btn btn-primary" data-act="finish">Bitir…</button>' : '') +
       (w.status === 'uretimde' ? '<button type="button" class="icon-btn" data-act="reassign-ask">Tezgahı düzelt…</button>' : '') +
       (w.status === 'bitti' ? '<button type="button" class="icon-btn" data-act="reopen-ask">Üretime geri al…</button>' : '') +
+      (w.status === 'bitti' ? '<button type="button" class="icon-btn" data-act="correct-qty-ask">Adedi düzelt…</button>' : '') +
       (canCancel ? '<button type="button" class="icon-btn btn-danger" data-act="cancel-ask">İptal et…</button>' : '') +
       (ro ? '' : '<button type="submit" class="icon-btn btn-primary">Kaydet</button>') + '</div></form>' +
       '<div data-role="reopen-box" hidden><h4 class="sub">Üretime geri al</h4><p class="hint">Bitiş geri alınır ve dondurulmuş sonuç silinir; iş emri yeniden üretimde olur, adet yeniden canlı sayılır.</p>' +
       '<p class="notice notice-sim" data-role="reopen-err" hidden></p><div class="dt-actions"><button type="button" class="icon-btn" data-act="reopen-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="reopen-yes">Evet, geri al</button></div></div>' +
+      '<div data-role="correct-qty-box" hidden><h4 class="sub">Adedi düzelt</h4>' +
+      '<p class="hint">Dondurulmuş sonuçtaki adet, üretime geri alıp yeniden bitirmeden doğrudan değişir (geçici bir özellik: ustalar sistemi yeni kullanıyor, yanlış girilen adedi hızlıca düzeltmek için).</p>' +
+      `<div class="fld-grid"><label class="fld"><span>Yeni adet (zorunlu)</span><input name="cqQty" inputmode="numeric" autocomplete="off" value="${escapeHtml(String(w.progress?.produced ?? ''))}"></label></div>` +
+      '<label class="fld"><span>Not (isteğe bağlı)</span><input name="cqNote" maxlength="500" autocomplete="off"></label>' +
+      '<p class="notice notice-sim" data-role="correct-qty-err" hidden></p>' +
+      '<div class="dt-actions"><button type="button" class="icon-btn" data-act="correct-qty-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="correct-qty-yes">Adedi kaydet</button></div></div>' +
       '<div data-role="cancel-box" hidden><h4 class="sub">İş emrini iptal et</h4><label class="fld"><span>İptal nedeni (zorunlu)</span><input name="reason" maxlength="200" autocomplete="off"></label>' +
       '<p class="notice notice-sim" data-role="cancel-err" hidden></p><div class="dt-actions"><button type="button" class="icon-btn" data-act="cancel-no">Vazgeç</button><button type="button" class="icon-btn btn-primary" data-act="cancel-yes">İptali onayla</button></div></div>' +
       '<div data-role="reassign-box" hidden><h4 class="sub">Tezgahı düzelt</h4>' +
@@ -615,6 +622,21 @@ export async function openWorkOrderDialog(no, onChanged = () => {}) {
         w = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/reopen`, {});
         onChanged();
         draw();
+      } catch (e) { err.textContent = e.message; err.hidden = false; }
+    }
+    else if (act === 'correct-qty-ask') { m.body.querySelector('[data-role="correct-qty-box"]').hidden = false; m.body.querySelector('[name="cqQty"]').focus(); }
+    else if (act === 'correct-qty-no') m.body.querySelector('[data-role="correct-qty-box"]').hidden = true;
+    else if (act === 'correct-qty-yes') {
+      const box = m.body.querySelector('[data-role="correct-qty-box"]');
+      const err = box.querySelector('[data-role="correct-qty-err"]');
+      const rawQty = box.querySelector('[name="cqQty"]').value.trim();
+      const qty = rawQty === '' ? null : Number(rawQty.replace(/\./g, '').replace(',', '.'));
+      if (qty === null || !Number.isFinite(qty)) { err.textContent = 'Adet girilmeli.'; err.hidden = false; return; }
+      try {
+        w = await post(`/api/planning/work-orders/${encodeURIComponent(w.no)}/correct-qty`, { qty, note: box.querySelector('[name="cqNote"]').value });
+        onChanged();
+        draw();
+        if (w.warnings?.length) window.alert(w.warnings.join('\n'));
       } catch (e) { err.textContent = e.message; err.hidden = false; }
     }
     else if (act === 'cancel-yes') {

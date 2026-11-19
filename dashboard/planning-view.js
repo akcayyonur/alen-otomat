@@ -1,5 +1,5 @@
 /**
- * Planlama uygulamasinin kabugu: #/planlama, #/planlama/tezgahbasi | paketleme | hurda | isemirleri | gkk | ilkonay | olcuraporlari | verimlilik | hammadde | urunler | siparisler | programlar.
+ * Planlama uygulamasinin kabugu: #/planlama, #/planlama/tezgahbasi | paketleme | hurda | isemirleri | siparisfisi | gkk | ilkonay | olcuraporlari | verimlilik | hammadde | urunler | siparisler | yenisiparis | programlar.
  * Roller: yonetici hepsini; operator (fabrika PC'si) tezgah basi, paketleme, GKK, ilk onay, olcu raporlari; izleyici (viewer) tezgah basi, is emirleri,
  * GKK, ilk onay ve olcu raporlarini YALNIZ OKUR (yetkiyi sunucu verir, burasi yalniz gorunum).
  * Planlama, Telemetri'den AYRI bir uygulamadir (apps.js): kendi yan menusu vardir (renderPlanningNav), tezgah listesi yoktur.
@@ -10,7 +10,7 @@
 import { escapeHtml } from './format.js';
 import { api } from './lib-common.js';
 import { getSession, closedSections } from './auth-view.js';
-import { openModal } from './planning-common.js';
+import { openModal, canWrite } from './planning-common.js';
 import { renderProducts } from './planning-products.js';
 import { renderOrders } from './planning-orders.js';
 import { renderPrograms } from './planning-programs.js';
@@ -18,6 +18,7 @@ import { renderWorkOrders } from './planning-workorders.js';
 import { renderShop } from './planning-shop.js';
 import { renderPacking } from './planning-packing.js';
 import { renderQuarantine } from './planning-hurda.js';
+import { renderSupplyRequests } from './planning-supply-requests.js';
 import { renderMaterial } from './planning-material.js';
 import { renderEfficiency } from './planning-efficiency.js';
 import { renderSchedule } from './planning-schedule.js';
@@ -27,32 +28,40 @@ import { renderSamples } from './planning-numune.js';
 import { renderMeasureReports } from './planning-reports.js';
 import { renderDevices } from './planning-devices.js';
 import { renderMaintenance } from './planning-maintenance.js';
+import { renderToolInventory } from './planning-tool-inventory.js';
 import { renderDrawingTracking } from './planning-drawing-tracking.js';
+import { renderIncomingOrders } from './planning-incoming-orders.js';
 import { showSourceStatus, runRefresh, openSourcesDialog } from './planning-sources.js';
 import { showMikroStatus, runMikroRefresh } from './planning-mikro.js';
 import { openFolderDialog } from './planning-docs.js';
 import { renderPriceStudies } from './planning-price.js';
 import { tabsForUser, defaultTabFor } from './planning-tabs.js';
 
+// `sub` (nav alt yazısı): resmi bir EYS dokümanına karşılık gelen ekranlarda YALNIZ o kod ("ALEN - takip listeleri.xlsx"
+// resmi listesine göre, 2026-11-18 kullanıcı isteği). Karşılığı olmayan ekranlarda (kullanıcı kararı) boş bırakılır;
+// Tezgah başı birden çok forma dağıldığı için (EYS.FR.001/002/005) kullanıcı kararıyla boş. Açıklayıcı metin `hint`'e taşındı.
 const TABS = Object.freeze([
-  { key: 'tezgahbasi', label: 'Tezgah başı', sub: 'başlat, bitir, duruş nedeni', hint: 'Duruş süresi tezgahtan ölçülür; yalnız nedenini seçersiniz.', plain: true, render: renderShop },
-  { key: 'paketleme', label: 'Paketleme', sub: 'paketleme formu (EYS.FR.007)', hint: 'Koli içi adet ürün başına öğrenilir ve önerilir.', plain: true, render: renderPacking },
-  { key: 'hurda', label: 'Hurda girişi', sub: 'karantina giriş-çıkış (EYS.FR.043)', hint: 'Üretimde fark edilen hurda karantinaya çekilir; tashih EYS.FR.049 ile kaydedilir.', plain: true, render: renderQuarantine },
-  { key: 'isemirleri', label: 'İş emirleri', sub: 'satıra bas: form · düzenle', hint: 'Satıra basınca form açılır; "Düzenle" ile değiştirin.', render: renderWorkOrders },
-  { key: 'gkk', label: 'GKK rapor no', sub: 'hammadde → rapor numarası', hint: 'Giriş kalite kontrol rapor no takibi (EYS.FR.011).', plain: true, importer: true, render: renderGkk },
-  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'ilk baskı onay listesi', hint: 'İlk baskı onay listesi (EYS.FR.013).', plain: true, importer: true, render: renderApprovals },
-  { key: 'numune', label: 'Numune takip', sub: 'numune talep/takip formu', hint: 'Müşteriye numune üretilip gönderilmesi ve onay/ret takibi (EYS.FR.012).', plain: true, render: renderSamples },
-  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'kalite kontrol ve paketleme', hint: 'Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', plain: true, render: renderMeasureReports },
-  { key: 'olcucihazlari', label: 'Ölçüm cihazları takip', sub: 'mastar, kumpas, kalibrasyon (EYS.LS.006)', hint: 'Satır rengi kalibrasyon vaktine göre: yeşil/sarı/kırmızı.', plain: true, render: renderDevices },
-  { key: 'bakim', label: 'Bakım', sub: 'makine tipi → bakım kalemi (EYS.FR.016)', hint: 'Periyodu yönetici ayarlar; usta yalnızca tik atar.', plain: true, render: renderMaintenance },
-  { key: 'programlar', label: 'Program eşleme', sub: 'program ↔ ürün', hint: 'Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
-  { key: 'urunler', label: 'Ürün kartları', sub: 'hammadde, gramaj, süre', hint: '', render: renderProducts },
-  { key: 'teknikresim', label: 'Teknik resim takip', sub: 'resim no, rev no, tarihler (EYS.LS.007)', hint: 'Rev no sistem tarafından otomatik artırılır.', plain: true, render: renderDrawingTracking },
-  { key: 'siparisler', label: 'Siparişler', sub: 'müşteri sipariş no ile ara', hint: '', render: renderOrders },
-  { key: 'hammadde', label: 'Hammadde', sub: 'ihtiyaç, sarfiyat, Mikro fişi', hint: 'Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', plain: true, render: renderMaterial },
-  { key: 'verimlilik', label: 'Verimlilik', sub: 'tezgah, ürün, matris, duruşlar', hint: 'Kazanılan süre ÷ ayrılan süre.', plain: true, render: renderEfficiency },
+  { key: 'tezgahbasi', label: 'Tezgah başı', sub: '', hint: 'Başlat/bitir, kart basma ve ölçü kontrolü sırasıyla EYS.FR.002, EYS.FR.001 ve EYS.FR.005\'e dağılır; duruş süresi tezgahtan ölçülür, yalnız nedenini seçersiniz.', plain: true, render: renderShop },
+  { key: 'paketleme', label: 'Paketleme', sub: 'EYS.FR.007', hint: 'Paketleme formu. Koli içi adet ürün başına öğrenilir ve önerilir.', plain: true, render: renderPacking },
+  { key: 'hurda', label: 'Hurda girişi', sub: 'EYS.FR.043 · EYS.FR.049', hint: 'Karantina giriş-çıkış formu + tashih sonrası tekrar kontrol formu. Üretimde fark edilen hurda karantinaya çekilir.', plain: true, render: renderQuarantine },
+  { key: 'isemirleri', label: 'İş emirleri', sub: 'EYS.FR.002', hint: 'İş emri formu. Satıra basınca form açılır; "Düzenle" ile değiştirin.', render: renderWorkOrders },
+  { key: 'siparisfisi', label: 'Sipariş fişi', sub: '', hint: 'Malzeme/takım talebi (dahili form, resmi EYS dokümanı değil). Bekliyor → sipariş verildi → teslim alındı.', plain: true, render: renderSupplyRequests },
+  { key: 'gkk', label: 'GKK rapor no', sub: 'EYS.FR.011', hint: 'Giriş kalite kontrol rapor no takibi. Hammadde → rapor numarası.', plain: true, importer: true, render: renderGkk },
+  { key: 'ilkonay', label: 'İlk onay raporu', sub: 'EYS.FR.013', hint: 'İlk baskı onay listesi.', plain: true, importer: true, render: renderApprovals },
+  { key: 'numune', label: 'Numune takip', sub: 'EYS.FR.012', hint: 'Numune talep/takip formu. Müşteriye numune üretilip gönderilmesi ve onay/ret takibi.', plain: true, render: renderSamples },
+  { key: 'olcuraporlari', label: 'Ölçü raporları', sub: 'EYS.FR.005', hint: 'Üretim kontrol formu. Saatlik ölçümler; kalite kontrole ve paketlemeye giden rapor.', plain: true, render: renderMeasureReports },
+  { key: 'olcucihazlari', label: 'Ölçüm cihazları takip', sub: 'EYS.LS.006', hint: 'Mastar, kumpas, kalibrasyon. Satır rengi kalibrasyon vaktine göre: yeşil/sarı/kırmızı.', plain: true, render: renderDevices },
+  { key: 'bakim', label: 'Bakım', sub: 'EYS.FR.016', hint: 'Bakım kayıt formu (makine tipi → bakım kalemi). Periyodu yönetici ayarlar; usta yalnızca tik atar.', plain: true, render: renderMaintenance },
+  { key: 'takimtakip', label: 'Takım ve Pens Takip', sub: 'EYS.LS.026', hint: 'Takım, pens, uç, tutucu. Kategori serbest metin; yeni takım türleri eklenebilir.', plain: true, render: renderToolInventory },
+  { key: 'programlar', label: 'Program eşleme', sub: '', hint: 'Program ↔ ürün. Öneriler onay bekler; eşleme adedi belirlemez.', render: renderPrograms },
+  { key: 'urunler', label: 'Ürün kartları', sub: '', hint: 'Hammadde, gramaj, süre.', render: renderProducts },
+  { key: 'teknikresim', label: 'Teknik resim takip', sub: 'EYS.LS.007', hint: 'Resim no, rev no, tarihler. Rev no sistem tarafından otomatik artırılır.', plain: true, render: renderDrawingTracking },
+  { key: 'siparisler', label: 'Siparişler', sub: '', hint: 'Müşteri sipariş no ile ara.', render: renderOrders },
+  { key: 'yenisiparis', label: 'Yeni siparişler', sub: '', hint: 'Mail/PDF taslak → onay. Taslak satırlar; göster-onayla — hiçbiri kendiliğinden Mikro\'ya yazılmaz.', plain: true, render: renderIncomingOrders },
+  { key: 'hammadde', label: 'Hammadde', sub: '', hint: 'İhtiyaç, sarfiyat, Mikro fişi. Sayaç × brüt gramaj; Mikro fişi elle takip edilir.', plain: true, render: renderMaterial },
+  { key: 'verimlilik', label: 'Verimlilik', sub: '', hint: 'Tezgah, ürün, matris, duruşlar. Kazanılan süre ÷ ayrılan süre.', plain: true, render: renderEfficiency },
   { key: 'cizelgeleme', label: 'Çizelgeleme', sub: 'tezgah önerisi (OR-Tools)', hint: 'Öneri asla otomatik uygulanmaz.', plain: true, render: renderSchedule },
-  { key: 'fiyat', label: 'Fiyat çalışması', sub: 'ürün kartından önce: resim → hammadde/süre', hint: 'Ürün kartına otomatik dönüşmez; yönetici dolu kaydı görüp Mikro\'da kendisi açar.', plain: true, render: renderPriceStudies },
+  { key: 'fiyat', label: 'Fiyat çalışması', sub: '', hint: 'Ürün kartından önce: resim → hammadde/süre. Ürün kartına otomatik dönüşmez; yönetici dolu kaydı görüp Mikro\'da kendisi açar.', plain: true, render: renderPriceStudies },
 ]);
 
 const userOf = () => getSession()?.user ?? null;
@@ -75,14 +84,40 @@ export const defaultPlanningTab = (user = userOf()) => defaultTabFor(user, close
 const NAV_LAYOUT = Object.freeze([
   { id: null, label: null, keys: ['tezgahbasi'] },
   { id: null, label: null, keys: ['siparisler'] },
-  { id: 'g-depo', label: 'Depo', keys: ['paketleme', 'hurda'] },
+  { id: null, label: null, keys: ['yenisiparis'] },
+  { id: 'g-depo', label: 'Depo', keys: ['paketleme', 'hurda', 'siparisfisi'] },
   { id: 'g-uretim', label: 'Üretim', keys: ['isemirleri', 'numune', 'hammadde', 'fiyat'] },
-  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari', 'bakim'] },
+  { id: 'g-kalite', label: 'Kalite', keys: ['gkk', 'ilkonay', 'olcuraporlari', 'olcucihazlari', 'bakim', 'takimtakip'] },
   { id: 'g-urunler', label: 'Ürünler', keys: ['programlar', 'urunler', 'teknikresim'] },
   { id: 'g-analiz', label: 'Analiz', keys: ['verimlilik', 'cizelgeleme'] },
 ]);
 /** Hangi gruplar acik: modul seviyesinde hatirlanir (nav her sekme degisiminde yeniden cizilir, kapanmasin). */
 const openGroups = new Set();
+
+/**
+ * "Fiyat çalışması" rozeti: bu ekrana YAZABİLEN (usta) biri için bekleyen kayıt sayısı. Gerçek bir mesaj/push
+ * DEĞİL (kullanıcı kararı: "direkt mesaj gibi bildirim gitmesine gerek yok") — yalnız nav'da küçük bir sayı,
+ * admin yeni bir teknik resim yükleyince usta fark etsin diye (2026-11-18 isteği). `renderPlanningNav` her
+ * sekme değişiminde VE 30 sn'de bir (nav sabit kaldığı için bir kez kurulan zamanlayıcıyla) tazelenir.
+ */
+let fiyatBadgeBusy = false;
+function paintFiyatBadge(nav, count) {
+  const item = nav.querySelector('[data-tab="fiyat"]');
+  const badge = item?.querySelector('[data-role="badge"]');
+  if (badge) { badge.hidden = !(count > 0); badge.textContent = count > 0 ? String(count) : ''; badge.title = count > 0 ? `${count} fiyat çalışması dolum bekliyor` : ''; }
+  const grp = item?.closest('details.mi-grp');
+  if (grp) {
+    const summary = grp.querySelector(':scope > summary');
+    let dot = summary?.querySelector('[data-role="grp-dot"]');
+    if (count > 0 && !dot) summary?.insertAdjacentHTML('beforeend', '<span class="mi-grp-dot" data-role="grp-dot" title="Bekleyen fiyat çalışması var"></span>');
+    else if (count === 0 && dot) dot.remove();
+  }
+}
+function refreshFiyatBadge(nav) {
+  if (!canWrite('fiyat') || fiyatBadgeBusy) return;
+  fiyatBadgeBusy = true;
+  api('/api/planning/price-studies?status=bekliyor&limit=1').then((r) => paintFiyatBadge(nav, r.total)).catch(() => {}).finally(() => { fiyatBadgeBusy = false; });
+}
 
 /** Yan menu (app.js cagirir): bolum dugmeleri (gruplu); secili bolum isaretlenir. Adresler #/planlama/<bolum>. */
 export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
@@ -94,7 +129,8 @@ export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
 
   const btn = (t) =>
     `<button class="mi${t.key === current.key ? ' is-active' : ''}" type="button" data-tab="${t.key}" aria-current="${t.key === current.key}">` +
-    `<span class="mi-main"><span class="mi-name">${escapeHtml(t.label)}</span><span class="mi-sub">${escapeHtml(t.sub)}</span></span></button>`;
+    `<span class="mi-main"><span class="mi-name">${escapeHtml(t.label)}</span><span class="mi-sub">${escapeHtml(t.sub)}</span></span>` +
+    `<span class="mi-badge" data-role="badge" hidden></span></button>`;
 
   nav.innerHTML =
     '<p class="sidebar-label">Planlama</p>' +
@@ -117,7 +153,9 @@ export function renderPlanningNav(nav, tab = defaultPlanningTab()) {
       if (!d.matches?.('details.mi-grp')) return;
       if (d.open) openGroups.add(d.dataset.group); else openGroups.delete(d.dataset.group);
     }, true);
+    setInterval(() => refreshFiyatBadge(nav), 30_000);
   }
+  refreshFiyatBadge(nav);
 }
 const KIND_LABEL = Object.freeze({ isemri: 'iş emirleri listesi', siparis: 'sipariş dosyası', gkk: 'GKK rapor numaraları (EYS.FR.011)', ilkonay: 'ilk baskı onay listesi (EYS.FR.013)' });
 const MAX_UPLOAD = 64 * 1024 * 1024;

@@ -69,9 +69,19 @@ export const SCREEN_ROUTES = Object.freeze([
   [['GET'], /^\/api\/planning\/work-orders\/\d{10}$/, 'isemirleri', 'read'],
   [['GET'], /^\/api\/planning\/work-orders\/\d{10}\/(?:drawings\.pdf|print\.pdf)$/, 'isemirleri', 'read'],
 
+  // SIPARIS FISI (atolye malzeme/takim talebi): olusturma/duzenleme/durum degisimi role'e; silme kayitsiz -> admin
+  [['GET'], /^\/api\/planning\/supply-requests$/, 'siparisfisi', 'read'],
+  [['POST'], /^\/api\/planning\/supply-requests$/, 'siparisfisi', 'write'],
+  [['GET'], /^\/api\/planning\/supply-requests\/\d{1,12}$/, 'siparisfisi', 'read'],
+  [['PUT'], /^\/api\/planning\/supply-requests\/\d{1,12}$/, 'siparisfisi', 'write'],
+  [['POST'], /^\/api\/planning\/supply-requests\/\d{1,12}\/(?:order|receive|back)$/, 'siparisfisi', 'write'],
+
   // GKK rapor numaralari (EYS.FR.011): okuma herkese (asagida), usta yeni numara ALABILIR
   [['GET'], /^\/api\/planning\/gkk$/, 'gkk', 'read'],
   [['POST'], /^\/api\/planning\/gkk$/, 'gkk', 'write'],
+  // kalite raporu PDF'leri (hammaddeye gore, klasorden): okuma herkese; klasor ayari/esleme/kaldirma kayitsiz -> admin (doc-folder.js'teki AYNI desen)
+  [['GET'], /^\/api\/planning\/gkk\/\d{1,12}\/files$/, 'gkk', 'read'],
+  [['GET'], /^\/api\/planning\/gkk-files\/\d{1,12}$/, 'gkk', 'read'],
 
   // ilk onay raporu (EYS.FR.013): okuma herkese, usta is emrinden numara ALABILIR (elle kayit/duzelt/sil/taban yonetici)
   [['GET'], /^\/api\/planning\/first-approvals$/, 'ilkonay', 'read'],
@@ -110,6 +120,13 @@ export const SCREEN_ROUTES = Object.freeze([
   [['GET'], /^\/api\/planning\/devices\/\d{1,12}$/, 'olcucihazlari', 'read'],
   [['PUT'], /^\/api\/planning\/devices\/\d{1,12}$/, 'olcucihazlari', 'write'],
 
+  // takim ve pens takip (EYS.LS.026 + Takim Uclari/Tutuculari): okuma/ekleme/duzenleme role'e; silme ve Excel iceri aktarma kayitsiz -> admin
+  [['GET'], /^\/api\/planning\/tool-items$/, 'takimtakip', 'read'],
+  [['POST'], /^\/api\/planning\/tool-items$/, 'takimtakip', 'write'],
+  [['GET'], /^\/api\/planning\/tool-items\/categories$/, 'takimtakip', 'read'],
+  [['GET'], /^\/api\/planning\/tool-items\/\d{1,12}$/, 'takimtakip', 'read'],
+  [['PUT'], /^\/api\/planning\/tool-items\/\d{1,12}$/, 'takimtakip', 'write'],
+
   // bakim (EYS.FR.016 + Bakim Sicil Kartlari): genel gorunum (tip->makine->kalem) herkese, tik/rutin-arizi log role'e
   // yazilir; tip/kalem/makine CRUD, log silme ve Excel iceri aktarma kayitsiz -> admin (periyodu SADECE admin ayarlar).
   [['GET'], /^\/api\/planning\/maintenance$/, 'bakim', 'read'],
@@ -141,6 +158,15 @@ export const SCREEN_ROUTES = Object.freeze([
 
   [['GET'], /^\/api\/planning\/orders$/, 'siparisler', 'read'],
   [['GET'], /^\/api\/planning\/orders\/lines$/, 'siparisler', 'read'],
+
+  // mail'den siparis girisi (PDF/e-posta tablosu -> taslak, goster-onayla; Mikro'ya YAZMAZ)
+  [['GET'], /^\/api\/planning\/incoming-orders$/, 'yenisiparis', 'read'],
+  [['GET'], /^\/api\/planning\/incoming-orders\/product-search$/, 'yenisiparis', 'read'],
+  [['GET'], /^\/api\/planning\/incoming-orders\/\d{1,12}$/, 'yenisiparis', 'read'],
+  [['POST'], /^\/api\/planning\/incoming-orders\/(?:pdf|email-table)$/, 'yenisiparis', 'write'],
+  [['PUT'], /^\/api\/planning\/incoming-orders\/lines\/\d{1,12}$/, 'yenisiparis', 'write'],
+  [['POST'], /^\/api\/planning\/incoming-orders\/lines\/\d{1,12}\/(?:approve|reject)$/, 'yenisiparis', 'write'],
+
   [['GET'], /^\/api\/planning\/material(?:\/.*)?$/, 'hammadde', 'read'],
   [['POST'], /^\/api\/planning\/material\/mikro\/(?:transfer|virman)-preview$/, 'hammadde', 'read'],
   [['POST'], /^\/api\/planning\/material\/fis(?:\/undo)?$/, 'hammadde', 'write'],

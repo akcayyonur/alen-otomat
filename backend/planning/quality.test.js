@@ -135,6 +135,46 @@ test('GKK formu içeri alma: tanınır, tekrar yüklemek güvenli, değişen ala
   assert.throws(() => p.importCsv(Buffer.from('A;B\r\n1;2\r\n', 'utf8')), (e) => /EYS\.FR\.011/.test(e.message), 'tanınmayan dosya iletisi yeni formları da sayar');
 });
 
+/* ========================================================== GKK kalite raporu PDF'leri (GK rapor numarasina gore) */
+
+test('GKK kalite raporu: RAPOR NUMARASINA gore eklenir (hammadde cinsine DEGIL); ayni rapor nosunu paylasan FARKLI hammaddeler AYNI dosyayi gorur, ayni hammaddenin FARKLI rapor nosu PAYLASMAZ', () => {
+  const { p } = kur();
+  const q = p.quality;
+  const a = q.createGkk({ material: 'AA24 X 13 - PB3', reportNo: 'GK26.001' }, { now: NOW });
+  const b = q.createGkk({ material: ' aa24  x 14 - pb3 ', reportNo: 'GK26.001' }, { now: NOW }); // FARKLI hammadde, AYNI rapor no -> paylasir
+  const d = q.createGkk({ material: 'AA24 X 13 - PB3', reportNo: 'GK26.002' }, { now: NOW }); // AYNI hammadde, FARKLI rapor no -> paylasMAZ
+  const c = q.createGkk({ material: 'YUV18 - PB2', reportNo: 'GK26.003' }, { now: NOW });
+  assert.deepEqual(q.listGkkFiles('GK26.001'), [], 'hic dosya yok');
+  const f = q.addGkkFile('gk26-001', { name: 'sertifika.pdf', data: pdf('SERT-1') }, { by: 'ayse', now: NOW }); // bosluk/tire toleransli
+  assert.deepEqual([f.name, f.pages, f.source], ['sertifika.pdf', 1, 'elle']);
+  assert.deepEqual(q.filesOfGkk(a.id).map((x) => x.name), ['sertifika.pdf'], 'ilk kayit');
+  assert.deepEqual(q.filesOfGkk(b.id).map((x) => x.name), ['sertifika.pdf'], 'AYNI rapor no, FARKLI hammadde: ayni dosyayi gorur');
+  assert.deepEqual(q.filesOfGkk(d.id), [], 'AYNI hammadde, FARKLI rapor no: dosyayi GORMEZ');
+  assert.deepEqual(q.filesOfGkk(c.id), [], 'baska rapor no dosyayi GORMEZ');
+  assert.throws(() => q.filesOfGkk(99999), (e) => e.status === 404);
+
+  assert.throws(() => q.addGkkFile('GK26.001', { name: 'ayni.pdf', data: pdf('SERT-1') }, { now: NOW }), (e) => e.status === 409 && e.code === 'duplicate', 'ayni icerik iki kez eklenmez');
+  assert.throws(() => q.addGkkFile('GK26.001', { name: 'bozuk.pdf', data: Buffer.from('pdf degil '.repeat(20)) }, { now: NOW }), (e) => e.status === 422 && e.code === 'bad-pdf');
+  assert.throws(() => q.addGkkFile('', { name: 'x.pdf', data: pdf('X') }, { now: NOW }), (e) => e.status === 400, 'gecersiz rapor numarasi');
+  assert.throws(() => q.addGkkFile('AA24 X 13 - PB3', { name: 'x.pdf', data: pdf('X') }, { now: NOW }), (e) => e.status === 400, 'hammadde metni rapor numarasi olarak kabul edilmez');
+  for (let i = 0; i < 8; i += 1) q.addGkkFile('GK26.003', { name: `s${i}.pdf`, data: pdf(`S${i}`) }, { now: NOW }); // limite kadar doldur
+  assert.throws(() => q.addGkkFile('GK26.003', { name: 'fazla.pdf', data: pdf('FAZLA') }, { now: NOW }), (e) => e.status === 409 && e.code === 'too-many');
+
+  const dosya = q.listGkkFiles('GK26.001')[0];
+  const dl = q.gkkFileData(dosya.id);
+  assert.equal(dl.name, 'sertifika.pdf');
+  assert.ok(Buffer.isBuffer(dl.data) && dl.data.length > 0);
+  q.removeGkkFile(dosya.id);
+  assert.deepEqual(q.listGkkFiles('GK26.001'), [], 'kaldirilinca ayni rapor nosunu paylasan kayit da gormez');
+  assert.deepEqual(q.filesOfGkk(b.id), []);
+  assert.throws(() => q.gkkFileData(dosya.id), (e) => e.status === 404);
+  assert.throws(() => q.removeGkkFile(99999), (e) => e.status === 404);
+
+  // liste: fileCount alani (artik rapor numarasina gore, hammaddeye gore DEGIL)
+  assert.equal(q.listGkk({ q: 'yuv18' }).items[0].fileCount, 8);
+  assert.equal(q.listGkk({ q: 'GK26.001' }).items[0].fileCount, 0, 'dosya kaldirildi');
+});
+
 /* ================================================================================ ilk onay */
 
 test('ilk onay: usta iş emrinden numara alır; iş emri alanı yazılır; ikinci kez onay ister; iptal edilen reddedilir', () => {
@@ -144,7 +184,11 @@ test('ilk onay: usta iş emrinden numara alır; iş emri alanı yazılır; ikinc
   p.updateWorkOrder(w.no, { gkkReportNo: 'gk26.395' }, { now: day(8) });
   const a = q.createApproval({ woNo: w.no, person: 'Ayşe' }, { by: 'fabrika', now: day(9) });
   assert.deepEqual([a.code, a.stockCode, a.gkCode, a.woNo, a.operator, a.machineId, a.cncNo, a.createdBy], ['İ26-001', 'ST001.013', 'GK26.395', w.no, 'Ayşe', 'CNC-01', 1, 'fabrika']);
+  assert.equal(a.customerCode, '900000013', 'musteri urun kodu is emrinden (urun kartindan) TAZE cozulur, saklanmaz');
   assert.equal(new Date(a.approvedOn).getHours(), 0, 'tarih gün olarak saklanır');
+  // liste de AYNI goruntuyu dondurur (2026-11-18'de bulunan hata: liste oncesi cncNo her zaman bosti)
+  const listedA = q.listApprovals({}).items.find((x) => x.id === a.id);
+  assert.deepEqual([listedA.cncNo, listedA.customerCode], [1, '900000013']);
   const g = p.getWorkOrder(w.no, { now: NOW });
   assert.equal(g.firstApprovalNo, 'İ26-001', 'iş emrinin ilk onay rapor no alanı yazıldı');
   assert.deepEqual(g.approvals.map((x) => x.code), ['İ26-001']);
@@ -166,6 +210,8 @@ test('ilk onay: elle kayıt (yönetici), düzenleme, silme iş emri alanını bo
   assert.throws(() => q.createApproval({}, { now: NOW }), (e) => e.status === 400, 'iş emri de ürün kodu da yok');
   const m = q.createApproval({ stockCode: 'ST002.001', gkCode: 'gk26.7', approvedOn: '2026-10-05', person: 'Veli', machineId: 'CNC-05', note: 'numune' }, { by: 'ali', now: NOW });
   assert.deepEqual([m.code, m.gkCode, m.cncNo, m.woNo, m.note], ['İ26-001', 'GK26.007', 5, null, 'numune']);
+  assert.equal(m.customerCode, '900000021', 'is emri yoksa (elle kayit) musteri urun kodu urun kartindan cozulur');
+  assert.equal(q.createApproval({ stockCode: 'HIC-YOK.001' }, { now: NOW }).customerCode, null, 'urun karti yoksa patlamaz, null doner');
   assert.equal(new Date(m.approvedOn).getDate(), 5);
   const u = q.updateApproval(m.id, { operator: 'Mehmet', woNo: null, gkCode: null }, { by: 'ali', now: NOW });
   assert.deepEqual([u.operator, u.gkCode, u.stockCode, u.code], ['Mehmet', null, 'ST002.001', 'İ26-001'], 'kod değişmez');
@@ -341,6 +387,19 @@ test('HTTP: GKK, ilk onay (operatör sınırı), çizim yükle / birleşik PDF i
     const liste = await j('/api/planning/gkk?q=aa24&erpMaterial=' + encodeURIComponent('HM614.AA24.00XYU13.00'));
     assert.deepEqual([liste.status, liste.json.total, liste.json.matches.map((x) => x.match)], [200, 1, ['tam']]);
     assert.equal((await j(`/api/planning/gkk/${g.json.id}`, 'PUT', { note: 'yeni' })).json.note, 'yeni');
+
+    // kalite raporu PDF'i (GK rapor numarasina gore; manuel yukleme uc'u YOK, yalniz klasorden - burada dogrudan Quality uzerinden eklenir)
+    const dosya = p.quality.addGkkFile(g.json.reportNo, { name: 'sertifika.pdf', data: pdf('HTTP-GKK') }, { now: NOW });
+    const files = await j(`/api/planning/gkk/${g.json.id}/files`);
+    assert.deepEqual([files.status, files.json.map((f) => f.name)], [200, ['sertifika.pdf']]);
+    const gdl = await fetch(`${base}/api/planning/gkk-files/${dosya.id}`);
+    assert.equal(gdl.status, 200);
+    assert.equal(gdl.headers.get('content-type'), 'application/pdf');
+    assert.ok((await gdl.arrayBuffer()).byteLength > 0);
+    assert.equal((await fetch(`${base}/api/planning/gkk-files/999999`)).status, 404);
+    assert.equal((await j(`/api/planning/gkk-files/${dosya.id}`, 'DELETE')).status, 200);
+    assert.equal((await j(`/api/planning/gkk/${g.json.id}/files`)).json.length, 0, 'kaldirildi');
+
     assert.equal((await j('/api/planning/gkk/sequence', 'PUT', { last: 'GK26.300' })).json.no, 'GK26.301');
     assert.equal((await j(`/api/planning/gkk/${g.json.id}`, 'DELETE')).status, 200);
     assert.equal((await j('/api/planning/gkk/99999', 'DELETE')).status, 404);

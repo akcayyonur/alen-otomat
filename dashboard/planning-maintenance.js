@@ -48,13 +48,21 @@ function periodText(it) {
 
 /** @param {HTMLElement} host */
 export async function renderMaintenance(host) {
-  const st = { q: '', types: [], openTypes: new Set(), openAssets: new Set(), seq: 0 };
+  const st = { q: '', types: [], openTypes: new Set(), openAssets: new Set(), seq: 0, autoTick: null };
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search" data-role="q" placeholder="Makine tipi, sicil no, marka/model ara…" aria-label="Bakım ara">' +
     (isAdminRole() ? '<button type="button" class="icon-btn" data-act="import">Excel\'den içeri aktar…</button>' : '') +
     (isAdminRole() ? '<button type="button" class="icon-btn" data-act="new-type">Yeni tip ekle…</button>' : '') +
     (isAdminRole() ? '<button type="button" class="icon-btn btn-primary" data-act="new-asset">Yeni makine ekle…</button>' : '') +
-    '</div><p class="hint" data-role="count"></p><div data-role="list"></div>';
+    '</div>' +
+    // Usta bu ekrani gunluk kullanmiyor - tikler yalniz denetimde dolduruluyordu (kullanici bulgusu); bu yuzden
+    // sistem periyodu gelince KENDISI, her makine icin BAGIMSIZ rastgele bir saatte tik atar. Anahtar yalniz
+    // yoneticiye: "ayarlar sayfasi" burasi - Bakim ayri bir Planlama Ayarlari ekrani yok (bkz. CLAUDE.md).
+    (isAdminRole()
+      ? '<p class="hint"><label class="chk"><input type="checkbox" data-role="auto-tick" disabled> ' +
+        'Otomatik tik (periyodu gelince sistem her makine için rastgele bir saatte kendisi tik atar)</label></p>'
+      : '') +
+    '<p class="hint" data-role="count"></p><div data-role="list"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
   const itemsTable = (a) => {
@@ -123,6 +131,18 @@ export async function renderMaintenance(host) {
     }
   }
 
+  /** Otomatik tik anahtarının şu anki durumu (yalnız yönetici görür/değiştirir). */
+  async function loadAutoTick() {
+    const box = $('auto-tick');
+    if (!box) return;
+    try {
+      const r = await api('/api/planning/maintenance/auto-tick');
+      st.autoTick = r.enabled;
+      box.checked = r.enabled;
+      box.disabled = false;
+    } catch { /* yuklenemedi: kutu devre disi kalir, bir sonraki "load()"da yeniden denenir */ }
+  }
+
   const findAsset = (id) => {
     for (const t of st.types) { const a = t.assets.find((x) => x.id === id); if (a) return { type: t, asset: a }; }
     return null;
@@ -134,6 +154,15 @@ export async function renderMaintenance(host) {
 
   const search = debounce((value) => { st.q = value.trim(); load(); }, 250);
   host.oninput = (ev) => { if (ev.target.dataset?.role === 'q') search(ev.target.value); };
+  host.addEventListener('change', async (ev) => {
+    if (ev.target.dataset?.role !== 'auto-tick') return;
+    const box = ev.target;
+    const next = box.checked;
+    box.disabled = true;
+    try { await put('/api/planning/maintenance/auto-tick', { enabled: next }); st.autoTick = next; }
+    catch (e) { box.checked = !next; window.alert(`Kaydedilemedi: ${e.message}`); }
+    box.disabled = false;
+  });
   host.addEventListener('toggle', (ev) => {
     const d = ev.target;
     if (d.matches?.('details.mnt-grp')) { const id = Number(d.dataset.type); if (d.open) st.openTypes.add(id); else st.openTypes.delete(id); }
@@ -157,6 +186,7 @@ export async function renderMaintenance(host) {
     if (freeLogBtn) { const hit = findAsset(Number(freeLogBtn.dataset.asset)); if (hit) openFreeLogDialog(hit.asset, freeLogBtn.dataset.kind, load); }
   };
   await load();
+  loadAutoTick();
 }
 
 /* ============================================================================================== tik at / rutin-arizi */

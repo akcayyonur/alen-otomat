@@ -117,6 +117,7 @@ const planning = new Planning({
   sourcesDir: process.env.SOURCES_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'kaynak'), // Mikro/GKK Excel dosyalarinin varsayilan klasoru (data/kaynak)
   drawingsDir: process.env.DRAWINGS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'teknik-resim'), // teknik resim PDF'lerinin varsayilan klasoru (data/teknik-resim)
   stickersDir: process.env.STICKERS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'etiket'), // kutu etiketi Word dosyalarinin varsayilan klasoru (data/etiket)
+  gkkFilesDir: process.env.GKK_REPORTS_DIR ?? join(dirname(resolve(PLANNING_DB_FILE)), 'gkk-rapor'), // hammaddenin kalite raporu PDF'lerinin varsayilan klasoru (data/gkk-rapor)
   mikroClient, // MikroAPI: canli SQL okuma, Kaynak klasorune paralel (bkz. yukarida)
 });
 // Kurulumda kapali bolumler (config/features.json; FEATURES_FILE ile degistirilir): hatali dosya sunucuyu baslatmaz.
@@ -168,6 +169,7 @@ const STATIC_FILES = {
   '/planning-wo-form.js': ['../dashboard/planning-wo-form.js', 'text/javascript; charset=utf-8'],
   '/planning-production.js': ['../dashboard/planning-production.js', 'text/javascript; charset=utf-8'],
   '/planning-shop.js': ['../dashboard/planning-shop.js', 'text/javascript; charset=utf-8'],
+  '/planning-supply-requests.js': ['../dashboard/planning-supply-requests.js', 'text/javascript; charset=utf-8'],
   '/planning-card.js': ['../dashboard/planning-card.js', 'text/javascript; charset=utf-8'],
   '/planning-material.js': ['../dashboard/planning-material.js', 'text/javascript; charset=utf-8'],
   '/planning-efficiency.js': ['../dashboard/planning-efficiency.js', 'text/javascript; charset=utf-8'],
@@ -180,12 +182,15 @@ const STATIC_FILES = {
   '/planning-sources.js': ['../dashboard/planning-sources.js', 'text/javascript; charset=utf-8'],
   '/planning-mikro.js': ['../dashboard/planning-mikro.js', 'text/javascript; charset=utf-8'],
   '/planning-gkk.js': ['../dashboard/planning-gkk.js', 'text/javascript; charset=utf-8'],
+  '/planning-gkk-folder.js': ['../dashboard/planning-gkk-folder.js', 'text/javascript; charset=utf-8'],
   '/planning-approvals.js': ['../dashboard/planning-approvals.js', 'text/javascript; charset=utf-8'],
   '/planning-numune.js': ['../dashboard/planning-numune.js', 'text/javascript; charset=utf-8'],
   '/planning-hurda.js': ['../dashboard/planning-hurda.js', 'text/javascript; charset=utf-8'],
   '/planning-devices.js': ['../dashboard/planning-devices.js', 'text/javascript; charset=utf-8'],
   '/planning-maintenance.js': ['../dashboard/planning-maintenance.js', 'text/javascript; charset=utf-8'],
+  '/planning-tool-inventory.js': ['../dashboard/planning-tool-inventory.js', 'text/javascript; charset=utf-8'],
   '/planning-drawing-tracking.js': ['../dashboard/planning-drawing-tracking.js', 'text/javascript; charset=utf-8'],
+  '/planning-incoming-orders.js': ['../dashboard/planning-incoming-orders.js', 'text/javascript; charset=utf-8'],
   '/planning-depot.js': ['../dashboard/planning-depot.js', 'text/javascript; charset=utf-8'],
   '/planning-drawings.js': ['../dashboard/planning-drawings.js', 'text/javascript; charset=utf-8'],
   '/planning-reports.js': ['../dashboard/planning-reports.js', 'text/javascript; charset=utf-8'],
@@ -645,6 +650,13 @@ if (!AUTH_DISABLED) {
   auth.purge();
   setInterval(() => auth.purge(), 3_600_000).unref();
 }
+
+// Bakim: otomatik tik (usta bu ekrani gunluk kullanmiyor, tikler yalniz denetimde dolduruluyordu - kullanici
+// bulgusu, 2026-11-19). Periyodu gelen her (makine, kalem) icin, HER MAKINE icin BAGIMSIZ rastgele bir saatte
+// "kontrol" tik'i kendiliginden atilir; anahtar Bakim ekraninin kendi ust cubugundan (yalniz yonetici) kapatilabilir
+// (bkz. CLAUDE.md §6 "Bakim: otomatik tik"). 15 dk'lik aralik, "rastgele saat" hissini bozmayacak kadar sik.
+planning.maintenance.runAutoTick();
+setInterval(() => planning.maintenance.runAutoTick(), 15 * 60_000).unref();
 
 /** Kapanirken acik araliklari kapat ve tamponu bosalt - veri kaybolmasin. */
 function shutdown() {

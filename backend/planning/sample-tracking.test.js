@@ -204,7 +204,7 @@ test('musteri gruplari: sabit 19 grup, kullanicinin verdigi liste', () => {
   p.close();
 });
 
-test('nextStockCode: onizleme (rezerve ETMEZ) - bos grupta 001den baslar, var olan kodun bir ustune cikar, onek bagimsiz', () => {
+test('nextStockCode: onizleme (rezerve ETMEZ) - bos grupta 001den baslar, var olan kodun bir ustune cikar, SR ve Nİ ORTAK sayilir (2026-11-16 duzeltmesi)', () => {
   const p = kur();
   assert.equal(p.samples.nextStockCode({ customerGroupCode: '011', codePrefix: 'SR' }).stockCode, 'SR001.011');
   p.createProduct({ stockCode: 'SR015.011' });
@@ -212,9 +212,15 @@ test('nextStockCode: onizleme (rezerve ETMEZ) - bos grupta 001den baslar, var ol
   assert.equal(n.stockCode, 'SR016.011');
   assert.equal(n.customerGroupName, 'Konveyör');
   assert.equal(n.codePrefix, 'SR');
-  // Farkli onek (Nİ) AYNI grupta BAGIMSIZ sayilir (SR'nin varligindan etkilenmez)
-  assert.equal(p.samples.nextStockCode({ customerGroupCode: '011', codePrefix: 'Nİ' }).stockCode, 'Nİ001.011');
-  // Farkli grup (002) BAGIMSIZ sayilir
+  // Farkli onek (Nİ) AYNI grupta ORTAK sayaçla ilerler (gercek Mikro verisiyle dogrulandi - Ayvaz'da SR201.002
+  // varken Nİ yalniz 198'e kadar cikmisti, bagimsiz olsaydi bu olmazdi). Ust satirdaki "SR016" bir ONIZLEMEYDI
+  // (hicbir sey OLUSTURMADI) - gercek en buyuk hala SR015 (asagida createProduct ile acildi), bu yuzden Nİ de
+  // oradan devam eder: 016.
+  assert.equal(p.samples.nextStockCode({ customerGroupCode: '011', codePrefix: 'Nİ' }).stockCode, 'Nİ016.011');
+  // Nİ de en buyuge katilir: Nİ020.011 eklenince SR ONA GORE devam eder (017 degil, 021)
+  p.createProduct({ stockCode: 'Nİ020.011' });
+  assert.equal(p.samples.nextStockCode({ customerGroupCode: '011', codePrefix: 'SR' }).stockCode, 'SR021.011');
+  // Farkli grup (002) BAGIMSIZ sayilir (gruplar birbirinden ayri, yalniz SR/Nİ AYNI grup icinde ortak)
   assert.equal(p.samples.nextStockCode({ customerGroupCode: '002', codePrefix: 'SR' }).stockCode, 'SR001.002');
   assert.throws(() => p.samples.nextStockCode({ customerGroupCode: '999', codePrefix: 'SR' }), /Bilinmeyen müşteri grubu/);
   assert.throws(() => p.samples.nextStockCode({ customerGroupCode: '011', codePrefix: 'XX' }), /SR.*Nİ/);
@@ -243,6 +249,18 @@ test('olustur: musteri grubu + onek birlikte verilirse YENI kod uretilir, urun k
   p.close();
 });
 
+test('tam boy (mm): numuneye kaydedilir, YENI urun kartina kopyalanir, duzenlenebilir', () => {
+  const { p } = kurMikro({ writeEnabled: false });
+  const a = p.samples.create({ customer: 'Konveyör A.Ş.', customerGroupCode: '011', codePrefix: 'SR', lengthMm: '100' }, { by: 'admin' });
+  assert.equal(a.lengthMm, 100);
+  const urun = p.getProduct('SR001.011');
+  assert.equal(urun.lengthMm, 100, 'tam boy yeni urun kartina kopyalandi');
+
+  const b = p.samples.update(a.id, { lengthMm: 150 });
+  assert.equal(b.lengthMm, 150);
+  p.close();
+});
+
 test('olustur: musteri grubu + onek ile Mikro YENI stok karti olusturma arka planda denenir (basarili ve basarisiz)', async () => {
   const basarili = kurMikro({ writeEnabled: true, call: async () => ({ Data: {} }) });
   const a = basarili.p.samples.create({ customer: 'Konveyör', customerGroupCode: '011', codePrefix: 'SR' });
@@ -253,6 +271,8 @@ test('olustur: musteri grubu + onek ile Mikro YENI stok karti olusturma arka pla
   assert.equal(basarili.calls[0].endpoint, 'StokKaydetV2');
   assert.equal(basarili.calls[0].opts.nestInMikro, true, 'DahiliStokHareketKaydetV2 ile AYNI - stoklar Mikro bloğunun ICINDE');
   assert.equal(basarili.calls[0].body.stoklar[0].sto_kod, 'SR001.011');
+  assert.equal(basarili.calls[0].body.stoklar[0].sto_cins, 4, 'Mamul (SR/Ni kodlari Alen\'in kendi urettigi parca, satin alinan ticari mal degil)');
+  assert.equal(basarili.calls[0].body.stoklar[0].user_tablo, undefined, 'hammadde/tamBoy verilmedi - user_tablo hic gonderilmez');
   basarili.p.close();
 
   const kapali = kurMikro({ writeEnabled: false });
@@ -263,6 +283,19 @@ test('olustur: musteri grubu + onek ile Mikro YENI stok karti olusturma arka pla
   assert.match(b2.mikroProductError, /kapalı/);
   assert.equal(kapali.calls.length, 0, 'yazma kapaliyken Mikro\'ya HIC istek atilmaz');
   kapali.p.close();
+});
+
+test('olustur: hammadde + tam boy verilmisse user_tablo (STOKLAR_USER) ile birlikte gonderilir (2026-11-16, gercek Mikro ile dogrulanan mekanizma)', async () => {
+  const { p, calls } = kurMikro({ writeEnabled: true, call: async () => ({ Data: {} }) });
+  p.samples.create({
+    customer: 'Konveyör', customerGroupCode: '011', codePrefix: 'SR',
+    material: 'HM614.AA46.00XYU18.00', lengthMm: 100,
+  });
+  await flush();
+  assert.equal(calls[0].body.stoklar[0].user_tablo[0].HAMMADDE, 'HM614.AA46.00XYU18.00');
+  assert.equal(calls[0].body.stoklar[0].user_tablo[0].TAM_BOY, 100);
+  assert.equal(calls[0].body.stoklar[0].user_tablo[0].MAKINA, undefined, 'numunede kaynagi yok - verilmedikce gonderilmez');
+  p.close();
 });
 
 test('duzenle: numune net agirligi girilince LOKAL urun karti netKg ile eslenir (urun karti varsa); Mikro\'ya yalniz auto-generated kodlarda gidilir', async () => {
@@ -283,9 +316,14 @@ test('duzenle: numune net agirligi girilince LOKAL urun karti netKg ile eslenir 
   assert.equal(a2.mikroWeightSentG, 12.3);
   assert.equal(a2.mikroWeightError, null);
   assert.equal(otomatik.p.getProduct('SR001.011').netKg, 0.0123);
-  const agirlikCagrisi = otomatik.calls.find((c) => c.body.stoklar?.[0]?.sto_birim1_agirlik != null);
-  assert.ok(agirlikCagrisi, 'StokKaydetV2 agirlik alaniyla cagrildi');
-  assert.equal(agirlikCagrisi.body.stoklar[0].sto_birim1_agirlik, 0.0123);
+  // Agirlik guncellemesi StokKaydetV2 DEGIL KayitKaydetV2 ile (2026-11-16 duzeltmesi - StokKaydetV2 INSERT-ONLY,
+  // var olan kodu reddediyordu; gercek testle bulundu, bkz. mikro-stock.js).
+  const agirlikCagrisi = otomatik.calls.find((c) => c.endpoint === 'KayitKaydetV2');
+  assert.ok(agirlikCagrisi, 'KayitKaydetV2 ile cagrildi');
+  assert.equal(agirlikCagrisi.body.Tablo[0].No, '13', 'STOKLAR tablo no');
+  assert.equal(agirlikCagrisi.body.Tablo[0].KayitTipi, '1', 'Guncelle');
+  assert.equal(agirlikCagrisi.body.Kayit[0].sto_kod, 'SR001.011');
+  assert.equal(agirlikCagrisi.body.Kayit[0].sto_birim1_agirlik, 0.0123);
 
   // ayni deger tekrar girilirse ikinci kez Mikro'ya GIDILMEZ (zaten gonderilmis)
   const sayac = otomatik.calls.length;

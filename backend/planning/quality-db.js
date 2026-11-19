@@ -1,13 +1,14 @@
 /**
  * Kalite kayıtları ve çizimler için tablolar (planlama veritabanında, `PlanningDb` ile AYNI dosya):
  *   gkk_reports      GKK (giriş kalite kontrol) rapor numarası takip formu (EYS.FR.011): hammadde cinsi → rapor no, üretici rapor tarihi, açıklama
+ *   gkk_files        GKK kalite raporu PDF'leri (klasörden, GK RAPOR NUMARASINA göre; aynı rapor numarasını paylaşan kayıtlar aynı dosyaları görür)
  *   first_approvals  İlk baskı onay / numune takip listesi (EYS.FR.013): ilk onay kodu → ürün, GK kodu, iş emri, tarih, operatör, CNC
  *   counters         numara tabanları (rapor numarası dizileri; Excel'de zaten verilmiş numaralardan devam edilsin)
  *   drawing_files    yüklenen teknik resim PDF'leri (içerik adresli: aynı dosya bir kez saklanır)
  *   wo_drawings      iş emrine bağlı çizimler (sıralı)
  */
 import { foldTr } from './normalize.js';
-import { compactKey } from './gkk.js';
+import { compactKey, findGkNoIn } from './gkk.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS gkk_reports (
@@ -30,6 +31,25 @@ CREATE TABLE IF NOT EXISTS gkk_reports (
   UNIQUE (report_key, material_key)
 );
 CREATE INDEX IF NOT EXISTS idx_gkk_year_seq ON gkk_reports (year, seq);
+
+-- GKK KALITE RAPORU PDF'leri (hammaddenin ureticisinden gelen sertifika): GK RAPOR NUMARASINA gore baglanir
+-- (report_key = gkk_reports.report_key ile AYNI foldTr+compactKey), hammadde CINSINE DEGIL (2026-11-19 duzeltmesi:
+-- oncesinde hammadde cinsine baglaniyordu, ama GERCEK dosyalarda ayni hammaddenin FARKLI teslimatlari/rapor
+-- numaralari FARKLI sertifika PDF'leri tasiyor — dosya adi da zaten hammadde yerine GK numarasiyla eslenir,
+-- bkz. gkk.js findGkNoIn). Ayni rapor NUMARASINI paylasan (birden cok hammaddeye yazilmis) kayitlar AYNI
+-- dosyalari gorur. Icerik drawing_files'ta (icerik adresli, ayni dosya bir kez saklanir). Bkz. gkk-folder.js.
+CREATE TABLE IF NOT EXISTS gkk_files (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_key TEXT    NOT NULL,
+  name       TEXT    NOT NULL,
+  sha        TEXT    NOT NULL,
+  sort       INTEGER NOT NULL,
+  source     TEXT    NOT NULL,
+  rel_path   TEXT,
+  added_at   INTEGER NOT NULL,
+  added_by   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_gkk_files_report ON gkk_files (report_key, sort);
 
 CREATE TABLE IF NOT EXISTS first_approvals (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +133,42 @@ export class QualityDb {
   /** @param {import('node:sqlite').DatabaseSync} db PlanningDb'nin açık bağlantısı */
   constructor(db) {
     this.db = db;
+    this.#migrateGkkFiles();
     this.db.exec(SCHEMA);
+  }
+
+  /**
+   * TEK SEFERLIK: eski 'gkk_files.material_key' sutunu 'report_key'e tasinir (2026-11-19 duzeltmesi — hammadde
+   * CINSI yerine GK RAPOR NUMARASI ile eslenir). Var olan satirlarin `rel_path`'inden (varsa) rapor numarasi
+   * cikarilmaya calisilir; bulunamazsa (eski klasor adlandirmasi rapor no tasimiyorsa) eski hammadde anahtari
+   * report_key olarak KORUNUR (veri kaybolmaz; bir sonraki "Eslemeden durum"da artik hicbir GKK kaydina
+   * oturmayan bu satirlar admin'in "Dosyayi kaldir"iyla elle temizlenebilir).
+   */
+  #migrateGkkFiles() {
+    const exists = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'gkk_files'").get();
+    if (!exists) return;
+    const cols = this.db.prepare('PRAGMA table_info(gkk_files)').all().map((c) => c.name);
+    if (cols.includes('report_key')) return;
+    const rows = this.db.prepare('SELECT * FROM gkk_files').all();
+    this.db.exec('DROP TABLE gkk_files');
+    this.db.exec(`CREATE TABLE gkk_files (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      report_key TEXT    NOT NULL,
+      name       TEXT    NOT NULL,
+      sha        TEXT    NOT NULL,
+      sort       INTEGER NOT NULL,
+      source     TEXT    NOT NULL,
+      rel_path   TEXT,
+      added_at   INTEGER NOT NULL,
+      added_by   TEXT
+    )`);
+    this.db.exec('CREATE INDEX idx_gkk_files_report ON gkk_files (report_key, sort)');
+    const insert = this.db.prepare('INSERT INTO gkk_files (id, report_key, name, sha, sort, source, rel_path, added_at, added_by) VALUES (?,?,?,?,?,?,?,?,?)');
+    for (const r of rows) {
+      const found = r.rel_path ? findGkNoIn(r.rel_path) : null;
+      const reportKey = found ? compactKey(found.no) : r.material_key;
+      insert.run(r.id, reportKey, r.name, r.sha, r.sort, r.source, r.rel_path, r.added_at, r.added_by);
+    }
   }
 
   /* ---------------------------------------------------------------- numara tabanları */
@@ -176,6 +231,49 @@ export class QualityDb {
 
   gkkCount() {
     return Number(this.db.prepare('SELECT COUNT(*) AS n FROM gkk_reports').get().n);
+  }
+
+  /** GK rapor numarasina (report_key) gore kayitli dosya sayilari. @param {string[]} reportKeys @returns {Map<string, number>} */
+  gkkFileCounts(reportKeys) {
+    const keys = [...new Set(reportKeys)];
+    const out = new Map(keys.map((k) => [k, 0]));
+    if (keys.length === 0) return out;
+    const rows = this.db.prepare(`SELECT report_key, COUNT(*) AS n FROM gkk_files WHERE report_key IN (${keys.map(() => '?').join(',')}) GROUP BY report_key`).all(...keys);
+    for (const r of rows) out.set(r.report_key, Number(r.n));
+    return out;
+  }
+
+  /* --------------------------------------------------------- GKK kalite raporu dosyalari (rapor numarasina gore) */
+
+  gkkFiles(reportKey) {
+    return this.db.prepare(
+      `SELECT g.id, g.name, g.sha, g.sort, g.source, g.rel_path, g.added_at, g.added_by, f.size, f.pages
+         FROM gkk_files g JOIN drawing_files f ON f.sha = g.sha WHERE g.report_key = ? ORDER BY g.sort, g.id`,
+    ).all(reportKey).map((r) => ({
+      id: Number(r.id), name: r.name, sha: r.sha, sort: Number(r.sort), source: r.source, relPath: r.rel_path,
+      size: Number(r.size), pages: Number(r.pages), addedAt: Number(r.added_at), addedBy: r.added_by,
+    }));
+  }
+
+  gkkFileGet(id) {
+    const r = this.db.prepare('SELECT g.*, f.data FROM gkk_files g JOIN drawing_files f ON f.sha = g.sha WHERE g.id = ?').get(id);
+    return r ? { id: Number(r.id), reportKey: r.report_key, name: r.name, sha: r.sha, data: Buffer.from(r.data) } : null;
+  }
+
+  /** @returns {number} yeni dosya kaydinin id'si */
+  addGkkFile(reportKey, { name, sha, size, pages, data, source, relPath = null }, { by = null, now = Date.now() } = {}) {
+    this.db.prepare('INSERT OR IGNORE INTO drawing_files (sha, size, pages, data, created_at) VALUES (?,?,?,?,?)').run(sha, size, pages, data, now);
+    const sort = Number(this.db.prepare('SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM gkk_files WHERE report_key = ?').get(reportKey).s);
+    return Number(this.db.prepare('INSERT INTO gkk_files (report_key, name, sha, sort, source, rel_path, added_at, added_by) VALUES (?,?,?,?,?,?,?,?)')
+      .run(reportKey, name, sha, sort, source, relPath, now, by).lastInsertRowid);
+  }
+
+  deleteGkkFile(id) {
+    const r = this.db.prepare('SELECT sha FROM gkk_files WHERE id = ?').get(id);
+    if (!r) return false;
+    this.db.prepare('DELETE FROM gkk_files WHERE id = ?').run(id);
+    this.#dropFileIfUnused(r.sha);
+    return true;
   }
 
   /* ------------------------------------------------------------------ ilk onay (FR.013) */
@@ -268,17 +366,18 @@ export class QualityDb {
   }
 
   /**
-   * `drawing_files` artık DÖRT tüketicisi var: `wo_drawings`, `product_files`, `price_studies.sha` (sütun,
-   * ayrı tablo değil) ve `sample_drawings` (sample-tracking.js). Dördü de SAYILMALI — yalnız ikisini (wo_drawings/
-   * product_files) saymak, ör. bir numune resmiyle AYNI PDF'i paylaşan bir iş emri resmi silinince numunenin
+   * `drawing_files` artık BEŞ tüketicisi var: `wo_drawings`, `product_files`, `price_studies.sha` (sütun,
+   * ayrı tablo değil), `sample_drawings` (sample-tracking.js) ve `gkk_files` (2026-11-17). Beşi de SAYILMALI —
+   * yalnız bir kısmını saymak, ör. bir numune resmiyle AYNI PDF'i paylaşan bir iş emri resmi silinince numunenin
    * blob'unu da YANLIŞLIKLA silerdi (2026-11-13, sample_drawings eklenirken kod incelemesinde bulundu — o ana
    * kadar price_studies de SAYILMIYORDU, bu da aynı sınıf bir hataydı, aynı anda düzeltildi).
    */
   #dropFileIfUnused(sha) {
     const used = Number(this.db.prepare(
       `SELECT (SELECT COUNT(*) FROM wo_drawings WHERE sha = ?) + (SELECT COUNT(*) FROM product_files WHERE sha = ?) +
-              (SELECT COUNT(*) FROM price_studies WHERE sha = ?) + (SELECT COUNT(*) FROM sample_drawings WHERE sha = ?) AS n`,
-    ).get(sha, sha, sha, sha).n);
+              (SELECT COUNT(*) FROM price_studies WHERE sha = ?) + (SELECT COUNT(*) FROM sample_drawings WHERE sha = ?) +
+              (SELECT COUNT(*) FROM gkk_files WHERE sha = ?) AS n`,
+    ).get(sha, sha, sha, sha, sha).n);
     if (used === 0) this.db.prepare('DELETE FROM drawing_files WHERE sha = ?').run(sha);
   }
 

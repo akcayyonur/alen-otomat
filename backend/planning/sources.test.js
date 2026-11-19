@@ -69,7 +69,7 @@ test('yenile: ilk seferde dosyalar islenir (siparis + GKK); ikinci seferde degis
 
     const r1 = k.p.sources.refresh({ by: 'ayse' });
     assert.deepEqual([r1.processed, r1.unchanged, r1.failed], [2, 0, 0]);
-    assert.deepEqual(r1.totals.lines, { added: 2, updated: 0 });
+    assert.deepEqual(r1.totals.lines, { added: 2, updated: 0, removed: 0 });
     assert.deepEqual(r1.totals.products, { added: 2, updated: 0, protected: 0 });
     assert.deepEqual(r1.totals.gkk, { added: 2, updated: 0 });
     assert.deepEqual(r1.changes.lines.added.map((x) => x.stockCode), ['SR001.001', 'SR002.001']);
@@ -110,7 +110,7 @@ test('yenile: Mikro dosyasinda yeni siparis satiri ve degisen kalan miktar bulun
     assert.equal(r.processed, 1);
     assert.deepEqual(r.changes.lines.added, [{ docNo: 'SPR-9', custOrderNo: 'MS-1', stockCode: 'SR003.001', qty: 100, remaining: 70 }]);
     assert.deepEqual(r.changes.lines.updated.map((x) => [x.docNo, x.stockCode, x.remaining]), [['SPR-1', 'SR001.001', 40]]);
-    assert.deepEqual(r.totals.lines, { added: 1, updated: 1 });
+    assert.deepEqual(r.totals.lines, { added: 1, updated: 1, removed: 0 });
     assert.equal(k.p.searchOrders({ q: 'SPR-1' }).length, 1, 'SR002 satiri da duruyor (gizlenmedi)');
     assert.equal(k.p.orderLines({ customerKey: 'FIRMA X', custOrderKey: 'MS-1', docKey: 'SPR-1' }).length, 2);
   } finally { k.bitir(); }

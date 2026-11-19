@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Planning } from './planning.js';
 import { createPlanningRoutes } from './routes.js';
-import { nextDueAt, dueStatus, parsePeriodText } from './maintenance.js';
+import { nextDueAt, dueStatus, parsePeriodText, AUTO_PERSON } from './maintenance.js';
 import { xlsxOf, serial } from './test/xlsx-fixture.js';
 
 const at = (h, m = 0, d = 12) => new Date(2026, 9, d, h, m).getTime();
@@ -305,6 +305,165 @@ test('iceri aktarma: bakim tablosu bulunamazsa uyari verir ama makineyi yine de 
   assert.equal(r.addedAssets, 1);
   assert.match(r.warnings.join(' '), /bakım kalemleri tablosu/);
   p.close();
+});
+
+/* ====================================================================================== otomatik tik */
+/* Kullanıcı bulgusu (2026-11-19): usta bu ekranı günlük kullanmıyor, tikler yalnız denetimde dolduruluyordu.
+ * Çözüm: vade gelince sistem HER MAKİNE için BAĞIMSIZ rastgele bir anda kendisi "kontrol" tiki atar; anahtar
+ * (varsayılan AÇIK) Bakım ekranının üst çubuğundan (yalnız admin) kapatılabilir. Bkz. CLAUDE.md §6. */
+
+test('otomatik tik: ayar hiç ayarlanmamışsa VARSAYILAN AÇIK, anahtar kapat/aç round-trip', () => {
+  const p = kur();
+  assert.equal(p.maintenance.autoTickEnabled(), true, 'ozelligin asil amaci bu, varsayilan ACIK');
+  assert.deepEqual(p.maintenance.setAutoTickEnabled(false), { enabled: false });
+  assert.equal(p.maintenance.autoTickEnabled(), false);
+  assert.deepEqual(p.maintenance.setAutoTickEnabled(true), { enabled: true });
+  assert.equal(p.maintenance.autoTickEnabled(), true);
+  p.close();
+});
+
+test('otomatik tik: kalemin vadesi henüz gelmemişse (durum tamam) hiçbir şey PLANLANMAZ', () => {
+  const p = kur();
+  const t = p.maintenance.createType({ name: 'Kompresör' }, { now: at(10) });
+  p.maintenance.createItem(t.id, { description: 'Yağ değişimi', periodUnit: 'yil', periodEvery: 5 }, { now: at(10) });
+  p.maintenance.createAsset({ typeId: t.id }, { now: at(10) });
+  const r = p.maintenance.runAutoTick({ now: at(10) + 86_400_000, random: () => { throw new Error('cekilis olmamali'); } });
+  assert.deepEqual(r, { scheduled: 0, fired: 0 });
+  assert.equal(p.maintenance.db.prepare('SELECT COUNT(*) c FROM maintenance_auto_queue').get().c, 0);
+  p.close();
+});
+
+test('otomatik tik: anahtar KAPALIYSA ne yeni bir an PLANLANIR ne de bekleyen bir plan ATEŞLENİR', () => {
+  const p = kur();
+  const t = p.maintenance.createType({ name: 'CNC Torna' }, { now: ms(2026, 10, 1) });
+  const it = p.maintenance.createItem(t.id, { description: 'Günlük kontrol', periodUnit: 'gun' }, { now: ms(2026, 10, 1) });
+  const a = p.maintenance.createAsset({ typeId: t.id }, { now: ms(2026, 10, 1) });
+  const now0 = ms(2026, 10, 3, 10); // onceki gun kacirildi, zaten gecikmis
+
+  // once ACIKKEN bir hedef planlanir
+  p.maintenance.runAutoTick({ now: now0, random: () => 0.01 });
+  assert.equal(p.maintenance.db.prepare('SELECT COUNT(*) c FROM maintenance_auto_queue').get().c, 1);
+
+  // ...sonra anahtar KAPATILIR: hedef anina gelinse bile ATESLENMEZ
+  p.maintenance.setAutoTickEnabled(false);
+  const target = Number(p.maintenance.db.prepare('SELECT target_at FROM maintenance_auto_queue').get().target_at);
+  const r = p.maintenance.runAutoTick({ now: target + 1000 });
+  assert.deepEqual(r, { scheduled: 0, fired: 0 }, 'kapaliyken hicbir sey yapilmaz');
+  assert.equal(p.maintenance.listLogs(a.id, { itemId: it.id }).length, 0, 'gercek bir tik OLUSMADI');
+
+  // kapaliyken, henuz hic planlanmamis BASKA bir kalem icin de yeni bir plan OLUSMAZ
+  const it2 = p.maintenance.createItem(t.id, { description: 'Talas temizligi', periodUnit: 'gun' }, { now: ms(2026, 10, 1) });
+  p.maintenance.runAutoTick({ now: target + 2000 });
+  assert.equal(p.maintenance.db.prepare('SELECT COUNT(*) c FROM maintenance_auto_queue WHERE item_id = ?').get(it2.id).c, 0);
+  p.close();
+});
+
+test('otomatik tik: vade gelince HER MAKİNE için BAĞIMSIZ rastgele bir an planlanır, hedefe kadar ateşlenmez, hedeften sonra GERÇEK bir tik oluşur', () => {
+  const p = kur();
+  const t = p.maintenance.createType({ name: 'CNC Torna' }, { now: ms(2026, 10, 1) });
+  const it = p.maintenance.createItem(t.id, { description: 'Günlük kontrol', periodUnit: 'gun' }, { now: ms(2026, 10, 1) });
+  const a1 = p.maintenance.createAsset({ typeId: t.id, sicilNo: 'BS.001' }, { now: ms(2026, 10, 1) });
+  const a2 = p.maintenance.createAsset({ typeId: t.id, sicilNo: 'BS.002' }, { now: ms(2026, 10, 1) });
+
+  const now0 = ms(2026, 10, 3, 10);
+  const due = ms(2026, 10, 3); // onceki gun kacirildi, zaten gecikmis (grace=0 -> yakalama penceresi devrede)
+  const windowMs = 6 * 3_600_000; // yakalama penceresi (AUTO_CATCHUP_MAX_MS)
+  const fracs = [0.1, 0.9]; // asset1, asset2 - HER MAKINE icin AYRI cekilis
+  let callIdx = 0;
+  const seq = () => fracs[callIdx++];
+
+  const r1 = p.maintenance.runAutoTick({ now: now0, random: seq });
+  assert.deepEqual(r1, { scheduled: 2, fired: 0 }, 'iki makine de gecikmis -> ikisi de planlanir, henuz hicbiri ateslenmez');
+
+  const rows = p.maintenance.db.prepare('SELECT * FROM maintenance_auto_queue ORDER BY asset_id').all();
+  assert.equal(rows.length, 2);
+  const row1 = rows.find((x) => Number(x.asset_id) === a1.id);
+  const row2 = rows.find((x) => Number(x.asset_id) === a2.id);
+  assert.equal(Number(row1.due_at), due);
+  assert.equal(Number(row1.target_at), now0 + Math.floor(0.1 * windowMs));
+  assert.equal(Number(row2.target_at), now0 + Math.floor(0.9 * windowMs));
+  assert.notEqual(Number(row1.target_at), Number(row2.target_at), 'her makine BAGIMSIZ rastgele bir an aliyor, ayni saniyeye senkronlanmiyor');
+
+  // ayni "now"da ikinci cagri: hicbiri henuz hedef anina gelmedi -> ne yeni planlama ne atesleme (cekilis de hic yapilmaz)
+  const r2 = p.maintenance.runAutoTick({ now: now0, random: () => { throw new Error('yeni cekilis olmamali'); } });
+  assert.deepEqual(r2, { scheduled: 0, fired: 0 });
+  assert.equal(p.maintenance.listLogs(a1.id, { itemId: it.id }).length, 0, 'hedef anina kadar GERCEK bir tik olusmaz');
+
+  // asset1'in hedef anina gelince GERCEK bir tik olusur ('kontrol', kayit sahibi 'Otomatik'); asset2 hala bekliyor
+  const afterTarget1 = Number(row1.target_at) + 1;
+  const r3 = p.maintenance.runAutoTick({ now: afterTarget1 });
+  assert.deepEqual(r3, { scheduled: 0, fired: 1 });
+  const logs1 = p.maintenance.listLogs(a1.id, { itemId: it.id });
+  assert.equal(logs1.length, 1);
+  assert.equal(logs1[0].kind, 'kontrol');
+  assert.equal(logs1[0].person, AUTO_PERSON);
+  assert.equal(p.maintenance.listLogs(a2.id, { itemId: it.id }).length, 0, 'asset2 hedefi henuz gelmedi');
+
+  // asset2'nin hedef anina gelince o da ateslenir
+  const afterTarget2 = Number(row2.target_at) + 1;
+  const r4 = p.maintenance.runAutoTick({ now: afterTarget2 });
+  assert.equal(r4.fired, 1);
+  assert.equal(p.maintenance.listLogs(a2.id, { itemId: it.id })[0].person, AUTO_PERSON);
+  p.close();
+});
+
+test('otomatik tik: henüz VADESİ GELMEMİŞ ama grace penceresine girmiş kalem için hedef [şu an, vade] aralığında seçilir (yakalama penceresiyle SINIRLI DEĞİL)', () => {
+  const p = kur();
+  const t = p.maintenance.createType({ name: 'CNC Torna' }, { now: ms(2026, 1, 1) });
+  const it = p.maintenance.createItem(t.id, { description: 'Haftalık temizlik', periodUnit: 'hafta' }, { now: ms(2026, 1, 1) });
+  const a = p.maintenance.createAsset({ typeId: t.id }, { now: ms(2026, 1, 1) });
+  p.maintenance.addLog(a.id, { itemId: it.id, doneOn: ms(2026, 10, 6) }, { now: ms(2026, 10, 6) }); // onceki hafta (5-12 Ekim) yapildi
+
+  const now0 = ms(2026, 10, 17); // bu hafta [12-19 Ekim), vadeye (19 Ekim 00:00) 2 gun kala -> 'yaklasiyor'
+  const due = ms(2026, 10, 19);
+  const r = p.maintenance.runAutoTick({ now: now0, random: () => 0.25 });
+  assert.deepEqual(r, { scheduled: 1, fired: 0 });
+  const row = p.maintenance.db.prepare('SELECT * FROM maintenance_auto_queue WHERE asset_id = ? AND item_id = ?').get(a.id, it.id);
+  assert.equal(Number(row.due_at), due);
+  assert.equal(Number(row.target_at), now0 + Math.floor(0.25 * (due - now0)), 'hedef su andan vadeye kadar olan araliktan secilir, 6 saatlik yakalama penceresi burada devrede DEGIL');
+  p.close();
+});
+
+test('otomatik tik: eski (ateşlenmiş / yetim) kuyruk satırları zamanla temizlenir', () => {
+  const p = kur();
+  const t = p.maintenance.createType({ name: 'CNC Torna' }, { now: at(10) });
+  const it = p.maintenance.createItem(t.id, { description: 'Yıllık bakım', periodUnit: 'yil', periodEvery: 5 }, { now: at(10) });
+  const a = p.maintenance.createAsset({ typeId: t.id }, { now: at(10) });
+  const now0 = at(10);
+  // elle eski bir "ateslenmis" ve bir de "ateslenmemis/yetim" (usta elle tikleyince due_at'i gecersizlesen) satir ekle
+  p.maintenance.db.prepare('INSERT INTO maintenance_auto_queue (asset_id, item_id, due_at, target_at, fired_at, created_at) VALUES (?,?,?,?,?,?)')
+    .run(a.id, it.id, now0 - 1000, now0 - 1000, now0 - 1000, now0 - 1000);
+  p.maintenance.db.prepare('INSERT INTO maintenance_auto_queue (asset_id, item_id, due_at, target_at, fired_at, created_at) VALUES (?,?,?,?,?,?)')
+    .run(a.id, it.id, now0 - 2000, now0 - 2000, null, now0 - 2000);
+  assert.equal(p.maintenance.db.prepare('SELECT COUNT(*) c FROM maintenance_auto_queue').get().c, 2);
+  const far = now0 + 500 * 86_400_000; // 500 gun sonra: ikisi de esigi asar (ateslenmis: 400 gun, yetim: 30 gun)
+  const r = p.maintenance.runAutoTick({ now: far });
+  assert.deepEqual(r, { scheduled: 0, fired: 0 }, 'bu kalem 5 yillik periyotla hala TAMAM (500 gun < 5 yil), hicbir sey planlanmaz/ateslenmez');
+  assert.equal(p.maintenance.db.prepare('SELECT COUNT(*) c FROM maintenance_auto_queue').get().c, 0, 'iki eski satir da temizlendi');
+  p.close();
+});
+
+test('HTTP: otomatik tik anahtarı GET/PUT', async () => {
+  const p = kur();
+  const routes = createPlanningRoutes({ planning: p });
+  const srv = http.createServer(async (req, res) => { if (!(await routes(req, res, new URL(req.url, 'http://x')))) res.writeHead(404).end(); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const g1 = await fetch(`${base}/api/planning/maintenance/auto-tick`);
+    assert.equal(g1.status, 200);
+    assert.deepEqual(await g1.json(), { enabled: true });
+    const put = await fetch(`${base}/api/planning/maintenance/auto-tick`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(put.status, 200);
+    assert.deepEqual(await put.json(), { enabled: false });
+    const g2 = await fetch(`${base}/api/planning/maintenance/auto-tick`);
+    assert.deepEqual(await g2.json(), { enabled: false });
+  } finally {
+    await new Promise((r) => srv.close(r));
+    p.close();
+  }
 });
 
 /* ====================================================================================== HTTP */

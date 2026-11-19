@@ -3,9 +3,9 @@
 
     Ne yapar:
       1. Yuklenecek her seyi installer\payload\ altinda toplar:
-           proje kodu + gomulu Node + Syntec Bin klasoru (DLL'ler) + x86 ajan
-           + masaustu uygulamasi (CNC Telemetri.exe)
-      2. Paketi duman testinden gecirir (backend ve ajan paketten acilir mi)
+           proje kodu + gomulu Node + Python/OR-Tools + Tesseract OCR (tur+eng+osd)
+           + Syntec Bin klasoru (DLL'ler) + x86 ajan + masaustu uygulamasi (CNC Telemetri.exe)
+      2. Paketi duman testinden gecirir (backend, Python/OR-Tools, Tesseract ve ajan paketten acilir mi)
       3. Inno Setup ile tek bir Setup.exe derler  ->  installer\output\
 
     Syntec DLL'leri DEPOYA GIRMEZ: her derlemede dis bir klasorden (-SyntecBin)
@@ -52,7 +52,13 @@
     yalniz butonlar devre disi, nedeni gorunur. Fabrika PC'si kurulup paketleme sahada basladiktan SONRA bir
     sonraki pakette acilacak.
 
+    -TesseractDir: Tesseract OCR kurulum klasoru (taranmis siparis PDF'leri icin). Verilmezse
+    CNC_TESSERACT_DIR ortam degiskenine, standart Windows kurulum yerlerine (Program Files\Tesseract-OCR),
+    PATH'e ve installer\prereq\tesseract klasorune bakar. Pakete yalniz calisma zamaninin ihtiyaci
+    olan tesseract.exe + bagimli DLL'ler + tur/eng/osd tessdata dosyalari girer (egitim araclari/doc haric).
+
     Gereken: Inno Setup 6 (winget install JRSoftware.InnoSetup), Node 22.5+ (x64),
+             Tesseract OCR 5+ (tur+eng+osd, winget install tesseract-ocr.tesseract),
              .NET Framework 4.0 derleyicisi (Windows'ta hazir gelir).
 #>
 
@@ -80,6 +86,9 @@ param(
     # Gomulu mikro.env'e PRODUCT_DEPOT_ENABLED=1 ekler ("Bitmis urun depo akisi" acilir). Varsayilan KAPALI
     # (2026-11-04, kullanici karari: fabrika PC'si henuz sahada degil, bkz. yukaridaki yardim metni).
     [switch]$ProductDepotEnabled,
+
+    # Pakete gomulecek Tesseract OCR klasoru (tur+eng+osd). Verilmezse standart kurulum/PATH aranir.
+    [string]$TesseractDir = $env:CNC_TESSERACT_DIR,
 
     # Duman testini atla (onerilmez).
     [switch]$TestAtla
@@ -116,6 +125,58 @@ function Vazgec($m) {
     Hata $m
     Write-Host ''
     exit 1
+}
+
+# tesseract.exe'nin PE iceri-aktarma (import) tablosunu gecisli olarak yuruyup yalniz calisma zamaninin
+# ihtiyac duydugu yerel DLL'leri toplar (~46 MB; egitim araclari, ICU 33 MB ve doc haric tutulur).
+function TesseractBagimliDosyalar($dizin) {
+    $goruldu = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $kuyruk  = [System.Collections.Generic.Queue[string]]::new()
+    $kuyruk.Enqueue('tesseract.exe')
+    while ($kuyruk.Count -gt 0) {
+        $ad = $kuyruk.Dequeue()
+        $tam = Join-Path $dizin $ad
+        if (-not (Test-Path $tam -PathType Leaf)) { continue }
+        if (-not $goruldu.Add((Get-Item $tam).Name)) { continue }
+        $b = [IO.File]::ReadAllBytes($tam)
+        $pe = [BitConverter]::ToInt32($b, 0x3C)
+        if ($pe -le 0 -or $pe + 24 -ge $b.Length) { continue }
+        if ([Text.Encoding]::ASCII.GetString($b, $pe, 4) -ne "PE`0`0") { continue }
+        $magic   = [BitConverter]::ToUInt16($b, $pe + 24)
+        $secSayi = [BitConverter]::ToUInt16($b, $pe + 6)
+        $optBoy  = [BitConverter]::ToUInt16($b, $pe + 20)
+        $secBas  = $pe + 24 + $optBoy
+        $impRva  = [BitConverter]::ToUInt32($b, $pe + 24 + $(if ($magic -eq 0x20B) { 112 } else { 96 }) + 8)
+        if ($impRva -eq 0) { continue }
+        $secs = for ($i = 0; $i -lt $secSayi; $i++) {
+            $o = $secBas + $i * 40
+            [pscustomobject]@{
+                Va = [BitConverter]::ToUInt32($b, $o + 12); Vs = [BitConverter]::ToUInt32($b, $o + 8)
+                Raw = [BitConverter]::ToUInt32($b, $o + 20); Rs = [BitConverter]::ToUInt32($b, $o + 16)
+            }
+        }
+        $rvaToOff = { param($rva)
+            foreach ($s in $secs) {
+                $boy = [Math]::Max($s.Vs, $s.Rs)
+                if ($rva -ge $s.Va -and $rva -lt ($s.Va + $boy)) { return $s.Raw + ($rva - $s.Va) }
+            }
+            return -1
+        }
+        $off = & $rvaToOff $impRva
+        if ($off -lt 0) { continue }
+        while ($off + 20 -le $b.Length) {
+            $adRva = [BitConverter]::ToUInt32($b, $off + 12)
+            if ($adRva -eq 0) { break }
+            $adOff = & $rvaToOff $adRva
+            if ($adOff -ge 0) {
+                $son = $adOff
+                while ($son -lt $b.Length -and $b[$son] -ne 0) { $son++ }
+                $kuyruk.Enqueue([Text.Encoding]::ASCII.GetString($b, $adOff, $son - $adOff))
+            }
+            $off += 20
+        }
+    }
+    return @($goruldu | Sort-Object)
 }
 
 # ------------------------------------------------------------- on kosullar
@@ -239,6 +300,30 @@ if (-not $ortoolsVar) {
     if ($LASTEXITCODE -ne 0) { Vazgec 'ortools kuruldu ama CP-SAT ice aktarilamadi' }
 }
 Tamam "Python v$PythonSurum + OR-Tools v$OrtoolsSurum (onbellek: $pythonOnbellek)"
+
+# --- Tesseract OCR (taranmis siparis PDF'leri: backend\planning\ocr.js) ---
+if (-not $TesseractDir) {
+    $pathTess = Get-Command tesseract -ErrorAction SilentlyContinue
+    $adaylar = @(
+        "$env:ProgramFiles\Tesseract-OCR",
+        "${env:ProgramFiles(x86)}\Tesseract-OCR",
+        $(if ($pathTess) { Split-Path -Parent $pathTess.Source }),
+        (Join-Path $PSScriptRoot 'prereq\tesseract')
+    ) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'tesseract.exe')) }
+    $TesseractDir = $adaylar | Select-Object -First 1
+}
+if (-not $TesseractDir -or -not (Test-Path (Join-Path $TesseractDir 'tesseract.exe'))) {
+    Vazgec "Tesseract OCR bulunamadi. Kurmak icin: winget install tesseract-ocr.tesseract (ya da -TesseractDir ver)."
+}
+foreach ($gerekli in 'tessdata\tur.traineddata', 'tessdata\eng.traineddata', 'tessdata\osd.traineddata', 'tessdata\configs\tsv') {
+    if (-not (Test-Path (Join-Path $TesseractDir $gerekli))) {
+        Vazgec "Tesseract klasorunde gerekli dosya yok ($gerekli): $TesseractDir (tur+eng+osd dil paketleri zorunlu)."
+    }
+}
+$tessDosyalar = TesseractBagimliDosyalar $TesseractDir
+if (-not ($tessDosyalar -contains 'tesseract.exe')) { Vazgec "Tesseract dosyalari cozulmedi: $TesseractDir" }
+$tessSurum = ((& (Join-Path $TesseractDir 'tesseract.exe') --version 2>&1) | Select-Object -First 1).ToString().Trim()
+Tamam "Tesseract OCR ($tessSurum, $($tessDosyalar.Count) dosya): $TesseractDir"
 
 # --- derleyiciler ---
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
@@ -372,6 +457,34 @@ Apache License 2.0). Yalniz Planlama > Cizelgeleme onerisi icin kullanilir
 "@ | Set-Content (Join-Path $rtPy 'PYTHON-NOTICE.txt') -Encoding UTF8
 Tamam "gomulu Python v$PythonSurum + OR-Tools v$OrtoolsSurum"
 
+# Gomulu Tesseract OCR (taranmis siparis PDF'leri icin; backend\planning\ocr.js bunu ihtiyac olunca
+# child_process ile cagirir, surekli calisan bir hizmet degildir). Yalniz calisma zamaninin kullandigi
+# tesseract.exe + bagimli DLL'ler ve tur/eng/osd tessdata dosyalari alinir (egitim araclari/ICU/doc haric).
+$rtTess = Join-Path $rt 'tesseract'
+$rtTessData = Join-Path $rtTess 'tessdata'
+New-Item -ItemType Directory -Force -Path $rtTessData | Out-Null
+foreach ($f in $tessDosyalar) {
+    Copy-Item (Join-Path $TesseractDir $f) (Join-Path $rtTess $f)
+}
+foreach ($l in 'eng.traineddata', 'tur.traineddata', 'osd.traineddata') {
+    Copy-Item (Join-Path $TesseractDir "tessdata\$l") (Join-Path $rtTessData $l)
+}
+foreach ($alt in 'configs', 'tessconfigs') {
+    $kay = Join-Path $TesseractDir "tessdata\$alt"
+    if (Test-Path $kay) { Copy-Item $kay (Join-Path $rtTessData $alt) -Recurse }
+}
+$tessLisans = Join-Path $TesseractDir 'doc\LICENSE'
+if (Test-Path $tessLisans) { Copy-Item $tessLisans (Join-Path $rtTess 'LICENSE') }
+$blokeTess = BlokeKaldir $rtTess
+if ($blokeTess -gt 0) { Bilgi "Tesseract paketinde $blokeTess dosyanin internet (bloke) isareti kaldirildi" }
+@"
+Bu klasordeki tesseract.exe ve tessdata dosyalari Tesseract OCR'dir (https://github.com/tesseract-ocr/tesseract).
+Surum: $tessSurum
+Lisans: Apache License 2.0 (yanindaki LICENSE dosyasina bakin; tessdata dosyalari Apache 2.0).
+Yalniz Planlama > Yeni siparisler ekraninda taranmis PDF'leri okumak icin kullanilir (backend\planning\ocr.js).
+"@ | Set-Content (Join-Path $rtTess 'TESSERACT-NOTICE.txt') -Encoding UTF8
+Tamam "gomulu Tesseract OCR ($tessSurum, $($tessDosyalar.Count) dosya + tur/eng/osd)"
+
 # Syntec Bin: alt klasorleriyle (Windows CE\ ...) birlikte, BUTUN paket - ajan
 # yalnizca DLL'lerin yanindan calisir, secip tasimak ilk denemede calisip sonra
 # bozulur (bkz. CLAUDE.md). Bizim urettigimiz yakalama dosyalari haric.
@@ -454,8 +567,8 @@ if (-not $TestAtla) {
     $env:PORT = "$port"; $env:HOST = '127.0.0.1'; $env:DB_FILE = $db; $env:LIBRARY_DB_FILE = $kutuphaneDb; $env:AUTH_DB_FILE = $authDb; $env:PLANNING_DB_FILE = $planlamaDb
     # Giris sistemi ACIK denenir (AUTH_DISABLED verilmez): paketin gercek davranisi bu.
     Remove-Item Env:AUTH_DISABLED -ErrorAction SilentlyContinue
-    # Kapali bolumler paketin KENDI configeatures.json'indan okunmali (build PC'sindeki ortam degiskeni sonucu bozmasin).
-    Remove-Item Env:FEATURES_FILE -ErrorAction SilentlyContinue
+    # Kapali bolumler ve Tesseract paketin KENDI icinden okunmali (build PC ortam degiskenleri sonucu bozmasin).
+    Remove-Item Env:FEATURES_FILE, Env:TESSERACT_BIN, Env:TESSDATA_PREFIX -ErrorAction SilentlyContinue
     $sunucu = $null
     try {
         $sunucu = Start-Process (Join-Path $rt 'node.exe') -ArgumentList 'backend\server.js' `
@@ -473,6 +586,48 @@ if (-not $TestAtla) {
         $pyDuman = & (Join-Path $rtPy 'python.exe') -c "from ortools.sat.python import cp_model; print('ortools-tamam')" 2>&1
         if ($LASTEXITCODE -ne 0 -or $pyDuman -notmatch 'ortools-tamam') { Vazgec "paketlenmis Python OR-Tools'u calistiramadi:`n$pyDuman" }
         Tamam 'paketlenmis Python + OR-Tools (CP-SAT) calisiyor'
+
+        # Gomulu Tesseract OCR: hem ocr.js paketteki binary'yi secmeli (C:\Program Files'i degil) hem tur+eng+osd
+        # ile gercek bir TIFF uzerinde --psm 1 tsv calistirip baslik cikti vermeli.
+        $tessOut = & (Join-Path $rtTess 'tesseract.exe') --list-langs 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $tessOut -notmatch '(?m)^tur\r?$' -or $tessOut -notmatch '(?m)^eng\r?$' -or $tessOut -notmatch '(?m)^osd\r?$') {
+            Vazgec "paketlenmis Tesseract dil paketleri (tur/eng/osd) eksik:`n$tessOut"
+        }
+        $ocrBetik = @'
+import { tesseractBin, tesseractAvailable } from './backend/planning/ocr.js';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+const bin = tesseractBin();
+if (path.resolve(bin).toLowerCase() !== path.resolve(process.argv[1]).toLowerCase()) {
+  console.error('yanlis tesseract yolu: ' + bin + ' (beklenen: ' + process.argv[1] + ')'); process.exit(2);
+}
+if (!tesseractAvailable()) { console.error('tesseractAvailable false'); process.exit(3); }
+const d = fs.mkdtempSync(path.join(os.tmpdir(), 'duman-ocr-'));
+try {
+  const w = 64, h = 64, dataOff = 8 + 2 + 9 * 12 + 4;
+  const buf = Buffer.alloc(dataOff + w * h, 0xFF);
+  buf.write('II', 0); buf.writeUInt16LE(42, 2); buf.writeUInt32LE(8, 4); buf.writeUInt16LE(9, 8);
+  [[256,4,1,w],[257,4,1,h],[258,3,1,8],[259,3,1,1],[262,3,1,1],[273,4,1,dataOff],[277,3,1,1],[278,4,1,h],[279,4,1,w*h]]
+    .forEach(([t,ty,c,v], i) => { const o = 10 + i * 12; buf.writeUInt16LE(t,o); buf.writeUInt16LE(ty,o+2); buf.writeUInt32LE(c,o+4); buf.writeUInt32LE(v,o+8); });
+  buf.writeUInt32LE(0, 10 + 9 * 12);
+  const tif = path.join(d, 't.tif'), out = path.join(d, 'o');
+  fs.writeFileSync(tif, buf);
+  const r = spawnSync(bin, [tif, out, '-l', 'tur+eng', '--psm', '1', 'tsv'], { encoding: 'utf8' });
+  const tsv = fs.existsSync(out + '.tsv') ? fs.readFileSync(out + '.tsv', 'utf8') : '';
+  if (r.status !== 0 || !tsv.startsWith('level\t')) { console.error('ocr fail:', r.status, r.stderr, tsv); process.exit(4); }
+  console.log('tesseract-tamam');
+} finally { fs.rmSync(d, { recursive: true, force: true }); }
+'@
+        Push-Location $Payload
+        try {
+            $ocrDuman = & (Join-Path $rt 'node.exe') --input-type=module -e $ocrBetik (Join-Path $rtTess 'tesseract.exe') 2>&1 | Out-String
+        } finally {
+            Pop-Location
+        }
+        if ($LASTEXITCODE -ne 0 -or $ocrDuman -notmatch 'tesseract-tamam') {
+            Vazgec "paketlenmis Tesseract OCR calismadi:`n$ocrDuman"
+        }
+        Tamam 'paketlenmis Tesseract OCR (tur+eng+osd, tsv) calisiyor'
 
         $sayfa = Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5
         if ($sayfa.StatusCode -ne 200) { Vazgec 'dashboard sayfasi servis edilmedi' }

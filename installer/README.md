@@ -1,7 +1,8 @@
 # Kurulum paketi (Setup.exe)
 
 İzleme PC'sine **ileri-ileri** ile kurulan tek dosya. İçinde proje kodu, gömülü
-Node ve Syntec DLL'leri var; hedef PC'ye ayrıca hiçbir şey kurmak gerekmez.
+Node, Python + OR-Tools, Tesseract OCR (`tur+eng+osd`) ve Syntec DLL'leri var;
+hedef PC'ye ayrıca hiçbir şey kurmak gerekmez.
 
 ## Paketi üretmek (geliştirme PC'sinde)
 

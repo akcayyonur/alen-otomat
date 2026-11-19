@@ -1,7 +1,8 @@
 /**
  * Kalite kayıtları: GKK rapor numarası takibi (EYS.FR.011), ilk onay raporu / numune takip listesi (EYS.FR.013) ve iş emrinin teknik resim PDF'leri.
  *
- *   GKK        ustalar iş emrinin hammaddesi için GK numarasını buradan bulup iş emrine yazar (iş emrinin ERP hammadde koduyla eşleşenler önerilir)
+ *   GKK        ustalar iş emrinin hammaddesi için GK numarasını buradan bulup iş emrine yazar (iş emrinin ERP hammadde koduyla eşleşenler önerilir);
+ *              hammaddenin üretici kalite raporu PDF'i de klasörden eşlenip (`gkk-folder.js`) GK RAPOR NUMARASINA bağlanır, satırın üstüne basınca açılır
  *   İlk onay   ilk parça yapılıp ölçülünce usta tezgah başında numara alır (İ26-1281); kayıt ürün, GK kodu, iş emri, tarih, operatör ve CNC no'yu taşır,
  *              iş emrinin "ilk onay rapor no" alanı kendiliğinden yazılır
  *   Çizimler   iş emrine yüklenen PDF'ler; formun arka sayfası için tek PDF'te birleştirilir (pdf-merge.js)
@@ -14,6 +15,7 @@ import { parseApprovalCode, formatApprovalCode, readApprovalSheet } from './firs
 import { machineNumber } from './calc.js';
 import { inspectPdf, mergePdfs, PdfError } from '../pdf-merge.js';
 import { text, day } from './fields.js';
+import { foldTr, resolveCustomerCode } from './normalize.js';
 
 /** Bir iş emrine en çok bu kadar çizim; her biri en çok bu kadar bayt. */
 export const MAX_DRAWINGS = 8;
@@ -21,6 +23,8 @@ export const MAX_DRAWING_BYTES = 20 * 1024 * 1024;
 /** Urun seviyesinde: her tur icin en cok bu kadar dosya; etiket (Word) dosyasi en cok bu kadar bayt. */
 export const MAX_PRODUCT_FILES = 8;
 export const MAX_STICKER_BYTES = 10 * 1024 * 1024;
+/** GK rapor numarasi basina en cok bu kadar kalite raporu PDF'i. */
+export const MAX_GKK_FILES = 8;
 const KIND_LABEL = Object.freeze({ cizim: 'teknik resim', etiket: 'etiket' });
 
 const localMidnight = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
@@ -51,12 +55,16 @@ export class Quality {
    */
   listGkk({ q = '', erpMaterial = '', stockCode = '', limit = 300, offset = 0 } = {}, { now = Date.now() } = {}) {
     const rows = this.db.gkkSearch(q).sort((a, b) => compareMaterials(a.material, b.material) || b.year - a.year || b.seq - a.seq);
+    const sliced = rows.slice(offset, offset + limit);
+    // rapor numarasina (klasorden eslenmis) kalite raporu PDF'i var mi: satirin ustune basinca acilan rapor icin (gkk-folder.js)
+    const counts = this.db.gkkFileCounts(sliced.map((r) => compactKey(r.reportNo)));
+    const items = sliced.map((r) => ({ ...r, fileCount: counts.get(compactKey(r.reportNo)) ?? 0 }));
     let matches = [];
     if (erpMaterial !== '' || stockCode !== '') {
       matches = matchMaterials(this.db.gkkAll(), { erpMaterial: erpMaterial || null, stockCode: stockCode || null })
         .slice(0, 30).map(({ id, kind }) => ({ ...this.db.gkkGet(id), match: kind }));
     }
-    return { total: rows.length, count: this.db.gkkCount(), items: rows.slice(offset, offset + limit), matches, next: this.gkkNext(now) };
+    return { total: rows.length, count: this.db.gkkCount(), items, matches, next: this.gkkNext(now) };
   }
 
   #gkkFields(input, { partial = false } = {}) {
@@ -115,6 +123,59 @@ export class Quality {
     return this.gkkNext(new Date(no.year, 5, 1).getTime());
   }
 
+  /* ========================================= GKK kalite raporu PDF'leri (GK rapor numarasina gore, klasorden) */
+
+  /** Bir GK rapor numarasına (örn. "GK25.093") bağlı kalite raporu dosyaları. Sıfır dolgusuz ("GK25.10") da tolere edilir. */
+  listGkkFiles(reportNo) {
+    const no = parseGkNo(reportNo);
+    return this.db.gkkFiles(compactKey(no ? no.no : reportNo)).map(({ sha, ...f }) => f);
+  }
+
+  /** Bir GKK kaydına bağlı (rapor numarasıyla AYNI) kalite raporu dosyaları — satırın üstüne basınca açılır. */
+  filesOfGkk(id) {
+    const g = this.db.gkkGet(Number(id));
+    if (!g) throw new PlanningError('GKK kaydı bulunamadı.', 404);
+    return this.listGkkFiles(g.reportNo);
+  }
+
+  /**
+   * GK rapor numarasına kalite raporu (PDF) ekler. `reportNo` BELİRLİ BİR TESLİMATIN/raporun numarasıdır
+   * (hammadde CİNSİ DEĞİL — 2026-11-19 düzeltmesi: önceden hammadde cinsine bağlanıyordu, ama gerçek klasörde
+   * aynı hammaddenin FARKLI teslimatları/rapor numaraları FARKLI sertifika PDF'leri taşıyor, dosya adı da zaten
+   * GK numarasıyla adlandırılmış). Aynı rapor numarasını paylaşan (birden çok hammaddeye yazılmış) GKK kayıtları
+   * AYNI dosyaları görür. Geçerli, şifresiz, sayfası olan PDF olmalı; aynı içerik aynı rapora iki kez eklenmez.
+   */
+  addGkkFile(reportNo, { name, data, source = 'elle', relPath = null }, { by = null, now = Date.now() } = {}) {
+    const no = parseGkNo(reportNo);
+    if (!no) throw new PlanningError('Rapor numarası GK26.396 biçiminde olmalı.');
+    const key = compactKey(no.no);
+    if (!Buffer.isBuffer(data) || data.length === 0) throw new PlanningError('Dosya boş.');
+    if (data.length > MAX_DRAWING_BYTES) throw new PlanningError(`PDF çok büyük (en fazla ${Math.round(MAX_DRAWING_BYTES / 1048576)} MB).`, 413);
+    const have = this.db.gkkFiles(key);
+    if (have.length >= MAX_GKK_FILES) throw new PlanningError(`Bir rapor numarasına en çok ${MAX_GKK_FILES} PDF eklenebilir.`, 409, 'too-many');
+    let info;
+    try { info = inspectPdf(data); } catch (err) {
+      if (err instanceof PdfError) throw new PlanningError(`PDF kabul edilmedi: ${err.message}`, 422, 'bad-pdf');
+      throw err;
+    }
+    const sha = createHash('sha256').update(data).digest('hex');
+    if (have.some((d) => d.sha === sha)) throw new PlanningError('Bu PDF zaten ekli.', 409, 'duplicate');
+    const clean = (String(name ?? '').split(/[\\/]/).pop() ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) || 'kalite-raporu.pdf';
+    const id = this.db.addGkkFile(key, { name: clean, sha, size: data.length, pages: info.pages, data, source, relPath }, { by, now });
+    return { id, name: clean, size: data.length, pages: info.pages, source };
+  }
+
+  removeGkkFile(id) {
+    if (!this.db.deleteGkkFile(Number(id))) throw new PlanningError('Dosya bulunamadı.', 404);
+  }
+
+  /** İndirme/görüntüleme için: {name, data}. */
+  gkkFileData(id) {
+    const f = this.db.gkkFileGet(Number(id));
+    if (!f) throw new PlanningError('Dosya bulunamadı.', 404);
+    return f;
+  }
+
   /* ============================================================= ilk onay raporu / numune takip */
 
   approvalNext(now = Date.now()) {
@@ -126,7 +187,11 @@ export class Quality {
   }
 
   listApprovals({ q = '', year = null, limit = 200, offset = 0 } = {}, { now = Date.now() } = {}) {
-    return { ...this.db.approvalList({ q, year: year || null, limit, offset }), next: this.approvalNext(now), years: this.db.approvalYears() };
+    // GERCEK HATA (2026-11-18, bu oturumda bulundu): items `#approvalView`'den GECMIYORDU, yani liste ekranindaki
+    // ve basilan EYS.FR.013 formundaki "CNC NO" sutunu her satirda HER ZAMAN BOS cikiyordu (machine_id doluydu,
+    // yalniz machineNumber() cagrilmiyordu). Duzeltildi: liste de ayrinti/olusturma ile AYNI goruntuyu kullanir.
+    const r = this.db.approvalList({ q, year: year || null, limit, offset });
+    return { ...r, items: r.items.map((a) => this.#approvalView(a)), next: this.approvalNext(now), years: this.db.approvalYears() };
   }
 
   /**
@@ -166,8 +231,19 @@ export class Quality {
     return this.#approvalView(this.db.approvalGet(id));
   }
 
+  /**
+   * `cncNo` gibi `customerCode` da SAKLANMAZ, her okumada TAZE hesaplanır (kart/kasadaki "GKK rapor no" ve
+   * "İlk onay no" alanlarıyla AYNI ilke — bkz. CLAUDE.md §6: donmuş bir anlık görüntü değil, iş emrinin/ürün
+   * kartının O ANKİ değeri): iş emri bağlıysa `w.customerCode` (zaten `resolveCustomerCode` ile çözülmüş),
+   * yoksa (elle kayıt, ürün kodu var) ürün kartından aynı şekilde çözülür. "İlk onay etiketi" (A5 yapışkan
+   * etiket, dashboard/planning-approvals.js `approvalLabelHtml`) bu alanı kullanır.
+   */
   #approvalView(a) {
-    return a ? { ...a, cncNo: machineNumber(a.machineId) } : a;
+    if (!a) return a;
+    const w = a.woNo ? this.planning.db.getWorkOrder(a.woNo) : null;
+    const product = !w && a.stockCode ? this.planning.db.getProduct(foldTr(a.stockCode)) : null;
+    const customerCode = w ? w.customerCode : product ? resolveCustomerCode(product.customerCode, product.name) : null;
+    return { ...a, cncNo: machineNumber(a.machineId), customerCode };
   }
 
   updateApproval(id, input, { by = null, now = Date.now() } = {}) {

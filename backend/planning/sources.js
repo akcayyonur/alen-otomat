@@ -27,7 +27,7 @@ const SETTING_LAST = 'sources.last-refresh';
 
 /** Baska kaynaklarla (mikro.js) paylasilan sonuc sekli: bir kaynagin "ne degisti" toplamlari. */
 export const emptyTotals = () => ({
-  lines: { added: 0, updated: 0 }, products: { added: 0, updated: 0, protected: 0 }, gkk: { added: 0, updated: 0 }, approvals: { added: 0, updated: 0 },
+  lines: { added: 0, updated: 0, removed: 0 }, products: { added: 0, updated: 0, protected: 0 }, gkk: { added: 0, updated: 0 }, approvals: { added: 0, updated: 0 },
   stock: { added: 0, updated: 0, removed: 0 },
 });
 export const emptyChanges = () => ({
@@ -40,6 +40,10 @@ const addCapped = (list, items) => { for (const it of items ?? []) if (list.leng
 export function accumulate(totals, changes, p) {
   if (p.format === 'siparis') {
     totals.lines.added += p.added; totals.lines.updated += p.updated;
+    // staleMarked (planning-db.js#markStale): bu cekilista hic GORUNMEYEN, daha once var olan siparis satirlari -
+    // keepOld:false iken (mikro.js'in MikroAPI yolu, 2026-11-19'dan beri; sources.js'in Excel yolu "tam dokum"
+    // isaretliyken) Mikro'dan GERCEKTEN silinmis/kapanmis demektir. keepOld:true iken (varsayilan Excel yolu) hep 0.
+    totals.lines.removed += p.staleMarked ?? 0;
     totals.products.added += p.products?.added ?? 0; totals.products.updated += p.products?.updated ?? 0;
     addCapped(changes.lines.added, p.changes?.lines?.added); addCapped(changes.lines.updated, p.changes?.lines?.updated);
     addCapped(changes.products.added, p.changes?.products?.added); addCapped(changes.products.updated, p.changes?.products?.updated);

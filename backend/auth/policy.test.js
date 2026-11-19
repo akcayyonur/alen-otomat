@@ -106,8 +106,18 @@ test('ekran: is emirleri - HER ZAMAN salt okunur, hic yazma rotasi yok', () => {
     ['POST', '/api/planning/work-orders'], ['PUT', '/api/planning/work-orders/2026001055'],
     ['POST', '/api/planning/work-orders/2026001055/cancel'], ['POST', '/api/planning/work-orders/2026001055/reopen'],
     ['POST', '/api/planning/work-orders/2026001055/finish-manual'], ['POST', '/api/planning/work-orders/2026001055/reassign-machine'],
+    ['POST', '/api/planning/work-orders/2026001055/correct-qty'],
     ['GET', '/api/planning/work-orders/next'], ['PUT', '/api/planning/work-orders/sequence'],
   ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
+});
+
+test('ekran: siparis fisi (atolye malzeme/takim talebi) - olustur/duzenle/durum role\'e; silme kayitsiz -> admin', () => {
+  S('GET', '/api/planning/supply-requests', 'siparisfisi', 'read');
+  S('POST', '/api/planning/supply-requests', 'siparisfisi', 'write');
+  S('GET', '/api/planning/supply-requests/5', 'siparisfisi', 'read');
+  S('PUT', '/api/planning/supply-requests/5', 'siparisfisi', 'write');
+  for (const p of ['order', 'receive', 'back']) S('POST', `/api/planning/supply-requests/5/${p}`, 'siparisfisi', 'write');
+  assert.equal(K('DELETE', '/api/planning/supply-requests/5'), 'admin');
 });
 
 test('ekran: GKK rapor no / ilk onay raporu - okuma herkese, usta numara ALABILIR; duzelt/sil/taban yonetici', () => {
@@ -118,6 +128,55 @@ test('ekran: GKK rapor no / ilk onay raporu - okuma herkese, usta numara ALABILI
   for (const [m, p] of [
     ['PUT', '/api/planning/gkk/5'], ['DELETE', '/api/planning/gkk/5'], ['PUT', '/api/planning/gkk/sequence'], ['GET', '/api/planning/gkk/5'],
     ['PUT', '/api/planning/first-approvals/5'], ['DELETE', '/api/planning/first-approvals/5'], ['PUT', '/api/planning/first-approvals/sequence'], ['GET', '/api/planning/first-approvals/5'],
+  ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
+});
+
+test('ekran: GKK kalite raporu PDF\'leri (hammaddeye gore) - dosya okuma herkese; klasor ayari/esleme/kaldirma yonetici', () => {
+  S('GET', '/api/planning/gkk/5/files', 'gkk', 'read');
+  S('GET', '/api/planning/gkk-files/5', 'gkk', 'read');
+  for (const [m, p] of [
+    ['GET', '/api/planning/gkk-folder'], ['PUT', '/api/planning/gkk-folder/dir'], ['POST', '/api/planning/gkk-folder/match'],
+    ['DELETE', '/api/planning/gkk-files/5'],
+  ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
+});
+
+test('ekran: takim ve pens takip (EYS.LS.026) - okuma/ekleme/duzenleme role\'e; silme ve Excel iceri aktarma kayitsiz -> admin', () => {
+  S('GET', '/api/planning/tool-items', 'takimtakip', 'read');
+  S('POST', '/api/planning/tool-items', 'takimtakip', 'write');
+  S('GET', '/api/planning/tool-items/categories', 'takimtakip', 'read');
+  S('GET', '/api/planning/tool-items/5', 'takimtakip', 'read');
+  S('PUT', '/api/planning/tool-items/5', 'takimtakip', 'write');
+  for (const [m, p] of [['DELETE', '/api/planning/tool-items/5'], ['POST', '/api/planning/tool-items/import']]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
+});
+
+test('ekran: bakim (EYS.FR.016 + Bakim Sicil Kartlari) - genel gorunum okuma + tik/log yazma role\'e; tip/kalem/makine CRUD, Excel iceri aktarma, log silme ve otomatik tik anahtari kayitsiz -> admin', () => {
+  S('GET', '/api/planning/maintenance', 'bakim', 'read');
+  S('GET', '/api/planning/maintenance/assets/5/logs', 'bakim', 'read');
+  S('POST', '/api/planning/maintenance/assets/5/logs', 'bakim', 'write');
+  for (const [m, p] of [
+    ['POST', '/api/planning/maintenance/import'],
+    ['POST', '/api/planning/maintenance/types'], ['PUT', '/api/planning/maintenance/types/5'], ['DELETE', '/api/planning/maintenance/types/5'],
+    ['POST', '/api/planning/maintenance/types/5/items'], ['PUT', '/api/planning/maintenance/items/5'], ['DELETE', '/api/planning/maintenance/items/5'],
+    ['POST', '/api/planning/maintenance/assets'], ['PUT', '/api/planning/maintenance/assets/5'], ['DELETE', '/api/planning/maintenance/assets/5'],
+    ['DELETE', '/api/planning/maintenance/logs/5'],
+    ['GET', '/api/planning/maintenance/auto-tick'], ['PUT', '/api/planning/maintenance/auto-tick'],
+  ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
+});
+
+test('ekran: yeni siparisler (mail/PDF taslak) - taslak okuma/olusturma/karar role\'e; Mikro\'ya yazma (tek satir VE 2026-11-19 tek-evrak toplu) kayitsiz -> admin', () => {
+  S('GET', '/api/planning/incoming-orders', 'yenisiparis', 'read');
+  S('GET', '/api/planning/incoming-orders/product-search', 'yenisiparis', 'read');
+  S('GET', '/api/planning/incoming-orders/5', 'yenisiparis', 'read');
+  S('POST', '/api/planning/incoming-orders/pdf', 'yenisiparis', 'write');
+  S('POST', '/api/planning/incoming-orders/email-table', 'yenisiparis', 'write');
+  S('PUT', '/api/planning/incoming-orders/lines/5', 'yenisiparis', 'write');
+  S('POST', '/api/planning/incoming-orders/lines/5/approve', 'yenisiparis', 'write');
+  S('POST', '/api/planning/incoming-orders/lines/5/reject', 'yenisiparis', 'write');
+  for (const [m, p] of [
+    ['GET', '/api/planning/incoming-orders/mikro/customers'], ['GET', '/api/planning/incoming-orders/lines/5/mikro-customer'],
+    ['POST', '/api/planning/incoming-orders/lines/5/mikro-preview'], ['POST', '/api/planning/incoming-orders/lines/5/mikro-send'],
+    ['GET', '/api/planning/incoming-orders/5/mikro-customer'],
+    ['POST', '/api/planning/incoming-orders/5/mikro-preview'], ['POST', '/api/planning/incoming-orders/5/mikro-send'],
   ]) assert.equal(K(m, p), 'admin', `${m} ${p}`);
 });
 

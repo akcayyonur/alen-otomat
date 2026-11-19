@@ -17,6 +17,14 @@ export const overlapMs = (a1, a2, b1, b2) => Math.max(0, Math.min(a2, b2) - Math
 const r = (x, d) => (x == null ? null : Math.round(x * 10 ** d) / 10 ** d);
 
 /**
+ * Bu koddaki duruş VERİMLİLİĞE (ayrılan süreye) dahil edilmez (kullanıcı kararı, 2026-11-18): "Ürün değişikliği"
+ * sırasında geçen süre bir performans kaybı değil, planlı bir hazırlıktır — `orderSegments` bu kodla işaretli
+ * nedenlerin o vardiya parçasıyla kesişen süresini `allottedSec`'ten düşer. Kullanılabilirlik (A) etkilenmez:
+ * o süre hâlâ RUNNING olmayan GÖZLENMİŞ süredir, yalnız verimliliğin zaman tabanından çıkarılır.
+ */
+export const EFFICIENCY_EXCLUDED_CODES = new Set(['D1']);
+
+/**
  * [fromMs, toMs] aralığını vardiya parçalarına böler (üretim günü = vardiyanın başladığı gün).
  * @returns {{date: string, shiftId: string, label: string, from: number, to: number, shiftFrom: number, shiftTo: number}[]}
  */
@@ -31,12 +39,14 @@ export function splitByShift(fromMs, toMs) {
 
 /**
  * Bir iş emrinin penceresindeki vardiya parçaları (iş emri × vardiya).
- * @param {{wo: object, from: number, to: number, events: object[], spans: object[], eventAfter?: number}} a
+ * @param {{wo: object, from: number, to: number, events: object[], spans: object[], eventAfter?: number, reasons?: object[]}} a
  *   from/to: ayrılan süre penceresi; events: o tezgahın üretim olayları (ts, qty, cycleSec, gapMs, suspect); spans: durum aralıkları (state, startedAt, endedAt);
  *   eventAfter: bu andan SONRAKİ olaylar sayılır (iş emri başlangıcı: aynı anda biten parça bir önceki işindir). Vardiya sınırı yarı açık [başlangıç, bitiş)
- *   (üretim raporuyla aynı); pencerenin bitişi dahil.
+ *   (üretim raporuyla aynı); pencerenin bitişi dahil. reasons: bu tezgahın/pencerenin duruş nedenleri ({from, to, code}[]; `downtimeReasonsFor` ile aynı
+ *   biçim) — `EFFICIENCY_EXCLUDED_CODES`'taki kodla işaretli olanların vardiya parçasıyla kesişimi `allottedSec`'ten düşülür.
  */
-export function orderSegments({ wo, from, to, events, spans, eventAfter = -Infinity }) {
+export function orderSegments({ wo, from, to, events, spans, eventAfter = -Infinity, reasons = [] }) {
+  const excluded = reasons.filter((rs) => EFFICIENCY_EXCLUDED_CODES.has(rs.code));
   const out = [];
   for (const part of splitByShift(from, to)) {
     const evs = events.filter((e) => !e.suspect && e.ts > eventAfter && e.ts >= from && e.ts <= to && e.ts >= part.shiftFrom && e.ts < part.shiftTo);
@@ -50,10 +60,13 @@ export function orderSegments({ wo, from, to, events, spans, eventAfter = -Infin
       observed += o;
       if (s.state === 'RUNNING') running += o;
     }
+    let excludedMs = 0;
+    for (const rs of excluded) excludedMs += overlapMs(rs.from, rs.to, part.from, part.to);
+    const allottedMs = Math.max(0, part.to - part.from - excludedMs);
     const planned = wo.plannedSec > 0 ? wo.plannedSec : null;
     out.push({
       date: part.date, shiftId: part.shiftId, label: part.label, machineId: wo.machineId, woNo: wo.no, status: wo.status, stockCode: wo.stockCode, productName: wo.productName,
-      from: part.from, to: part.to, allottedSec: (part.to - part.from) / 1000, qty, approxQty: evs.reduce((a, e) => a + (e.gapMs > 0 ? e.qty : 0), 0),
+      from: part.from, to: part.to, allottedSec: allottedMs / 1000, excludedSec: excludedMs / 1000, qty, approxQty: evs.reduce((a, e) => a + (e.gapMs > 0 ? e.qty : 0), 0),
       plannedSec: planned, earnedSec: planned == null ? null : qty * planned,
       runningSec: running / 1000, observedSec: observed / 1000, cycleN: cycles.length, cycleSum: cycles.reduce((a, c) => a + c, 0),
       grossKg: wo.grossKg ?? null, netKg: wo.netKg ?? null,
@@ -66,11 +79,12 @@ export function orderSegments({ wo, from, to, events, spans, eventAfter = -Infin
 export function summarize(segs) {
   const t = {
     orders: new Set(), allottedSec: 0, knownAllottedSec: 0, qty: 0, earnedSec: 0, runningSec: 0, observedSec: 0, perfPlanned: 0, perfCycle: 0,
-    grossKg: 0, netKg: 0, scrapKg: 0, noPlanned: 0, approxQty: 0,
+    grossKg: 0, netKg: 0, scrapKg: 0, noPlanned: 0, approxQty: 0, excludedSec: 0,
   };
   for (const s of segs) {
     t.orders.add(s.woNo);
     t.allottedSec += s.allottedSec;
+    t.excludedSec += s.excludedSec ?? 0;
     t.qty += s.qty;
     t.approxQty += s.approxQty;
     t.runningSec += s.runningSec;
@@ -92,7 +106,7 @@ export function summarize(segs) {
     coverage: t.allottedSec > 0 ? r(Math.min(1, t.observedSec / t.allottedSec), 4) : null,
     performance: t.perfCycle > 0 && t.perfPlanned > 0 ? r(t.perfPlanned / t.perfCycle, 4) : null,
     earnedSec: r(t.earnedSec, 0), runningSec: r(t.runningSec, 0),
-    grossKg: r(t.grossKg, 3), netKg: r(t.netKg, 3), scrapKg: r(t.scrapKg, 3), noPlanned: t.noPlanned,
+    grossKg: r(t.grossKg, 3), netKg: r(t.netKg, 3), scrapKg: r(t.scrapKg, 3), noPlanned: t.noPlanned, excludedSec: r(t.excludedSec, 0),
   };
 }
 

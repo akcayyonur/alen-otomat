@@ -39,6 +39,70 @@ const MAX_DEPTH = 4;
 const MAX_ENTRIES = 20_000;
 const MAX_DOCX_SCANS = 2_000; // kod adinda yoksa icerigine bakilan Word dosyasi sayisi
 
+// OneDrive/bulut senkronlu klasorlerde readFileSync, henuz indirilmemis (bulutta kalan) bir dosyada
+// SIK sIK gecici bir hatayla patlar (Node bunu genellikle kod 'UNKNOWN' ile verir; bazen 'EBUSY'/'EAGAIN').
+// stat() placeholder icin basarili doner ama gercek okuma basarisiz olur. Kisa bir bekleyip yeniden deneriz.
+const CLOUD_RETRYABLE_CODES = new Set(['UNKNOWN', 'EBUSY', 'EAGAIN', 'ETXTBSY']);
+const READ_RETRY_ATTEMPTS = 3;
+const READ_RETRY_DELAY_MS = 250;
+
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* desteklenmiyorsa beklemeden devam */ }
+}
+
+/** `readFileSync`, OneDrive gibi bulut-senkronlu klasorlerde gecici hatayla basarisiz olabilir; birkac kez yeniden dener. */
+export function readFileRetry(path, { attempts = READ_RETRY_ATTEMPTS, delayMs = READ_RETRY_DELAY_MS } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    try { return readFileSync(path); } catch (err) {
+      lastErr = err;
+      if (!CLOUD_RETRYABLE_CODES.has(err.code) || i === attempts - 1) break;
+      sleepSync(delayMs);
+    }
+  }
+  throw lastErr;
+}
+
+/** Okuma hatasini kullaniciya anlasilir bir mesaja cevirir (gecici bulut-senkronu hatasinda ipucu ekler). */
+export function readErrorMessage(err) {
+  const code = err.code ?? err.message;
+  if (CLOUD_RETRYABLE_CODES.has(err.code)) {
+    return `okunamadı: ${code} (OneDrive/bulut senkronu dosyayı henüz indirmemiş olabilir — klasörü "Her zaman bu cihazda tut" yapıp yeniden deneyin)`;
+  }
+  return `okunamadı: ${code}`;
+}
+
+/**
+ * Bir klasordeki okunabilir dosyalari tarar (alt klasorler dahil; ~$ kilit dosyalari ve . ile baslayanlar
+ * atlanir). `DocFolder` (bu dosya) ve GKK kalite raporu klasoru (`gkk-folder.js`) bunu PAYLASIR.
+ * @param {string} dir @param {{extensions: string[], maxDepth?: number, maxEntries?: number}} opts
+ * @returns {{files: {name:string, rel:string, path:string, ext:string, size:number}[], truncated: boolean}}
+ */
+export function scanFolder(dir, { extensions, maxDepth = MAX_DEPTH, maxEntries = MAX_ENTRIES }) {
+  const allowed = new Set(extensions);
+  const files = [];
+  let entries = 0;
+  let truncated = false;
+  const walk = (d, depth) => {
+    let list;
+    try { list = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      if (e.name.startsWith('.') || e.name.startsWith('~$')) continue;
+      if (++entries > maxEntries) { truncated = true; return; }
+      const p = join(d, e.name);
+      if (e.isDirectory()) { if (depth < maxDepth) walk(p, depth + 1); continue; }
+      const ext = extname(e.name).toLowerCase();
+      if (!e.isFile() || !allowed.has(ext)) continue;
+      let st;
+      try { st = statSync(p); } catch { continue; }
+      files.push({ name: e.name, rel: relative(dir, p), path: p, ext, size: st.size });
+    }
+  };
+  walk(dir, 0);
+  files.sort((a, b) => a.rel.localeCompare(b.rel, 'tr'));
+  return { files, truncated };
+}
+
 const MIN_CUSTOMER_KEY = 5; // musteri kodu anahtari en az bu uzunlukta ve bir rakamli olmali ("N", "2", "ETIKET" kod sayilmaz)
 const LETTER = 'A-Za-zÇĞİÖŞÜçğıöşü';
 const CODE_RE = new RegExp(`(?<![0-9${LETTER}])([${LETTER}]{2})[\\s._-]{0,2}(\\d{3})[\\s._-]{0,2}(\\d{3})(?!\\d)`, 'g');
@@ -77,7 +141,7 @@ export function textKeys(text) {
 
 /** Etiket dosyasinin okunabilir metni: .docx'te XML metni; .doc'ta ham bayt taramasi (8 bit + UTF-16, iki hizalama). */
 function labelText(path, ext) {
-  const buf = readFileSync(path);
+  const buf = readFileRetry(path);
   if (ext === '.docx') return docxText(buf);
   return `${buf.toString('latin1')}\n${buf.toString('utf16le')}\n${buf.subarray(1).toString('utf16le')}`;
 }
@@ -138,28 +202,7 @@ export class DocFolder {
 
   /** Klasordeki okunabilir dosyalar (alt klasorler dahil). @returns {{files: object[], truncated: boolean}} */
   #scan(dir) {
-    const allowed = new Set(FOLDER_EXTENSIONS[this.kind]);
-    const files = [];
-    let entries = 0;
-    let truncated = false;
-    const walk = (d, depth) => {
-      let list;
-      try { list = readdirSync(d, { withFileTypes: true }); } catch { return; }
-      for (const e of list) {
-        if (e.name.startsWith('.') || e.name.startsWith('~$')) continue;
-        if (++entries > MAX_ENTRIES) { truncated = true; return; }
-        const p = join(d, e.name);
-        if (e.isDirectory()) { if (depth < MAX_DEPTH) walk(p, depth + 1); continue; }
-        const ext = extname(e.name).toLowerCase();
-        if (!e.isFile() || !allowed.has(ext)) continue;
-        let st;
-        try { st = statSync(p); } catch { continue; }
-        files.push({ name: e.name, rel: relative(dir, p), path: p, ext, size: st.size });
-      }
-    };
-    walk(dir, 0);
-    files.sort((a, b) => a.rel.localeCompare(b.rel, 'tr'));
-    return { files, truncated };
+    return scanFolder(dir, { extensions: FOLDER_EXTENSIONS[this.kind] });
   }
 
   /**
@@ -273,8 +316,12 @@ export class DocFolder {
         const rels = [];
         for (const f of list) {
           if (names.length >= slots) { reject(f.rel, `en çok ${MAX_PRODUCT_FILES} dosya eklenebilir`); continue; }
+          let data = f.data;
+          if (data == null) {
+            try { data = readFileRetry(f.path); } catch (err) { reject(f.rel, readErrorMessage(err)); continue; }
+          }
           try {
-            this.#quality.addProductFile(key, kind, { name: f.name, data: f.data ?? readFileSync(f.path), source: 'klasor', relPath: f.rel }, { by, now });
+            this.#quality.addProductFile(key, kind, { name: f.name, data, source: 'klasor', relPath: f.rel }, { by, now });
             names.push(f.name);
             rels.push(f.rel);
           } catch (err) {
@@ -295,7 +342,7 @@ export class DocFolder {
         } else if (update && existing.some((e) => e.source === 'klasor')) {
           const mine = existing.filter((e) => e.source === 'klasor');
           const loaded = [];
-          for (const f of entry.files) { try { loaded.push({ ...f, data: readFileSync(f.path) }); } catch (err) { reject(f.rel, `okunamadı: ${err.code ?? err.message}`); } }
+          for (const f of entry.files) { try { loaded.push({ ...f, data: readFileRetry(f.path) }); } catch (err) { reject(f.rel, readErrorMessage(err)); } }
           const same = mine.length === loaded.length && loaded.every((l) => mine.some((m) => m.relPath === l.rel && m.sha === sha256(l.data)));
           if (same) { result.unchanged += 1; continue; }
           for (const m of mine) this.#quality.removeProductFile(m.id);

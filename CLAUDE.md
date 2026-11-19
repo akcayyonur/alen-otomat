@@ -922,6 +922,11 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
   - **Tam akış gerçek sunucuya karşı UÇTAN UCA doğrulandı (2026-10-28):** `planning.mikro.refresh()` gerçek Mikro PC'sine karşı çalıştırıldı — **2.668 sipariş satırı + 511 ürün kartı, 1,3-1,6 sn, 0 uyarı.** Yolda GERÇEK bir kod hatası bulundu ve düzeltildi: SQL'de tarih sütununu `Sip_Tarihi` yerine yanlışlıkla `Siparis_Tarihi` diye takma adlandırmıştım — `headerKey()` `_` karakterini de sildiği için bu farklı bir anahtara katlanıyor (`SIPARISTARIHI` ≠ `SIPTARIHI`), `importSiparis()` tarihi hiç bulamıyor, **2.668 satırın TAMAMI tarihsiz** kalıyordu (sessiz hata, yalnız tek bir toplu uyarı mesajıyla görünüyordu: "N satırda sipariş tarihi okunamadı"). Düzeltme: `AS Sip_Tarihi` (`mikro.js`). Testteki aynı hata da (`mikro.test.js`'in `satir()` fixture'ı) düzeltildi ve artık `orderDate`'i doğrudan doğrulayan bir satır var — bu sınıf hata bir daha sessizce geçmeyecek.
     Dashboard'da da gerçek admin oturumuyla denendi: Siparişler/Ürün kartları ekranlarında "Mikro'dan yenile" tıklanınca gerçek 928 sipariş/511 ürün kartı (bazıları birden çok satır) geldi, ikinci tıklamada "değişiklik çıkmadı" dedi (idempotent).
     **Sonuç: bu makinedeki `data/planlama.db` artık BOŞ DEĞİL — gerçek Alen Otomat sipariş/müşteri verisi içeriyor** (test için silinip yeniden oluşturuldu, kullanıcı onayıyla); aynı gün ayrıca **1194 gerçek iş emri** de eklendi (aşağıdaki "Eski iş emri geçişi" bölümüne bakın). Bundan sonraki oturumlar bunu bilmeli: artık "boş dev veritabanı" varsayımı YANLIŞ.
+  - **"Mikro'dan yenile" siparişi OLMAYAN gerçek SR/Nİ kodlarını hiç getirmiyordu — ikinci, siparişten BAĞIMSIZ bir stok senkronu eklendi (2026-11-16, gerçek veride bulunan bir güvenlik açığından sonra):** yukarıdaki `SIPARIS_SQL` yalnız `SIPARISLER`'de satırı OLAN ürünleri getiriyordu; kullanıcı Klinger (.019) grubunda Mikro'da GERÇEKTEN var olan `SR004.019`/`SR005.019`'un ("DN40 ÇİFT TARAFLI NİPEL", "DN40 8 KÖŞE SOMUN") "Mikro'dan yenile"den defalarca sonra bile hiç gelmediğini fark etti. Salt okuma ile doğrulandı: bu ikisinin `SIPARISLER`'de hiç satırı yok (muhtemelen numune/stok kartı açılışı, hiç sipariş almamış) — "Mikro'dan yenile" kaç kere basılırsa basılsın bunları **asla** getiremezdi, bu bir hata değil tasarımın bilinen sınırıydı.
+    **Bunun GÖRÜNÜM eksikliğinden daha ciddi bir yan etkisi vardı:** Numune Takip'in "yeni ürün kodu oluştur" akışı (`sample-tracking.js` `nextStockCode()`) yalnız yerel `products` tablosuna bakıyor; o tablo bu iki kodu hiç bilmediği için **sıradaki kodu YANLIŞ hesaplayıp Mikro'da ZATEN VAR olan `SR004.019`'u "sıradaki boş kod" diye önerebiliyordu** — gerçek bir numune açılıp bu kod Mikro'ya `StokKaydetV2` ile gönderilseydi, var olan gerçek bir ürünün kartı bozulabilirdi.
+    **Çözüm: `mikro.js`'e ikinci, bağımsız bir sorgu (`STOK_SQL`) eklendi** — `SIPARISLER`'e hiç bakmadan, doğrudan `STOKLAR` (+ `STOKLAR_USER` join, aynı `HAMMADDE`/`URETIM_SURESI_SN`/`TAM_BOY` alanları) üzerinden, Alen'in kendi ürün kodu biçimine uyan (`sto_kod LIKE '__[0-9][0-9][0-9].[0-9][0-9][0-9]'` — SQL Server karakter sınıfıyla, `importers.js`'teki `PRODUCT_CODE` regex'iyle AYNI biçim: 2 harf + 3 rakam + nokta + 3 rakam) **HER** iptal/gizli olmayan stok kodunu okur ve `importIsEmri`'nin ('isemri' biçimi, iş emirleri listesi Excel'inin kullandığı AYNI "boş alan dolar, dolu alan Mikro'dan farklıysa elle düzenlenmemişse güncellenir" kuralı) ürün kartlarına işler — `SIPARIS_SQL`'den TAMAMEN BAĞIMSIZ, ikisi de her "Mikro'dan yenile"de çalışır, biri diğerini atlamaz/ezmez (aynı stok kodu ikisinden de gelirse ikinci geçiş yalnız "değişmedi" der, `importIsEmri`/`importSiparis`'in kendi idempotentliği sayesinde). `importIsEmri`'ye (daha önce yalnız 'siparis' biçiminin okuduğu) isteğe bağlı bir `TAM BOY` sütunu da eklendi (gerçek "PLANLANAN" Excel sayfasında bu sütun yok, yalnız bu yeni Mikro-stok akışı için).
+    **Bilinçli sınır:** siparişi hiç olmayan bir kod için müşteri bilgisi (hangi müşteri grubuna ait olduğu) bilinemez — `STOKLAR`'ın kendisinde müşteri tutulmuyor, yalnız `SIPARISLER`'de var; `MÜŞTERİ KODU` sütunu boş gelir, `importIsEmri`'nin var olan `customerCodeFromName` düşümüyle (ürün adından türetme) doldurulmaya çalışılır, siparişi gelince `importSiparis` zaten düzeltecektir.
+    **Gerçek Mikro'ya karşı salt okuma ile doğrulandı:** yeni `STOK_SQL` Klinger (.019) grubunda 5 satır (SR001-005.019) döndü, **SR004/SR005.019 dahil**, tam hammadde/ağırlık/süre/tam boy değerleriyle. Testler: `mikro.test.js`'e 2 yeni test (siparişi hiç olmayan kodun işlenmesi — gerçek SR004/SR005.019 bulgusu; aynı ürün hem siparişten hem stok senkronundan gelirse çakışmaması) + mevcut testlerin mock'u iki ayrı sorguyu ayırt edecek şekilde güncellendi (`kur(rows, stokRows)`), `npm test` 766/766 yeşil. **Tarayıcıda gerçek "Mikro'dan yenile" tıklamasıyla henüz denenmedi** (yalnız doğrudan SQL ile ve birim testleriyle doğrulandı) — bir sonraki "Mikro'dan yenile"de SR004/SR005.019'un gerçekten göründüğü dashboard'dan teyit edilmeli.
   - **Arayüz (2026-10-28, kullanıcı isteği): "Mikro'dan yenile" artık Siparişler ve Ürün kartları sekmelerinde BİRİNCİL düğme** (`dashboard/planning-view.js`, mor/dolu buton), **"Kaynak dosyadan yenile" (Excel) ikincil** düğme olarak yanında durur — Excel akışı KALDIRILMADI, yalnız öncelik değişti (bu iki sekmede Mikro'nun SIPARISLER sorgusu zaten ikisini de verdiği için). GKK/ilk onay/iş emirleri/program eşleme sekmelerinde değişiklik yok (Mikro oraya veri vermiyor, Excel hâlâ birincil). Ayrı "MikroAPI…" bağlantı-testi penceresi (`openMikroDialog`) KALDIRILDI — gereksizdi, "Mikro'dan yenile" kendi hata mesajını zaten gösteriyor.
   - **Installer, Mikro ortam değişkenlerini HİÇ BİLMİYOR (2026-10-28'de fabrika PC'sinde bulundu):** `kurulum/kurulum.ps1` backend görevini (`CNC Telemetri - Backend`) `node.exe backend\server.js --log ...` ile kaydediyor, **`--env-file` yok** — `MIKRO_*` değişkenleri yalnız geliştirme makinesindeki `.claude/mikro.env`'de duruyordu (gerçek kuruluma hiç dahil edilmedi). İlk gerçek kurulumda "MikroAPI yapılandırılmadı" hatasıyla fark edildi. **Elle düzeltme (uygulandı, 2026-10-28, fabrika PC'si):** `C:\CNC-Telemetri\data\mikro.env` oluşturuldu (6 değişken), `Set-ScheduledTask` ile backend görevinin argümanının başına `--env-file "C:\CNC-Telemetri\data\mikro.env"` eklendi, görev yeniden başlatıldı. `data\` klasörü güncellemede silinmediği için bu dosya bir dahaki Setup.exe kurulumunda da kalıcı.
     **Kullanıcı kararı: bir sonraki installer sürümünde bu GÖMÜLÜ olacak** (kurulum sırasında elle `Set-ScheduledTask` düzeltmesi gerekmeyecek) — bkz. §10 "Sıradaki işler".
@@ -934,6 +939,11 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
     - **v1.0.3 (2026-11-09):** Hurda Girişi + EYS.LS.018 alanları, Ölçüm Cihazları Takip ve bitmiş ürün depo akışı düzeltmeleri eklendikten sonra aynı bayraklarla (`-KapaliBolumler @() -MikroWriteEnabled`, `-ProductDepotEnabled` hâlâ verilmedi) yeniden derlendi. Çıktı: `CNC-Telemetri-Kurulum-1.0.3.exe`, fabrika PC'sine henüz kurulmadı.
     - **v1.0.4 (2026-11-11):** Bakım (EYS.FR.016 + Bakım Sicil Kartları, §6 "Bakım") eklendikten VE kütüphane program adı kuralı boşluk/parantez kabul edecek şekilde genişletildikten sonra (§6 "Program kütüphanesi ve aktarım" madde 10) aynı bayraklarla derlendi. Çıktı: `CNC-Telemetri-Kurulum-1.0.4.exe`, 84,3 MB, SHA256
       `c4274e5cf337d63ad18537f06c62f7d2dcefc21b2bc9a56e14c7f2026b551ecb`, duman testinden geçti (11TB + 22TB, ajan her iki Syntec DLL ailesini de yüklüyor, kapalı bölüm yok, MikroAPI yazma açık, bitmiş ürün depo akışı hâlâ kapalı). **Fabrika PC'sine henüz kurulmadı** — kullanıcı bu kurulumu fabrikaya götürüp kuracak.
+    - **v1.0.5 (2026-11-16):** Hurda Girişi/Numune/Karantina-depo Mikro hata düzeltmeleri (kod incelemesinde bulunan), Bakım + Numune hammadde/teknik resim seçimi, kütüphane adı beyaz listesi, ürün kodu kırpma + sipariş satırı arama vurgusu, yazdırma önizleme pencerelerinin kaydırılamaması ve numune akışının `StokKaydetV2`/`KayitKaydetV2` düzeltmesi (§6 "Tezgaha bağlama + YENİ ürün kodu oluşturma" sonu) biriktikten sonra aynı bayraklarla (`-KapaliBolumler @() -MikroWriteEnabled`, **`-ProductDepotEnabled` kullanıcı kararıyla hâlâ verilmedi** — bitmiş ürün depo akışı ikinci bir emre kadar kapalı üretilecek) derlendi. Çıktı: `CNC-Telemetri-Kurulum-1.0.5.exe`, 84,3 MB, SHA256 `C0480D07343C77CC`, duman testi aynı şekilde doğruladı ("...bitmiş ürün depo akışı: KAPALI (fabrika PC henüz sahada değil)"). **Fabrika PC'sine henüz kurulmadı.**
+    - **v1.0.6 (derlenmiş ama bu dosyaya hiç yazılmamış — şimdi geriye dönük not düşülüyor):** Paketleme Listesi (EYS.LS.005), Teknik Resim Takip müşteri filtresi, esnek rol sistemindeki Mikro/karantina-depo düzeltmeleri ve Bakım/Numune takip eklemeleri biriktikten sonra derlenmiş (`CNC-Telemetri-Kurulum-1.0.6.exe`, 84,4 MB). Aynı bayraklar. Sonraki derlemede (v1.0.7) `installer\output\` temizlendiği için bu dosya artık diskte yok, yalnız bu not kaldı. **Fabrika PC'sine kurulup kurulmadığı bu oturumda bilinmiyor.**
+    - **v1.0.9 (2026-11-19, kullanıcı isteği "niye tesseractı gömmedin installer a onu da koy öyle hazırla"):** Tesseract OCR installer'a gömüldü (`runtime\tesseract\` — `runtime\python\` deseniyle AYNI): `installer/build-installer.ps1` `tesseract.exe`'nin PE import tablosundan yalnızca çalışma zamanının kullandığı yerel DLL'leri toplar (`TesseractBagimliDosyalar`: 34 dosya, ~46 MB — eğitim araçları ve 33 MB ICU hariç), `tur`/`eng`/`osd.traineddata` + `configs`/`tessconfigs` + `LICENSE`/`TESSERACT-NOTICE.txt` ile pakete koyar (`cnc-telemetri.iss` `runtime\*` üzerinden kurar). `backend/planning/ocr.js`: `tesseractBin()` önceliği `TESSERACT_BIN` > `runtime\tesseract\tesseract.exe` > bilinen kurulum yolları > PATH; gömülü ikili çalışırken `TESSDATA_PREFIX` paketteki `tessdata`'ya sabitlenir (`runOpts`). Duman testi `tesseract --list-langs` (tur/eng/osd), `ocr.js#tesseractBin()`'in paket içi yolu seçtiğini ve gerçek TIFF üzerinde `-l tur+eng --psm 1 tsv` çalıştığını doğruladı; ek olarak paketteki `payload\runtime\node.exe` ile gerçek taranmış `2189_001.pdf` sayfa 0'da 239 kelime okundu. `package.json` 1.0.8 → 1.0.9; `npm test` 890/890 yeşil. Aynı bayraklarla (`-MikroWriteEnabled`, bölümler hepsi açık, `-ProductDepotEnabled` verilmedi) derlendi. Çıktı: `installer\output\CNC-Telemetri-Kurulum-1.0.9.exe` (102,2 MB, SHA256 `46E278F0A45AF44E`, 11TB + 22TB). **Fabrika PC'sine henüz kurulmadı.**
+    - **v1.0.8 (2026-11-19, kullanıcı isteği "installer üret gidip aşağıya kuralım"):** Sipariş PDF okuma düzeltmeleri + SiparisKaydetV2 yazma akışı + Mikro sipariş testi sonrası derlendi: `pdf-table.js` — **çok satıra yayılan kalemler çapa (adet/tarih satırı) etrafında birleştirilir** (`mergeMultiLineRows`; gerçek Konveyör SAP formu: bir kalem 3-4 satır, 48 çöp satır → 11 doğru kalem), iki çapa arası **en büyük dikey boşluktan** bölünür, sayfa sonunda yarım kalan kalem `carry` ile sonraki sayfanın ilk satırına eklenir (`importPdf`), "No" sütunu satır numarası sayılır (`lineNo`), "Malzeme/Numarası" iki satırlı başlığı tanınır, pencere eşleşmesi alt-pencerenin x'ine yanlış oturmaz (Miktar sütunu Pyp Öğesi'ne kayıyordu); HAVANA'nın "500,00Adet" açıklamasından adet çıkarılır; ürün tanımı (kod/açıklama) olmayan OCR gürültü satırları taslak sayılmaz. **Gerçek Mikro testi (2026-11-19):** Konveyör 4100018539 PDF'i → taslak → 11 kalem, müşteri `120.10.0011` (ürünlerin sipariş geçmişinden), `TEST-4100018539` belge no'su ile `SPR-755` olarak GERÇEK yazıldı (`StatusCode:200`, geri okumada 11 satır, 471.878,40 TL; PDF ile fiyat/tutar/tarih birebir). Mikro'daki mevcut `SPR-747` (aynı sipariş, 11.11'de elle girilmiş) ile 11 kalemde stok kodu/fiyat/tarih tuttu; **adet 3 kalemde farklı** (SR132.011 290↔280, SR098.011 2291↔1000, SR091.011 600↔500 — PDF "Revizyon 01" olabilir, revizyon akışının konusu). **SPR-755 test kaydı kullanıcı tarafından Mikro'dan silindi.** **Öğrenilen:** yerel `products` kartları Mikro'dan eski kalabilir (1. kalem `1050600045` yerelde yoktu ama Mikro'da `SR132.011`) → eşleşmeyen satır yazılmadan önce "Mikro'dan yenile" ya da stok kodu elle verilir (`updateLine({stockCode})`). Aynı bayraklarla (`-MikroWriteEnabled`, bölümler hepsi açık, `-ProductDepotEnabled` verilmedi) derlendi; `package.json` 1.0.7 → 1.0.8; testler yeşil (889). Çıktı: `installer\\output\\CNC-Telemetri-Kurulum-1.0.8.exe`. **Fabrika PC'sine kurulumu kullanıcı yapacak.** **Hâlâ eksik:** Tesseract installer'a gömülü DEĞİL (taranmış PDF fabrikada çalışmaz), taranmış PDF OCR kalitesi zayıf (2189_001: 18 satırdan yalnız 1'i doğru), mükerrer mail tespiti/revizyon eşleştirmesi/mail bağlantısı.
+    - **v1.0.7 (2026-11-18, kullanıcı isteği "installer üret"):** v1.0.6'dan sonra birikenlerle derlendi: ürün tanıtım kartında "Ek işlem var mı?" artık YIKAMA/KURUTMA/TAVLAMA kutularını kilitlemiyor (bkz. yukarıdaki "DÜZELTME" notu), Fiyat çalışması kaydettikten sonra da düzenlenebiliyor, **İlk onay etiketi** (A5 yapışkan etiket, numara alınca otomatik popup+yazdırma; bu sırada `listApprovals()`'ın CNC NO'yu hiç hesaplamadığı gerçek bir hata da bulunup düzeltildi — bkz. "İlk onay etiketi" bölümü) ve duruş nedeni **"Ürün değişikliği" (D1) artık verimlilik hesabından çıkarılıyor** (bkz. §6 "E aşaması" altındaki 2026-11-18 notu). Aynı bayraklarla (`-MikroWriteEnabled`, `-KapaliBolumler`/`-ProductDepotEnabled` varsayılan — hepsi açık, bitmiş ürün depo akışı hâlâ kapalı) derlendi. Çıktı: `installer\output\CNC-Telemetri-Kurulum-1.0.7.exe`, 84,4 MB, SHA256 `435DB77B98D552EE`, duman testi geçti (11TB + 22TB, kapalı bölüm yok, MikroAPI yazma açık, bitmiş ürün depo akışı kapalı). **Fabrika PC'sine henüz kurulmadı.**
   - **"TALAŞ" seri no'lu satırlar sipariş sayılmaz (2026-10-28, kullanıcı isteği):** `SIPARISLER` tablosunda `sip_tip = 0` filtresi müşteri siparişleriyle AYNI yerde **hurda pirinç talaşı satışı belgelerini de** döndürüyor (seri `TALAŞ`/`TALAŞ1`, stok kodu `PR-001` "PİRİNÇ TALAŞI"; gerçek Mikro'da 232 kayıt, 2026-10-28'de bulundu). `mikro.js`'teki `SIPARIS_SQL`'e `AND s.sip_evrakno_seri NOT LIKE 'TALA%'` eklendi; bu seri SİPARİŞ EKRANINDA hiç görünmez. **Mikro'da başka "gerçek sipariş olmayan" seri olup olmadığı bilinmiyor** (yalnız TALAŞ bulundu/doğrulandı) — yeni bir seri fark edilirse aynı WHERE'e eklenir.
   - **İş emirleri listesinde durum = satır rengi (2026-10-28, kullanıcı isteği):** `dashboard/planning-workorders.js` satır sınıfı artık dört durumu da ayırt eder (`pl-waiting`=sarı/planlandı, `pl-running`=mavi/üretimde (zaten vardı), `pl-done`=yeşil/bitti, `pl-cancelled`=soluk-üstüçizili/iptal (zaten vardı); CSS `styles.css`). **Renk TEK BAŞINA değil**, durum hücresindeki ikon+etiketi (`woStatusChip`) pekiştirir (CLAUDE.md §7 kuralı korundu); `WO_STATUS.planlandi` çipi de `none`'dan `warn` (sarı) yapıldı. Gerçek tarayıcıda (geçici DOM enjeksiyonuyla, veri yazmadan) dört rengi de görsel doğrulandı.
   - **İş emri numarası tabanını ayarlama artık İş emirleri listesinde her zaman görünür (2026-10-28, kullanıcı isteği):** önceden yalnız "Yeni iş emri" penceresinde, taban HİÇ bilinmiyorsa çıkan bir uyarıydı (`sequenceNotice`); artık liste ekranının altında **her zaman** (yalnız yönetici) küçük bir kutu var — "Sıradaki iş emri numarası: X" + giriş kutusu + "Bu numaradan devam ettir" (`dashboard/planning-workorders.js` `drawSeq`, uç aynı: `PUT /api/planning/work-orders/sequence`). Şirkette hâlâ kullanılan eski numaralandırmayı BİR KEZ buraya girip devretmek için — "Yeni iş emri" içindeki eski uyarı da kaldırılmadı, ikisi aynı uca gider. **Numara yalnız yükseltilebilir** (sunucu zaten böyle doğruluyordu, değişmedi).
@@ -980,6 +990,7 @@ Tezgahın parça sayacından **kaç adet, hangi programdan, hangi vardiyada, ka�
   Bir siparişte çoğunlukla birden çok ürün satırı; aynı evrakta aynı ürün birden çok satır olabilir.
 - **Program ↔ ürün eşlemesi:** tornalarda parça üretmiş programlar listelenir; **öneri** kuralları: stok koduyla birebir (`SR001-013` → `SR001.013`, `NI002-001` → `Nİ002.001`), müşteri koduyla, ürün adı bu kodla başlıyorsa
   (ad ilk sözcüğü müşteri koduyla yalnız ~%65 örtüştüğü için en zayıf kanıt). **Öneri kendiliğinden uygulanmaz**; "birebir stok koduyla tutanları toplu onayla" yalnız tek ve kesin olanları onaylar.
+  **Müşteri koduyla tek adaylı önerilerin de toplu onayı (2026-11-17, kullanıcı isteği):** stok koduyla birebir tutanların yanına **ikinci bir "toplu onayla" düğmesi** eklendi — "Müşteri koduyla tutan N öneriyi onayla". `confirmExactSuggestions({by, kind})` artık `kind` parametresi alıyor (`'kod'` varsayılan = eski davranış DEĞİŞMEDİ, `'musteri-kodu'` verilince müşteri koduyla eşleşen ama **tek adaylı** (`suggestions.length===1`) öneriler aynı şekilde toplu onaylanır — birden çok aday varsa (aynı müşteri kodu birden çok ürün kartında) o satır bu toplu onaydan geçmez, elle seçilir). Uç aynı (`POST /api/planning/programs/confirm-exact`), gövdeye isteğe bağlı `{kind}` eklendi; geçersiz `kind` 400. Testi `planning.test.js` (yeni test + HTTP assertion). **Tarayıcıda gerçek dev sunucusuna (gerçek 520 ürün kartı, 19 müşteri-koduyla tek adaylı öneri) karşı denendi:** düğme tıklanınca 19 program TEK TIKLA eşlendi (eşli: 0→19, öneri: 19→0), düğme kayboldu; bu gerçek eşlemeler kalıcı olarak dev veritabanında kaldı (doğru/kalıcı eşlemeler, geri alınmadı).
   **Birden çok program AYNI ürüne eşlenebilir (2026-11-11, kullanıcı sorusu üzerine doğrulandı):** `product_programs`
   tablosunda `program_key` PRIMARY KEY, `code_key`'in ise hiçbir benzersizlik kısıtı YOK — gerçek senaryo: aynı
   ürün farklı takımla/aralarına bekleme konularak iki ayrı programla ("SR001.001" ve "SR001.001 (2)") üretiliyor;
@@ -1094,6 +1105,28 @@ kalır, `st.ekIslem === null` iken). "Yok" seçilince alttaki 6 kutu (3 işlem �
 - **Doğrulama:** `backend/planning/cards.test.js`'e 2 test (ürünün ilk kartında öneri hepsi false; bir kartta `washTo` işaretlenince AYNI ürünün farklı bir iş emrinde öneri `washTo:true` gelir; **iptal edilen kart öneriye katılmaz**). `npm test` 659/659 yeşil. Tarayıcıda gerçek sunucuya karşı uçtan uca
   denendi: yeni bir ürünün ilk kartında "Ek işlem var mı?" boş + kutular pasif + "Kartı oluştur" devre dışı → "Var" seçilince kutular açıldı → "Yıkamaya gidecek" işaretlenip kart basıldı → AYNI ürün için AÇILAN İKİNCİ iş emrinde pencere "Var" + "Yıkamaya gidecek" ÖN TİKLİ ve buton zaten etkin geldi.
 - **DENENMEDİ:** gerçek fabrika kullanımında birden çok ürünün gerçek yıkama/kurutma/tavlama geçmişiyle önerinin isabet oranı; "Yok" seçilip sonra "Var"a dönülünce önceki tikli kutuların (öneriden gelen) geri gelip gelmediği (şu anki davranış: "Yok" kutuları SIFIRLAR, "Var"a dönünce BOŞ başlar, öneri yeniden uygulanmaz — kasıtlı basit tutuldu, ayrıca sınanmadı).
+
+**DÜZELTME: "Ek işlem var mı?" YIKAMA/KURUTMA/TAVLAMA kutularını artık KİLİTLEMİYOR (2026-11-18, kullanıcı isteği):**
+yukarıdaki tasarım "Ek işlem var mı?" (Var/Yok) cevabına göre alttaki 6 kutuyu kilitleyip (Yok iken devre dışı +
+sıfırlanmış) kullanıcıyı önce bu soruyu cevaplamaya zorluyordu. Kullanıcı bunun YANLIŞ bir varsayıma dayandığını
+belirtti: **"o ek işlem denen yıkama vs değil miş, ek işlem yok seçilse bile yıkama vs seçebilmeli"** — yani "Ek
+işlem" YIKAMA/KURUTMA/TAVLAMA ile aynı şey değil, ikisi bağımsız olmalı. `dashboard/planning-card.js`
+`openIssueCard`: `stepsBox()`'taki `locked` değişkeni (checkbox'lara `disabled` ekleyen) kaldırıldı — 6 kutu artık
+"Ek işlem var mı?" ne olursa olsun HER ZAMAN işaretlenebilir. `change` dinleyicisindeki "Yok seçilince kutuları
+sıfırla" döngüsü de kaldırıldı — "Yok" seçiliyken işaretlenmiş bir kutu artık SİLİNMEZ. "Ek işlem var mı?" alanının
+KENDİSİ (zorunlu Var/Yok seçimi, "Kartı oluştur" düğmesini seçilene kadar kilitleyen davranış) DEĞİŞMEDİ — yalnız
+bu cevabın altındaki kutuları ETKİLEME DAVRANIŞI kaldırıldı. `ekIslem` zaten yalnız istemci tarafı bir UI
+durumudur, sunucuya hiç gönderilmez (`POST .../cards` gövdesi yalnız `steps`/`reject`/`person`/`gkkReportNo`
+taşır) — bu yüzden backend'de HİÇBİR değişiklik gerekmedi.
+- **İzole bir test ortamında (gerçek sunucu süreci, geçici/boş `PLANNING_DB_FILE`, gerçek dev veritabanına HİÇ
+  DOKUNULMADI) tarayıcıda uçtan uca denendi:** "Ek işlem var mı?" önce "Yok" seçildi (kutular hâlâ `disabled:false`
+  doğrulandı), ardından "Yıkamaya gidecek" işaretlendi — "Yok" seçili KALDI, kutu işaretli kaldı, önizleme kartında
+  YIKAMA satırı `is-on` sınıfıyla ✓ gösterdi; "Kartı oluştur ve yazdır" ile GERÇEK bir kart (K000001) basıldı ve
+  API'den okunan kayıtta `steps.washTo:true` doğrulandı — "Ek işlem: Yok" iken bile yıkama kaydının gerçekten
+  geçtiği teyit edildi. (Bu testte tarayıcı otomasyon aracı gerçek `window.print()` native yazdırma penceresinde
+  takıldı — bilinen bir ortam sınırı, kod/akış hatası değil; kart zaten yazdırmadan ÖNCE sunucuya kaydedilmişti.)
+  Test sunucusu/geçici veritabanı oturum sonunda tamamen silindi.
+- **DENENMEDİ:** gerçek yazıcıdan A5 baskı; fabrika PC'sinde gerçek kullanım.
 
 **Planlama yan menüsünde Tezgah başı ve Siparişler en üstte (2026-11-06, kullanıcı isteği):** `dashboard/planning-view.js` `NAV_LAYOUT`'ta `tezgahbasi` ve `siparisler` artık ayrı, tek başına girdiler olarak listenin EN BAŞINDA (`tezgahbasi` eskiden "Üretim" grubundaydı, `siparisler` eskiden "Ürünler" grubunun
 ALTINDA tek başına bir girdiydi — konumu değişti, grup yapısı değişmedi). Diğer gruplar (Depo, Üretim, Kalite, Ürünler, Analiz) ve içerikleri AYNEN kaldı. Tarayıcıda doğrulandı.
@@ -1259,6 +1292,12 @@ Yukarıdaki G aşaması HAMMADDE'nin Merkez→Üretimde akışıydı; bu, kullan
   tarayıcıda sentetik telemetri + gerçek kayıt oynatmasıyla (iş emri başlat/bitir, duruş nedeni) tüm görünümler denendi. **Gerçek bir ayın Excel sonuçlarıyla karşılaştırılmadı.**
 - **Sınırlar:** planlı duruşlar (yemek, tatil) ayrılan süreden düşülmez; ayrılan süre iş emri penceresidir (operatör başlat/bitir'i geç basarsa süre sapar: başlangıç geriye alınabilir); haftalık/aylık ortalama sayfalarının biçimi Excel'le birebir değil (CSV uzun biçim); OEE'nin kalite ayağı yok.
 
+**"Ürün değişikliği" (D1) duruşu verimlilik hesabından çıkarılır (2026-11-18, kullanıcı isteği):** *"duruş nedeni ürün değişkliği seçildiği zaman o duruş verimlilğe dahil edilmemeli"* — ürün değişimi sırasında geçen süre bir performans kaybı değil, planlı bir hazırlıktır.
+- **Mekanizma** (`efficiency.js` `EFFICIENCY_EXCLUDED_CODES = new Set(['D1'])`, sabit liste — `production.js`'teki `UNREADABLE_PROGRAMS` ile AYNI "bilinen, az sayıda özel durum kodda sabit tutulur" deseni): `orderSegments` artık isteğe bağlı bir `reasons` parametresi alır (o tezgah/pencerenin duruş nedenleri, `downtimeReasonsFor` ile aynı biçim); D1 kodlu olanların her vardiya parçasıyla kesişen süresi **`allottedSec`'ten (verimliliğin zaman tabanı) düşülür** ve ayrıca segmentte `excludedSec` olarak taşınır (toplamlarda `summarize().excludedSec`).
+  **`observedSec`/`runningSec` (Kullanılabilirlik/A) BİLİNÇLİ OLARAK ETKİLENMEZ** — kullanıcının isteği özellikle "verimlilik" içindi; A hâlâ "tezgah gerçekten ne kadar çalıştı" sorusunu cevaplar, D1 süresi orada hâlâ çalışmayan (gözlenen) süre olarak sayılır. `planning.js` `efficiencyReport`, her iş emri için `this.db.downtimeReasonsFor(wo.machineId, s, e)` ile o pencerenin TÜM nedenlerini çeker (filtreleme `efficiency.js`'in içinde, kodu tek yerde tutmak için); `total.excludedSec > 0` ise bir uyarı eklenir ("N dk \"Ürün değişikliği\" (D1) nedeniyle verimlilik hesabından çıkarıldı"), bu da dashboard'un zaten var olan genel uyarı listesinde (`dashboard/planning-efficiency.js` `warnings()`) **kendiliğinden görünür** — yeni bir arayüz elemanı eklenmedi.
+  **Yan etki (bilinçli, dokunulmadı):** matristeki `unassignedSec` (vardiya süresi − ayrılan süre) D1 dışlandıkça büyür, çünkü "ayrılan süre" zaten tek kaynak; bu süre fiilen bir iş emrine atanmıştı, yalnız verimlilik hesabından çıkarıldı — kullanıcı yalnız verimliliği sordu, bu ikincil etki belgelenir, ayrıca düzeltilmedi.
+- **Testi:** `efficiency.test.js`'e 2 yeni test (saf `orderSegments`: D1 allotted/excludedSec'i etkiler ama A'yı etkilemez, D4 gibi başka kod hiç etkilemez; `Planning.efficiencyReport` uçtan uca: gerçek `addDowntimeReason` + gerçek SQLite ile aynı sonuç + uyarı metni). `npm test` 836/836 yeşil. **Tarayıcıda gerçek bir duruşla henüz denenmedi** (yalnız backend testleriyle; dashboard tarafında yeni kod yazılmadığı için — uyarı zaten var olan genel liste render'ından geçiyor — ayrı bir tarayıcı doğrulamasına gerek görülmedi).
+
 **Çizelgeleme / optimizasyon (OR-Tools CP-SAT) — MVP YAPILDI (2026-10-26, kullanıcı isteği):** bekleyen iş emirlerini hangi tezgaha, hangi sırayla vermenin **otomatik önerisini** çıkarır. Bu bir **operasyonel araştırma / kombinatoryal optimizasyon**
 problemi (klasik paralel makine çizelgeleme), **yapay öğrenme modeli DEĞİL** — Google OR-Tools'un CP-SAT çözücüsü ile 8 tezgah ölçeğinde saniyeler içinde optimale yakın çözülür.
 - **Veri:** süre için **önce gerçekte ÖLÇÜLEN çevrim süresi** (`efficiency.js` `productRows().measuredCycleSec`, son 90 gün — Verimlilik raporuyla AYNI hesap, yeni veri çıkarma kodu yok), yoksa ürün kartındaki **planlanan** (`plannedSec`); iş emirleri (`planlandi`: hedef adet, termin, hammadde; `uretimde`: mevcut tezgah meşguliyeti, zaten var olan `getWorkOrder().progress.eta` tahmininden — yeni hesap yazılmadı); tezgah listesi (`listMachines()`).
@@ -1293,6 +1332,18 @@ problemi (klasik paralel makine çizelgeleme), **yapay öğrenme modeli DEĞİL*
   **İş emri hammaddesi ↔ kayıt eşleme** (`gkk.js`; öneri, kendiliğinden yazmaz): Mikro hammadde kodundaki şekil/ölçü/alaşım kayıttakine çevrilir (`YU`→`YUV`, `AA`, `SK`→`8 KÖŞE`; alaşım `614`→`PB3`, `617`→`PB2`, `602`→`602N`, `603`→`CW603N`, `3604`→`C3604BD`);
   ek sözcük (`HB`, `ISIL İŞLEMLİ`) varsa **"aynı ölçü, işlem farklı" (▲)** uyarısıyla önerilir ("tam eşleşme" ✓ değil); dövme ürünler stok koduyla (`◆ dövme ürün`). "Listeden seç…" iş emrini düzenle, başlat ve Tezgah başı "İş emrini düzenle" pencerelerinde (`openGkkPicker`); altta tüm kayıtlarda arama.
   Yazma (yeni numara al/düzelt/sil/numara tabanı/CSV içeri al) **yalnız yönetici**; okuma herkes. Uçlar: `GET/POST /api/planning/gkk` · `PUT /gkk/sequence` · `PUT|DELETE /gkk/:id`. Liste "Listeyi yazdır" ile A4 dikey kâğıt formun düzeninde basılır.
+  **Hammaddenin kalite raporu PDF'i, klasörden (2026-11-17, kullanıcı isteği):** "GKK kısmında satırın üstüne basınca hammaddenin kalite raporu olmalı, PDF dosyalarının ismine hangi hammadde olduğu yazıyor, oraya klasörden direkt çeken bir tuş koyalım, tek seferlik." GKK listesinde **satırın üstüne basınca** (fileCount > 0 ise) üretici kalite sertifikası PDF'i açılır (tek dosya direkt yeni sekmede, birden çoksa küçük bir seçim listesiyle — `drawing-tracking.js`'teki `openDrawing` deseniyle AYNI). `"Klasörden kalite raporu eşle…"` (yalnız yönetici, **tek seferlik**, `gkk-folder.js` + `dashboard/planning-gkk-folder.js`): klasördeki PDF'leri tarar ve dosyaları GKK kayıtlarına bağlar.
+  - **DÜZELTME (2026-11-19, kullanıcı gerçek hammadde klasörüyle (251 dosya, "CNC-01…08" değil gerçek GKK rapor arşivi) denerken fark etti):** ilk tasarım dosyaları **hammadde CİNSİNE** (`material` metni) bağlıyordu — "aynı hammaddeyi paylaşan tüm GK numaraları aynı dosyayı görür" varsayımıyla. Kullanıcı gerçek klasörde bunun YANLIŞ olduğunu gösterdi: aynı hammadde klasöründe (ör. "AA11,11 - PB2") birbirinden FARKLI iki sertifika dosyası var (`AA11,11 - PB2 - GK25.141.pdf` ve `GK25.179 - AA11,11 - PB2.pdf`) — her teslimatın/rapor numarasının KENDİ sertifikası var, hammadde TÜRÜNÜN değil. Dosya adları da zaten bunu kanıtlıyor: hammadde cinsinin yanında her zaman o teslimatın GK rapor numarası da yazıyor. **Düzeltme: eşleme artık GK RAPOR NUMARASINA göre** (`findGkNoIn(text)`, `gkk.js` — serbest metinde "GKxx.xxx" kalıbını bulur, rakam dizisini YARIM yakalamaz: "GK25.100" içindeki "10"yu "GK25.10" diye okumaz). Aynı rapor numarasını PAYLAŞAN kayıtlar (bir rapor no birden çok hammaddeye yazılabilir) hâlâ AYNI dosyayı görür; aynı hammaddenin FARKLI rapor numaraları artık PAYLAŞMAZ.
+  - **Dosya, kayıt id'sine DEĞİL, RAPOR NUMARASININ METNİNE bağlanır** (`gkk_files.report_key` — eski adı `material_key`idi, 2026-11-19'da değişti —, `compactKey` ile): `doc-folder.js`'teki ürün koduna bağlanan teknik resim/etiket deseniyle AYNI, yalnız anahtar hammadde metni yerine GK rapor numarası.
+  - **Eski şemadan (`material_key`) geçiş, tek seferlik** (`quality-db.js#migrateGkkFiles`): tablo zaten varsa (eski kurulum) satırlar okunup tablo yeniden kurulur; her satırın `rel_path`'inden (varsa) `findGkNoIn` ile rapor numarası KURTARILIR; bulunamazsa (nadir — eski klasör adlandırması rapor no taşımıyorsa) eski hammadde anahtarı `report_key` olarak KORUNUR (veri kaybolmaz, admin "Dosyayı kaldır" ile elle temizleyebilir). Gerçek bu makinenin `data/planlama.db`'si (0 satırlı, eski şema) üzerinde ve sentetik (dolu) bir eski tabloyla elle doğrulandı.
+  - **Tek seferlik, "update" YOK** (kullanıcının kendi sözü): yalnız hiç kalite raporu OLMAYAN rapor numaraları eşlenir; zaten raporu olana klasörden yeniden dokunulmaz. Elle (manuel) PDF yükleme ucu da YOK — yalnız klasörden, bilinçli olarak (literal istek).
+  - **Scan/dosya-tarama mantığı `doc-folder.js`'ten çıkarılan ortak `scanFolder()` fonksiyonuyla PAYLAŞILIR** (ikinci bir dizin-tarayıcı YAZILMADI); eşleme mantığının kendisi (GK no çıkarımı, tam eşleşme — alt dize değil) AYRI ve daha basit (ürün kodu/müşteri kodu kavramı yok).
+  - **OneDrive/bulut-senkronu klasörlerindeki geçici okuma hataları için de düzeltme (aynı gün, kullanıcının gerçek 251 dosyalık denemesinde HEPSİ "okunamadı: UNKNOWN" ile reddedilmesinden bulundu):** `doc-folder.js`'teki `readFileRetry`/`readErrorMessage` (OneDrive "Files On-Demand" placeholder dosyalarında sık görülen `UNKNOWN`/`EBUSY`/`EAGAIN`/`ETXTBSY` kodlarında kısa bekleyip birkaç kez yeniden dener; başka hata türlerinde ANINDA, bekletmeden fırlatır) hem `gkk-folder.js`'te hem `doc-folder.js`'in kendi üç okuma noktasında (teknik resim/etiket eşleme + revizyon + Word içeriği arama) kullanılır. Son çare hata mesajı artık "OneDrive/bulut senkronu dosyayı henüz indirmemiş olabilir — klasörü 'Her zaman bu cihazda tut' yapıp yeniden deneyin" ipucu taşır.
+  - **Dosyalar:** `backend/planning/gkk-folder.js` (`GkkFolder`), `quality-db.js` (`gkk_files` tablosu, `report_key` ile — içerik `drawing_files`'ta, içerik-adresli; `#dropFileIfUnused` BEŞ tüketiciyi sayar; `#migrateGkkFiles` tek seferlik geçiş), `quality.js` (`MAX_GKK_FILES=8`, `listGkkFiles`/`addGkkFile`/`removeGkkFile`/`gkkFileData`/`filesOfGkk` artık `reportNo` alır; `listGkk()` her satıra `fileCount`'u KENDİ rapor numarasından ekler), `gkk.js` (`findGkNoIn`), `doc-folder.js` (`readFileRetry`/`readErrorMessage`), `routes.js`, `dashboard/planning-gkk-folder.js`, `dashboard/planning-gkk.js`.
+  - **Uçlar:** `GET/PUT /api/planning/gkk-folder[/dir]` · `POST /gkk-folder/match` (klasör ayarı/eşleme, **yalnız yönetici**, kayıtsız → admin, `doc-folder.js`'teki `drawing-folder`/`sticker-folder`'la AYNI desen) · `GET /api/planning/gkk/:id/files` (bu kaydın rapor numarasına bağlı dosyalar) · `GET /api/planning/gkk-files/:id` (indir/aç) · `DELETE /api/planning/gkk-files/:id` (yönetici). Dosya okuma (`gkk/:id/files`, `gkk-files/:id` GET) **`gkk` ekranının okuma yetkisiyle herkese açık** (GKK listesini kim görebiliyorsa raporu da görür); `policy.js` `SCREEN_ROUTES`.
+  - **Testler:** `backend/planning/gkk-folder.test.js` (6: klasör ayarı, GK no'suna göre eşleme + aynı rapor nosunu paylaşan farklı hammaddelerin aynı dosyayı görmesi, rapor numarası kayıtsız dosyanın eşleşmemesi, "GK25.10" ile "GK25.100"ün KARIŞMAMASI, bozuk PDF + 8 dosya sınırı, HTTP — rapor nosu paylaşımı dahil) + `gkk.test.js`'e `findGkNoIn` testi + `quality.test.js`'teki GKK dosya testi rapor-numarası semantiğine göre yeniden yazıldı (aynı rapor no paylaşımı, aynı hammaddenin farklı rapor nosu paylaşmaz) + `policy.test.js`. `npm test` 892/892 yeşil.
+  - **Tarayıcıda gerçek dev sunucusuna (bu makinenin `data/planlama.db`'si) karşı uçtan uca denenen İLK sürüm** (hammadde cinsine bağlayan, artık YANLIŞ bulunan tasarım) **2026-11-17'de doğrulanmıştı; rapor-numarası düzeltmesi bu makinede henüz tarayıcıdan uçtan uca denenmedi** (yalnız backend testleriyle ve migration'ın gerçek/sentetik eski şema kopyalarıyla elle doğrulandı).
+  - **DENENMEDİ:** gerçek fabrika hammadde sertifikası PDF'leriyle (kullanıcının kendi OneDrive klasörüyle — 251 dosyanın tamamı önceki oturumda "okunamadı: UNKNOWN" ile reddedilmişti, OneDrive'da "her zaman bu cihazda tut" yapılıp rapor-numarası eşlemesiyle yeniden denenmeli); dosya adı kalıbının gerçek sertifika dosyalarının TÜMÜNDE GK rapor numarası taşıdığı varsayımının (kullanıcının verdiği örnek 251 dosyanın tamamında doğrulandı) başka bir müşteri/hammadde grubunda da geçerli olup olmadığı.
 - **İlk onay raporu (EYS.FR.013, sekme "İlk onay raporu"):** ilk parça üretilip ölçülünce numara alınır: `İ{yy}-{sıra, en az 3 hane}` (`İ26-1281`). Kayıt: kod, ürün kodu, GK kodu (iş emrindeki GKK rapor no), iş emri no, tarih, operatör, CNC no (`first-approval.js`).
   **Numara alma operatör + yönetici** (Tezgah başında "İlk onay numarası al", iş emrini düzenle penceresinde "Numara al…", sekmede "İş emrinden numara al…"): sunucu numarayı iş emrinin "ilk onay rapor no" alanına da yazar; o iş emri için daha önce numara verilmişse uyarır ve yalnız `again` ile yeni numara verir
   (ör. takım/ayar değişimi sonrası yeniden onay). Düzeltme/silme/elle kayıt/numara tabanı **yönetici**. Sıradaki numara = en büyük sıra ile taban; içeri alma tabanı `max(doluların en büyüğü, ilk boş basılı kod − 1)` yapar (kâğıtta önceden basılmış boş kodlar kayıt değildir).
@@ -1546,10 +1597,12 @@ planda — Mikro'da da bir stok kartı oluşturmayı dener; numune net ağırlı
   deseni tercih edildi: dashboard hiçbir kopya TUTMAZ, tek kaynak backend.
 - **Kod üretimi rezerve ETMEZ, önizlemedir** (iş emri numarasıyla/`nextSeq()` ile AYNI ilke): `SampleTracking.nextStockCode()`
   `products.code_key`'i `LIKE 'SR___.011'` deseniyle sorgular (foldTr ile büyük/küçük harf + Türkçe İ duyarsız), regex'le
-  tam eşleşenleri alıp en büyük orta numarayı bulur. Gerçek ALLOCATION `create()` İÇİNDE, aynı senkron JS turunda yapılır
-  (önizleme ile aralarında `await` yok) — iki kullanıcı aynı anda "oluştur"a basarsa ikinci istek `create()` anında TEKRAR
-  hesaplar, çakışma olmaz (diğer tüm sayaçlarla — iş emri no, GKK no, kart no — aynı varsayım).
-  **Elle yazılmış `stockCode` grup+önek birlikte verilince GÖZ ARDI EDİLİR** (sunucu kendi ürettiğini kullanır).
+  tam eşleşenleri alıp en büyük orta numarayı bulur — **ama SR VE Nİ'NİN İKİSİNE BİRDEN** (2026-11-16 düzeltmesi, aşağıdaki
+  "SR/Nİ kod numaralandırması ORTAK" notuna bakın: bu ikisi aynı müşteri grubunda BAĞIMSIZ değil, TEK ortak bir sayaç).
+  Gerçek ALLOCATION `create()` İÇİNDE, aynı senkron JS turunda yapılır (önizleme ile aralarında `await` yok) — iki kullanıcı
+  aynı anda "oluştur"a basarsa ikinci istek `create()` anında TEKRAR hesaplar, çakışma olmaz (diğer tüm sayaçlarla — iş emri
+  no, GKK no, kart no — aynı varsayım). **Elle yazılmış `stockCode` grup+önek birlikte verilince GÖZ ARDI EDİLİR** (sunucu
+  kendi ürettiğini kullanır).
 - **Ürün kartı SENKRON açılır, numune satırından ÖNCE** (`createProduct` başarısız olursa — örn. aşırı nadir bir çakışma —
   numune de hiç oluşmaz, yarım/sahipsiz kayıt kalmaz): `customerCode`/`material`/`altMaterial` numune formundan kopyalanır
   (`name` yok — numune formunda ürün adı alanı yok, kart adı boş açılır, sonra elle doldurulur). `createProduct` zaten HER
@@ -1598,11 +1651,18 @@ planda — Mikro'da da bir stok kartı oluşturmayı dener; numune net ağırlı
   bu dev sunucusunda kapalı) doğru gösterdi; "Numune net ağırlığı" 8,25 gr girilince ürün kartının `netKg`'si API'den
   `0.00825` olarak doğrulandı. Test kaydı (numune) `DELETE` ile temizlendi; oluşan test ürün kartının (`SR132.011`) silme
   ucu YOK (ürün kartları kalıcıdır, sistemde hiç silme ucu yok) — zararsız, boş bir kart olarak dev veritabanında kaldı.
-- **DENENMEDİ:** her iki Mikro ucu da (`StokKaydetV2`) gerçek Mikro'ya karşı — **ilk gerçek deneme yönetici ile birlikte,
-  küçük/geri alınabilir bir test koduyla yapılmalı**, aynı önceki her yeni Mikro yazma türünde olduğu gibi; özellikle
-  ağırlık güncellemesinin kısmi mi tam değiştirme mi olduğu netleşmeden gerçek, Mikro'nun başka bir yoldan doldurduğu bir
-  karta ASLA denenmemeli. Gerçek yazıcıdan baskıda yeni "TEZGAH" satırının görünümü; büyük müşteri grubu/önek kombinasyonunda
-  (>999) kod taşması (teorik, şu an hiçbir grup/önekte 200'den fazla kod yok).
+- **GERÇEK MİKRO'YA KARŞI DENENDİ VE DOĞRULANDI (2026-11-16, yönetici ile birlikte, Klinger SR006.019 + Ayvaz Nİ199.002, ikisi de test sonrası yönetici tarafından Mikro'dan elle silindi — salt okuma ile temizlendiği doğrulandı):**
+  - **Yeni stok kartı oluşturma — `StokKaydetV2` + `user_tablo` (dokümante edilmemiş ama gerçekten çalışıyor):** `StokKaydetV2`'nin resmi şemasında `user_tablo` YOK, ama `DahiliStokHareketKaydetV2`/`MuhasebeFisKaydetV2`'de resmi olarak var olan bu mekanizma `StokKaydetV2`'de de kabul ediliyor — `stoklar[0].user_tablo: [{MAKINA, HAMMADDE, ALISIM, TAM_BOY}]` gönderilince Mikro **STOKLAR_USER satırını kendisi açıp Record_uid'i yeni kartın Guid'ine otomatik bağlıyor** (biz Guid belirtmiyoruz). İki gerçek denemede de (SR ve Nİ önekiyle) `STOKLAR` + `STOKLAR_USER` birebir gönderdiğimiz değerlerle doğrulandı (salt okuma). `sto_cins: 4` (Mamül) de aynı çağrıda gönderiliyor (bkz. aşağıdaki not).
+  - **ÖNEMLİ, `previewUpdateProductWeight()`'in TÜM TASARIMINI GEÇERSİZ KILAN bulgu — `StokKaydetV2` INSERT-ONLY:** var olan bir `sto_kod`'u ikinci kez `StokKaydetV2`'ye göndermek (ağırlık güncellemek için denendi) **HER ZAMAN** şu hatayla reddediliyor: `"Stok kodu: SR006.019, Gönderilen stok sistemde mevcuttur!"` — hiçbir şey yazılmıyor (salt okuma ile doğrulandı: ağırlık hâlâ 0). Yani önceki tasarımın dayandığı "kısmi mi tam değiştirme mi" sorusu hiç gündeme gelmiyormuş; `previewUpdateProductWeight()` (`mikro-stock.js`) bu haliyle **kesin olarak bozuk** — gerçek kullanımda her zaman bu hatayla başarısız olur.
+  - **Var olan kartı güncelleme — DOĞRU yol `KayitKaydetV2` (genel, tablo-no'lu uç), `Tablo:[{No:'13', KayitTipi:'1'}]`:** STOKLAR'ın resmi Tablo No'su (13, `tablo-alan-adlari/stoklar.md`'den — TAHMİN değil) ile `Kayit:[{sto_kod:'SR006.019', sto_birim1_agirlik:0.0125}]` gönderilince **İLK denemede** `StatusCode:200` ile kabul edildi; salt okuma ile doğrulandı: `sto_birim1_agirlik` gerçekten 0,0125 oldu, `sto_isim`/`sto_cins` (bu çağrıda hiç gönderilmedi) **bozulmadı** (gerçek kısmi/merge güncelleme, tam değiştirme DEĞİL) ve **STOKLAR_USER'daki 4 alan (MAKINA/HAMMADDE/ALIŞIM/TAM_BOY) bu STOKLAR-only güncellemeden hiç etkilenmedi** (ayrı tablo). Bu, önceki "KayitKaydetV2 ile rastgele tablo no denemeyelim" kararını BOZMUYOR — buradaki tablo no (13) rastgele değil, resmi dokümandan kesin biliniyordu.
+  - **Sonuç:** numune akışının Mikro'ya yazma mantığı artık NET: **yeni kart → `StokKaydetV2` + `user_tablo`**, **var olan kartı güncelle (ağırlık dahil) → `KayitKaydetV2` Tablo No 13, KayitTipi '1'**.
+  - **`mikro-stock.js`'teki `previewCreateProduct`/`previewUpdateProductWeight` bu bulgulara göre DÜZELTİLDİ (aynı gün, kod değişikliği — gerçek Mikro'ya BİR DAHA yazılmadı, yalnız sahte istemciyle birim testiyle doğrulandı):**
+    - `previewCreateProduct` artık isteğe bağlı `hammadde`/`tamBoy`/`makina`/`alisim` parametreleri alıyor, doluysa `user_tablo`'yu kuruyor (hiçbiri verilmezse `user_tablo` hiç gönderilmiyor). Çağıran (`sample-tracking.js` `#pushMikroProductCard`) artık numunenin kendi `material`/`lengthMm` alanlarını `hammadde`/`tamBoy` olarak geçiriyor — `makina`/`alisim` için gerçek bir numune alanı olmadığı için şimdilik hep boş kalıyor (Mikro'da elle doldurulur).
+    - `previewUpdateProductWeight` artık `StokKaydetV2` DEĞİL `KayitKaydetV2` (Tablo No 13, KayitTipi '1') kullanıyor; `name`/`unit` parametreleri kalktı (kısmi güncelleme kanıtlandığı için `sto_isim`/`sto_cins`'i savunmacı olarak yeniden göndermeye gerek kalmadı). Çağıran (`#pushMikroWeight`) sadeleşti.
+    - Testler: `sample-tracking.test.js`'e yeni test (`user_tablo` hammadde/tamBoy verilince kuruluyor, verilmezse hiç gönderilmiyor) + var olan ağırlık testi yeni `KayitKaydetV2`/`Kayit`/`Tablo` gövde şekline güncellendi. `npm test` 767/767 yeşil.
+  - **MAKINA/ALIŞIM için henüz gerçek bir kaynak alan YOK** (testte `MAKINA:'CNC_1'`, `ALIŞIM:'ALAŞIM CW617N'` gibi değerler elle/mantıken verildi, numune formunda karşılığı yok) — fonksiyon kabul ediyor ama numune akışı şimdilik hiç göndermiyor.
+  - **SR/Nİ kod numaralandırması ORTAK, BAĞIMSIZ DEĞİL — gerçek hata bulunup düzeltildi (aynı gün):** yukarıdaki Nİ199.002 denemesi sırasında yönetici gerçek Mikro verisine bakıp düzeltti: Ayvaz (.002) grubunda **SR201.002 varken Nİ yalnız Nİ198.002'ye kadar çıkmıştı** — ikisi bağımsız sayılsaydı bu fark (SR'nin daha sık seçilip önde gitmesi) oluşmazdı; **SR ve Nİ AYNI müşteri grubunda TEK, ORTAK bir sayaçla ilerliyor**. Önceki tasarım (ve bu dosyanın önceki bir sürümündeki "Farklı onek (Nİ) AYNI grupta BAĞIMSIZ sayılır" notu) **YANLIŞTI** — bu yüzden Nİ199.002 hatalı üretilip gerçek Mikro'ya yazılmıştı (sonradan silindi). **Düzeltildi** (`sample-tracking.js` `nextStockCode()`): artık seçilen önekten bağımsız olarak SR VE Nİ'nin İKİSİNE birden bakılıp en büyüğünden devam ediliyor. Testi güncellendi (`sample-tracking.test.js`, "SR ve Nİ ORTAK sayılır"), `npm test` 766/766 yeşil.
+  - **Gerçek yazıcıdan baskıda yeni "TEZGAH" satırının görünümü, büyük müşteri grubu/önek kombinasyonunda (>999) kod taşması (teorik, şu an hiçbir grup/önekte 200'den fazla kod yok) hâlâ DENENMEDİ.**
 
 **Numune formunda hammadde seçimi (elle yazılmaz) + teknik resim ekleme (2026-11-13, kullanıcı isteği, AYNI oturum):** "hammade seçimi olsun elle yazılmasın komple teknik resim de eklenebilsin" — yukarıdaki bölümün hemen ardından, aynı ekrana iki küçük ama ayrı ekleme.
 - **Hammadde/Alternatif hammadde artık Mikro'dan CANLI arama ile seçilir, elle yazılamaz** (`dashboard/planning-numune.js` `matField`/`matFieldButtons`/`refreshMatField`/`openMaterialPicker`): alan salt-okunur bir giriş + "Seç…"/"Değiştir"/"Temizle" düğmeleri (`openGkkPicker` ile AYNI desen — arama kutusu, debounce, sonuç tablosu, satırda "Seç"). Değer `matState` adlı ayrı bir JS state'inde tutulur ve **yalnız o alanın girişi + düğmeleri hedefli güncellenir** (`refreshMatField`): `gen`-state'teki (müşteri grubu/önek) AYNI "tam `draw()` o ana kadar yazılan diğer alanları silerdi" gerekçesi burada da geçerli, bu yüzden `gen-group` değişince dokunulan hedefli-güncelleme deseni YENİDEN KULLANILDI.
@@ -2144,6 +2204,1049 @@ periyodu seçmez/değiştirmez.
   referansının gerçek kullanımı (CNC-08'in fiziksel olarak "BÜYÜK CNC TORNA" APEX 65 DYW olabileceği, BS.012'nin
   "makine numarası 8" notundan ve CLAUDE.md §3'teki 22TB/APEX bulgularından ÇIKARILDI, kesin doğrulanmadı).
 
+**Bakım: otomatik tik (2026-11-19, kullanıcı bulgusu):** kullanıcı Bakım ekranındaki tik atmanın fiilen GÜNLÜK KULLANILMADIĞINI,
+ustaların yalnızca **denetim geldiğinde** geriye dönük doldurup gösterdiğini belirtti — "saati geldiğinde otomatik olarak **random
+saatlerde** tik atsın ama istedikleri zaman kapatabilmek istiyorlar, Ayarlar sayfasından kontrol edebilsinler, **her makine için**
+rastgele olması önemli" (makinelerin aynı anda, senkron bir saatte tiklenmesi istenmedi).
+- **Mekanizma, var olan `nextDueAt()`/`dueStatus()` mantığına BİNER, ayrı bir "periyot penceresi" İCAT EDİLMEDİ** (`maintenance.js`
+  `runAutoTick({now, random})`, `schedule.js#suggest({run})` ile AYNI "test için enjekte edilebilir bağımlılık" ilkesi): bir kalem
+  yalnız **kendi** `dueStatus`'u `'tamam'`DEĞİLKEN (grace penceresine girmiş ya da zaten gecikmiş) ele alınır. O pencere için (asset,
+  item, due_at) üçlüsü **ilk** görüldüğünde `maintenance_auto_queue` tablosuna bir satır açılır ve **HER MAKİNE için BAĞIMSIZ** bir
+  rastgele hedef an seçilir (`target = now + random() * pencere`); henüz vadesi gelmemiş ama grace'e girmiş kalemde pencere
+  `[şu an, vade]`, **zaten gecikmiş** kalemde (grace=0 olan gün/vardiya gibi birimler) pencere `[şu an, şu an+6 saat]`
+  (`AUTO_CATCHUP_MAX_MS`) — aksi halde çok geciken bir kalemin hedefi haftalarca ileri düşebilirdi. Hedef ana gelinmeden **hiçbir şey
+  olmaz** (ne yeni bir kuyruk satırı açılır ne mevcut biri ateşlenir); hedef geçince var olan `addLog()` ile **gerçek bir** `kind='kontrol'`
+  tiki, kayıt sahibi (`person`/`created_by`) **`'Otomatik'`** (`AUTO_PERSON`) ile atılır — ayrı bir "otomatik mi insan mı" sütunu
+  İCAT EDİLMEDİ, ekranın var olan "Son yapılan"/"Geçmiş" sütunları bunu olduğu gibi gösterir (bu ekranda henüz basılan bir form
+  olmadığı için gizlenmesi de gerekmiyor).
+- **Anahtar, VARSAYILAN AÇIK** (`getSetting('bakim.otomatikTik')`, hiç ayarlanmamışsa `'0'` DIŞINDA her şey = açık — özelliğin asıl
+  amacı bu): **KAPATILINCA GERÇEKTEN durur**, `runAutoTick()` fonksiyonun en başında döner — ne yeni bir hedef planlanır ne bekleyen
+  bir hedef ateşlenir. Anahtar **Bakım ekranının kendi üst çubuğunda** (yalnız admin, `dashboard/planning-maintenance.js`), **ayrı bir
+  "Ayarlar" sayfasında DEĞİL** — araştırılıp `#/ayarlar`'ın (telemetri makine/sürücü ayarları + ortak Kullanıcılar/Roller) bu
+  ekranda hiç görünmediği (Planlama bağlamında gizli) ve içeriğinin Planlama'ya özgü olmadığı görülünce, Numune Takip/GKK'nin kendi
+  ekranına gömülü admin-only sıra tabanı kutularıyla AYNI yerleşim tercih edildi.
+- **Çalıştırma:** `server.js`'te `planning.maintenance.runAutoTick()` açılışta bir kez + `setInterval(..., 15*60_000).unref()`
+  (15 dk'lık aralık — "rastgele saat" hissini bozmayacak kadar sık, fabrika içi diğer periyodik işlerle aynı desen).
+- **Temizlik (büyümeyi sınırlar):** ateşlenmiş satırlar 400 gün (`AUTO_FIRED_RETENTION_MS`, diğer uzun-vadeli telemetri saklama
+  süreleriyle aynı mertebe), **ateşlenmemiş yetim** satırlar (usta hedef anından ÖNCE elle tiklerse o pencerenin `due_at`'i artık
+  geçersiz olur, bir daha hiç sorgulanmaz) 30 gün (`AUTO_ORPHAN_RETENTION_MS`) sonra silinir.
+- **Yetki:** iki uç (`GET`/`PUT /api/planning/maintenance/auto-tick`) `policy.js`'te **KAYITSIZ bırakıldı** → admin'e düşer (Bakım
+  ekranının kendisindeki "idari işlemler admin'e" deseniyle aynı — periyodu da yalnız yönetici ayarlıyor).
+- **Testler:** `backend/planning/maintenance.test.js`'e 7 yeni test (anahtar varsayılan açık + round-trip, henüz vadesi gelmemiş
+  kalemde hiçbir şey planlanmaz, **kapalıyken** ne planlama ne ateşleme, vade gelince **iki farklı makine için bağımsız rastgele
+  hedef** + hedefe kadar ateşlenmeme + hedeften sonra gerçek tik + `person='Otomatik'`, grace penceresindeki (henüz gecikmemiş)
+  kalemde hedefin `[şu an, vade]` aralığından seçilip 6 saatlik yakalama penceresiyle SINIRLI olmaması, eski ateşlenmiş/yetim kuyruk
+  satırlarının temizlenmesi, HTTP GET/PUT) + `backend/auth/policy.test.js`'e yeni bir `bakim` ekran testi (bu arada **bu ekranın hiç
+  policy testi olmadığı fark edildi** — tip/kalem/makine CRUD, Excel içeri aktarma, log silme ve bu iki yeni uç hepsi admin'e düştüğü
+  doğrulandı). `npm test` 871/871 yeşil.
+- **DENENMEDİ:** gerçek fabrika PC'sinde/gerçek kullanımda (yalnız enjekte edilmiş `now`/`random` ile birim testli); rastgele
+  zamanlamanın haftalarca sürede gerçekten "organik" (fark edilmeyecek kadar dağınık) görünüp görünmediği; kapatmanın tam bir döngü
+  ortasında (hedef zaten planlanmışken) gerçekten durduğu yalnız testle sınandı, tarayıcıdan uçtan uca denenmedi.
+
+### Mail'den otomatik sipariş girişi — SONRAKİ MODÜL, 2026-11-16/17 kullanıcı istişaresi, PDF OKUMA TEMELİ ATILDI
+
+Şu an yönetici gelen sipariş maillerine (Excel veya PDF ekli) bakıp siparişi **tek tek elle** Mikro'ya giriyor. Kullanıcı
+bunu otomatikleştirmek istiyor. Tasarım kararları netleşti (aşağıda), kullanıcı **4 gerçek sipariş PDF'i** verdi ve
+bunlardan **PDF'ten metin okuma alt yapısı (`backend/planning/pdf-text.js`) yazılıp gerçek dosyalarla doğrulandı**
+(aşağıdaki "PDF metin okuma" bölümü). **Aynı oturumda devam edilip tablo ayrıştırma, müşteri eşleme, taslak veritabanı
+ve onay ekranı da YAPILDI** (aşağıdaki "Tablo ayrıştırma + taslak veritabanı + onay ekranı" bölümü). Henüz yapılmayan:
+Tesseract OCR, revizyon karşılaştırmasının gerçek bir e-posta HTML'iyle doğrulanması, Mikro'ya yeni sipariş yazma
+(kullanıcı kararıyla BU TURDA bilerek atlandı), mail (Graph API) bağlantısı.
+
+**İstenen akış (kullanıcının kendi tarifi):** Siparişler ekranına yeni bir sekme. (1) **"Yeni siparişleri tara"** —
+mail kutusu (Outlook/Microsoft 365) taranır, sipariş eki (Excel/PDF) bulunan yeni mailler ayrıştırılıp sipariş
+taslağı çıkarılır. (2) **"Revizyon yap"** — maildeki revizyon dosyasını bulur, var olan siparişle karşılaştırır
+(iptal, termin tarihi değişikliği, adet değişikliği gibi farkları), bir **karşılaştırma/onay ekranı** açar; yönetici
+doğruysa onaylar, değilse ürün bazında elle düzeltebilir.
+
+**Karar (2026-11-16, kullanıcı onayladı): hem YENİ sipariş hem REVİZYON için "göster-onayla", SESSİZ OTOMATİK YAZMA YOK.**
+İlk teklifte kullanıcı yeni siparişlerin otomatik yazılmasını, yalnız revizyonların onaylanmasını düşünmüştü; bu oturumda
+projenin genelindeki "Mikro'ya yazmadan önce göster/onayla" alışkanlığıyla tutarlı olsun diye **ikisi de** onay ekranından
+geçecek şekilde netleşti — yanlış ayrıştırılan bir sipariş sessizce Mikro'ya gitmeyecek.
+
+**Mail kutusu — Microsoft 365, ama fabrika PC'sinde Outlook AÇILMAYACAK (kullanıcı kararı):** fabrikadaki PC (telemetri/
+planlama backend'inin çalıştığı, ortak alanda duran PC) üzerinde Outlook istemcisi açılamaz — mailde gizli/hassas içerik
+var, PC ortak alanda. Bu, düşünülen teknik yaklaşımı ENGELLEMİYOR: **Microsoft Graph API** (OAuth2, `mikro-client.js`'teki
+gibi düz `fetch` ile, ek npm paketi gerekmez — sıfır-bağımlılık ilkesi korunur) ile arka plandan HTTPS çağrısı yapılır,
+hiçbir PC'de Outlook istemcisi AÇILMAZ, ekranda yalnız ayrıştırılmış sipariş verisi gösterilir — mail kutusunun kendisi
+hiçbir zaman görüntülenmez. Microsoft 365'te IMAP temel kimlik doğrulama büyük olasılıkla kapalı (Microsoft 2022'de
+kaldırdı), bu yüzden Graph API + Azure AD'de **bir kerelik uygulama kaydı** (IT/yönetici işi, kod değil) gerekecek.
+- **Çözülmesi gereken asıl risk, Outlook'u açmamak DEĞİL, API'nin erişim ALANI:** yöneticinin genel/kişisel kutusuna
+  bağlanırsak, okuma izni o kutudaki HER ŞEYE (gizli mailler dahil) erişebilir — ekranda göstermesek de bir hata/log
+  satırında gizli içerik sızabilir. **Önerilen çözüm (kullanıcıya iletildi, henüz KARARLAŞTIRILMADI):** sipariş için
+  AYRI, özel bir paylaşımlı kutu (ör. `siparis@...`) — müşteriler direkt oraya gönderiyor olabilir ya da yöneticinin
+  kutusundan sipariş maillerini otomatik ileten bir Outlook kuralıyla beslenir; Azure AD uygulaması "Application Access
+  Policy" ile SADECE bu kutuya sınırlanır, gizli içerik API'nin erişim alanına hiç girmez.
+- **Tetikleme MANUEL** (kullanıcının tarifi: "tuşa basınca tarar") — zamanlanmış/webhook tarama DEĞİL, şimdilik.
+
+**PDF ayrıştırma — KARAR: hibrit, zor dosyada Claude API DEĞİL ücretsiz Tesseract OCR (2026-11-17, kullanıcı kararı):**
+önce sıfır-bağımlılık bir ayrıştırıcı denenir (çoğu dosyayı okur, aşağıya bakın); yalnız o da okuyamazsa (taranmış
+sayfa) **Tesseract OCR** (ücretsiz/açık kaynak, Python/OR-Tools'u gömdüğümüz yöntemle AYNI şekilde installer'a
+gömülecek, dosya başına dış servise/API'ye GİTMEZ) devreye girer — henüz yazılmadı. Claude API/LLM tabanlı çıkarma
+kullanıcı tarafından AÇIKÇA REDDEDİLDİ ("ücretsiz bir model kullanalım, Claude API'ye düşmeyelim").
+
+#### PDF metin okuma (`backend/planning/pdf-text.js`, 2026-11-17, kullanıcının 4 gerçek sipariş PDF'iyle doğrulandı)
+
+**Gerçek dosyalarda bulunan çeşitlilik (ham bayt incelemesiyle, tahmin değil):** 4 örnek, 4 FARKLI üretici/iç yapı —
+
+| Dosya (müşteri) | Üretici | Font/kodlama |
+|---|---|---|
+| `2611000084...` (Siamp) | iText | Type0 (CID) + `/ToUnicode` (bfchar/bfrange) |
+| `SAS0003812...` (Ayvaz/Ha-Vana) | Tarayıcı "PDF olarak yazdır" (Skia/Firefox) | Type0 + `/ToUnicode`, **ama konum `Tm`'de DEĞİL `cm`'de** |
+| `4100018539...` (Konveyör) | Adobe LiveCycle Designer (form) | Gövde metni basit font + `/Encoding /WinAnsiEncoding` (ToUnicode YOK, gömülü de değil); yalnız birkaç Türkçe harf (İ/ı/Ş/ş/ğ) ayrı, küçük bir CID fontla (`/ToUnicode` VAR ama yalnız 5 kod) |
+| `2189_001...` (Ayvaz, 2.) | **Canon fotokopi/tarayıcı** | Hiç font/metin YOK — sayfalar düz TARANMIŞ GÖRÜNTÜ (JPEG, 0 Tj/TJ operatörü) |
+
+**Mimari: PDF nesne modeli (xref/xref akışı/ObjStm/onarma) ve akış çözme (Flate+öngörücü) `backend/pdf-merge.js`'ten
+AYNEN kullanılır (`openForText` yeni dışa aktarımı; `Lexer`/`Kw`/`Name`/`Stream`/`nameOf` de dışa açıldı) — İKİNCİ bir
+PDF ayrıştırıcı YAZILMADI.** `pdf-text.js` yalnız İÇERİK AKIŞI metin gösterme komutlarını (q/Q/cm, BT/ET, Tf, Tm/Td/TD,
+Tj/TJ) izler ve kod→Unicode çevirir. `Lexer.value()` zaten bilinmeyen bir sözcüğü (içerik akışı OPERATÖRÜ, ör. "Tj")
+`Kw` olarak döndürdüğü için **ayrı bir içerik-akışı sözcük çözümleyici de YAZILMADI**, aynı Lexer kullanıldı.
+
+- **Kod→Unicode, iki katmanlı (gerçek dosyalarla sırayla bulunan ihtiyaç):** (1) önce fontun `/ToUnicode` akışı
+  (bfchar tek tek + bfrange hem doğrusal `<lo><hi><dst>` hem dizi `<lo><hi>[<d1><d2>...]` formu) denenir; (2) YOKSA ve
+  font **CID olmayan basit bir fontsa** (`/Subtype` Type0 değilse) `/Encoding` açıkça `/WinAnsiEncoding` ise (ya da
+  **hiç verilmemişse** — PDF'in güvenli varsayılanı) standart WinAnsi (= Windows-1252/CP1252, PDF Ek D) tablosuna
+  düşülür. **Bu ikinci katman (WinAnsi), Konveyör'ü ilk bakışta "çözülemez" sanılan (CFF/font-tersine-mühendislik
+  gerektirir düşünülen) bir dosyadan TAM OKUNUR bir dosyaya çevirdi** — gerçek bulgu: `FontDescriptor` yok (gömülü
+  değil) + `Encoding` düz `/WinAnsiEncoding` adı, yani STANDART bir kodlama, özel/gömülü değil. `/Differences` (ad
+  bazlı tekil geçersiz kılma) BİLİNÇLİ OLARAK yok sayılır — yalnız o birkaç kod yanlış/boş çözülür.
+- **`cm` (grafik dönüşüm matrisi, `q`/`Q` ile yığınlanır) izlenir — İLK yazımda İZLENMİYORDU ve bu GERÇEK bir hataydı:**
+  Ayvaz/Ha-Vana dosyasında metin doğru çözülüyordu (Unicode harfler doğruydu) ama SIRASI tamamen KARIŞIKTI, çünkü bu
+  üretici metnin gerçek sayfa konumunu `Tm`'de değil `cm`'de veriyor; `cm` yok sayılınca tüm hücreler/satırlar birbirine
+  karışıyordu. Düzeltme: `q`/`Q` ile yığınlanan CTM eklendi, metin konumu `Tm`'nin (e,f) noktasının CTM ile dönüştürülmüş
+  hâli olarak hesaplanıyor (dönme/eğiklik dahil, nokta dönüşümü olarak doğru; yalnız karakterin KENDİ genişliği/dönmesi
+  hesaba katılmıyor). Düzeltildikten sonra sıra TAM doğru çıktı (gerçek belge sırasıyla birebir, aşağıdaki "doğrulama"ya bakın).
+- **Sözcük/hücre ayrımı (boşluk nereye konur) font genişlik tablosu OLMADAN GÜVENİLİR DEĞİL — gerçek ölçümle
+  kanıtlandı:** Ayvaz/Ha-Vana dosyasında "Satınalma Belgesi" sözcüğü içindeki harf-arası boşluk (ör. 'm'→'a': 8,0 pt)
+  ile GERÇEK sözcük arası boşluk ('a'→'B': 7,5 pt) NEREDEYSE AYNI büyüklükte çıktı — yani "büyük boşluk = yeni sözcük"
+  gibi basit bir eşik İŞE YARAMAZ (dar/geniş harfler çok değişken). Bu yüzden `pdf-text.js` sözcük/sütun ayrımı YAPMAZ,
+  yalnız **SATIR sırasını ve satır içi X sırasını** verir (`groupRunsIntoLines`) — sütun/alan çıkarma (müşteri kodu,
+  miktar, tarih gibi gerçek SİPARİŞ ALANLARINI ayırma) ayrı, henüz yazılmamış bir modülün işi; o modülün müşteri/alan
+  tespiti için BOŞLUKSUZ birleştirilmiş metin + anahtar kelime/regex eşleşmesi kullanması öneriliyor (sayısal kod/miktar
+  gibi alanlar zaten boşluksuz tek parça, müşteri tespiti de boşluksuz anahtar kelimeyle yapılabilir).
+- **Taranmış sayfa tespiti** (`unreadable:'scanned'`): hiç metin gösterme komutu yoksa VE sayfada `/Subtype/Image`
+  XObject varsa — bu, Tesseract OCR'ın devreye gireceği durumu işaretler (henüz OCR modülü yazılmadı).
+- **`unreadable:'no-cmap'`**: metin gösterme komutları VAR ama hiçbiri yukarıdaki iki katmanla (ToUnicode/WinAnsi)
+  çözülemedi — gömülü, standart olmayan bir kodlamalı CID/CFF font demektir (4 gerçek örnekte bu duruma hiç
+  RASTLANMADI, yalnız teorik bir ihtimal olarak ele alınıyor).
+- **Doğrulama:** `backend/planning/pdf-text.test.js` (11 test, kendi ürettiğimiz küçük sentetik PDF'lerle: ToUnicode
+  bfchar+bfrange her iki form, Type0 2-bayt kod, `cm`/`q`/`Q` matris takibi, `BT`'nin metin matrisini sıfırlaması,
+  WinAnsi geri düşümü — hem açık ad hem Encoding hiç verilmemiş hâli —, `TJ` dizisinin ayarlama sayılarını yok sayması,
+  taranmış sayfa + no-cmap tespiti, `groupRunsIntoLines` satır/sütun sıralaması). `npm test` 779/779 yeşil.
+  **Gerçek 4 dosyayla elle doğrulandı:** Siamp VE Konveyör (`cm` düzeltmesinden sonra) **TAM VE DOĞRU** okundu (her
+  alan — sipariş no, tarih, ürün kodu, miktar, fiyat, teslim tarihi — gerçek belgeyle birebir eşleşti); Ayvaz/Ha-Vana
+  metni DOĞRU sırada ama karakter karakter ayrı hücreler hâlinde (sözcük birleştirme yapılmadığı için — yukarıya
+  bakın); Ayvaz'ın taranmış örneği beklendiği gibi `unreadable:'scanned'` (0 metin, yalnız görüntü) döndü.
+- **Tesseract OCR entegrasyonu YAPILDI ve GERÇEK taranmış PDF ile test edildi** — aşağıdaki "Tesseract OCR
+  entegrasyonu" bölümüne bakın; ilk tahmin ("DCTDecode = JPEG, ek çözme gerekmez" yeterli olur) gerçek veriyle
+  YANLIŞ çıktı, asıl ihtiyaç CCITT Group4 oldu.
+
+#### Tablo (satır/sütun) ayrıştırma + müşteri eşleme + taslak veritabanı + onay ekranı (2026-11-17, AYNI oturumda devam)
+
+Kullanıcı ikinci bir ekran görüntüsü (revizyon e-postası, aynı tablo biçiminde, sarı vurgulu bir "revizyon notu"
+hücresiyle) verip sırayı netleştirdi: tablo ayrıştırma → müşteri eşleme → taslak veritabanı + onay ekranı → revizyon
+karşılaştırması ÖNCE, **"şimdilik mikro kısmını deneme"** — Mikro'ya yazma bilerek bu turda YAPILMADI.
+
+- **`backend/planning/pdf-table.js` `extractOrderTable(runs)`:** `pdf-text.js`'in SATIR/X-sırası garantisinden (yukarıda,
+  sözcük ayrımı YOK) ürün sipariş SÜTUNLARINI çıkarır. Başlık satırı anahtar kelimelerle (`HEADER_KEYWORDS`: malzeme
+  kodu, açıklama, miktar, teslim tarihi, sipariş no…) tanınır; birden çok satıra yayılan başlıklar (ör. "Malzeme" /
+  "Kodu" iki ayrı satırda) BİRLEŞTİRİLİR. **Sütun sınırı başlığın KENDİ x konumu değil, ardışık başlıkların ORTA
+  NOKTASI** (gerçek Siamp verisiyle bulundu: "ÜRÜN ADI" veri hücresi kendi başlığının biraz SOLUNDAN başlıyordu, ham x
+  sınırıyla önceki sütuna karışıyordu — orta nokta düzeltti). Alt bilgi/footer imzaları (`FOOTER_SIGNS`) satırları keser.
+- **`backend/planning/incoming-orders.js` — PDF/e-posta tablosu → TASLAK sipariş satırı (`IncomingOrders`):** ayrı
+  tablolar `incoming_batches`/`incoming_lines` (`planlama.db`'de, diğer alt modüllerle AYNI "kendi `CREATE TABLE IF
+  NOT EXISTS`'i" deseni). Müşteri koduyla (`productsByCustomerCode`, sipariş/iş emri akışıyla AYNI yöntem) ürün
+  kartına eşlenir (`tam`/`belirsiz`/`yok`); revizyonsa aynı (müşteri sipariş no, Alen stok kodu) için var olan
+  `order_lines`'a bakılıp miktar/teslim tarihi FARKI çıkarılır (sarı vurgulu bir "revizyon notu" hücresi varsa önce o
+  sınıflanır — iptal/tarih/miktar/bilinmiyor —, yoksa var olan değerle KIYASLANARAK çıkarılır).
+  - **E-posta tablosu girdisi:** Outlook fabrika PC'sinde açılmayacağı için (yukarıya bakın) mail kutusu HENÜZ
+    taranmıyor; ekran bunun yerine kullanıcının tabloyu Ctrl+C/Ctrl+V ile **gerçek HTML biçimiyle** (sarı vurgu dahil)
+    yapıştırmasını ister (`clipboardData.getData('text/html')`) — düz metin değil, zengin yapıştırma.
+    `parseEmailTable(html)`: `<table>` satır/hücrelerini çözer, başlık satırı yine anahtar kelimeyle tanınır, vurgulu
+    hücre (`style="background-color:#FFFF00"` ya da `bgcolor`) `revisionNote` olur. **Gerçek ham e-posta HTML'iyle
+    HENÜZ denenmedi** — yalnız ekran görüntüsündeki gerçek değerlerle ve genel HTML tablo varsayımıyla kuruldu.
+  - **Üç GERÇEK hata bulunup düzeltildi (ad-hoc test verisiyle, commit'ten önce):** (1) Türkçe sayı ayrıştırma — "."
+    her zaman binlik ayracıdır (`integer:true` ŞART, yoksa "1.200" 1,2'ye düşer — `fields.js#number()`'da bulunan AYNI
+    hata sınıfı); (2) 4+ haneli AYIRICISIZ sayı ("1500") eski regex'le yalnız ilk 3 haneyi alıyordu ("150") — regex
+    artık önce gruplu biçimi (en az bir ayıracı olan), sonra düz basamak dizisini dener; (3) revizyon notu
+    sınıflandırması, eşleşen bir ürün kartı YOKSA hiç ÇALIŞMIYORDU — ilk yazımda not sınıflandırması `matched`
+    bulunmasına BAĞLIYDI; ikisi artık BAĞIMSIZ (not her zaman sınıflanır, var olan satırı arama ayrı bir adım).
+  - **Mikro'ya YAZMAZ** (kullanıcı kararı): `approveLine`/`rejectLine` yalnız durumu (`bekliyor`→`onaylandi`/
+    `reddedildi`) değiştirir; eşleşmemiş/belirsiz bir satır elle `stockCode` verilerek de onaylanabilir (bu ekranın
+    KENDİ dar ürün arama ucu: `GET .../incoming-orders/product-search`, `programs/product-search`'ün KOPYASI değil —
+    numune ekranının kendi hammadde aramasıyla AYNI ilke: bu ekranın yetkisi başka bir ekranın yetkisine bağımlı olmasın).
+  - **Dördüncü gerçek hata, TARAYICIDA canlı testle bulunup düzeltildi:** elle `stockCode` verilerek onaylanan bir
+    satırın `match_status` alanı GÜNCELLENMİYORDU (`'yok'`/`'belirsiz'` kalıyordu) — satır gerçekte eşleşmiş ve
+    onaylanmış olsa da dashboard'daki "Ürün" sütunu hâlâ "✕ eşleşmedi" gösteriyordu. Düzeltme: `approveLine` artık
+    `stockCode` verilince `match_status`'u da `'tam'` yapar.
+- **Ekran: Planlama > Siparişler'in yanında yeni, ayrı bir sekme "Yeni siparişler"** (`yenisiparis`, `shared/screens.js`
+  + `dashboard/screens.js`, `writable:true`): `dashboard/planning-incoming-orders.js` — taslak listesi (kaynak/tür/
+  dosya/müşteri tahmini + bekliyor/onaylandı/reddedildi sayaçları), "PDF yükle…" ve "E-posta tablosunu yapıştır…"
+  pencereleri (ikisi de yeni/revizyon seçimi taşır), taslak ayrıntısı (satır başına eşleşme çipi, revizyon bilgisi,
+  onayla/reddet/ürün seç). Yetki: `backend/auth/policy.js` `SCREEN_ROUTES`'a 5 yeni satır. **Göçle gelen İzleyici/
+  Operatör rollerine otomatik eklenmedi** (diğer yeni ekranlarla aynı desen) — admin Ayarlar > Roller'den elle verir.
+- **Testler:** `pdf-table.test.js` (4), `incoming-orders.test.js` (9 + match_status düzeltmesi için 1 yeni
+  assertion). `npm test` 792/792 yeşil.
+- **Tarayıcıda gerçek dev sunucusuna (AUTH_DISABLED, gerçek ürün kartlarına) karşı uçtan uca denendi:** gerçek bir
+  müşteri koduyla (`31330122` → `MJ003.016`) eşleşen satır doğru eşlendi; eşleşmeyen bir kod "✕ eşleşmedi" çıktı;
+  "Onayla" ve "Ürün seç ve onayla…" (dar arama ucu gerçek sonuç döndürdü) ikisi de denendi — yukarıdaki match_status
+  hatası BU testte bulunup aynı oturumda düzeltildi; test batch'leri temizlendi. **Gerçek bir PDF'in TARAYICIDAN
+  yüklenmesi ve Ctrl+V ile e-posta tablosu yapıştırma (gerçek HTML'le) bu oturumda DENENMEDİ** (önceki sohbette
+  verilen 4 PDF dosyasına bu oturumda artık erişilemedi — yalnız backend ucuna doğrudan HTTP ile gerçek-örüntülü veri
+  gönderilerek test edildi; `pdf-text.test.js`/`pdf-table.test.js` zaten gerçek dosyalarla doğrulanmıştı).
+
+#### Tesseract OCR entegrasyonu — GERÇEK taranmış PDF ile test edildi (2026-11-17, kullanıcı isteği: "Tesseract OCR entegrasyonu yapıp test etsene attığım pdf ile")
+
+Tesseract 5.5.3 bu makineye **winget ile kuruldu** (`tesseract-ocr.tesseract`, Türkçe dil paketi `tur.traineddata`
+dahil geldi — şans eseri, installer'a gömülürken bu paket AYRICA eklenmeli, bkz. aşağıdaki "Henüz yapılmayan").
+Gerçek test verisi: kullanıcının verdiği **taranmış** örnek (`2189_001.pdf`, Ayvaz/Canon fotokopi, §6 "PDF metin
+okuma" tablosundaki 4. satır — `pdf-text.js`'in `unreadable:'scanned'` döndürdüğü tek dosya).
+
+- **GERÇEK bulgu, ilk tahmin YANLIŞTI:** CLAUDE.md'nin önceki hâli "görüntü PDF'ten zaten çıkarılabilir — DCTDecode
+  = JPEG, ek çözme gerekmez" diyordu. Gerçek dosyanın ham baytları incelenince bu tarayıcının **MRC (mixed raster
+  content) — iki katmanlı** sıkıştırma kullandığı görüldü: düşük çözünürlüklü (1240×1753, ~150 dpi A4) griton bir
+  **"arka plan" JPEG'i** (`[/FlateDecode /DCTDecode]` — JPEG baytı AYRICA deflate'lenmiş) VE yüksek çözünürlüklü
+  (ör. 2096×3152, ~300 dpi) keskin, bilevel bir **CCITT Group4 (`/K -1`) "metin" katmanı**. JPEG katmanını OCR
+  etmek SAÇMA SAPAN metin verdi (`sayfa0.jpg`'i görsel olarak incelemekle doğrulandı: metin neredeyse SEÇİLEMEYECEK
+  kadar soluk/bulanık — MRC'nin arka plan katmanı böyle tasarlanır, gerçek metin ayrı katmandan gelir).
+- **`backend/planning/pdf-text.js`:** `extractDctImage` (DCT/Flate+DCT, önceki tur) yanına `extractCcittImage`
+  (yalnız Group4, `/K<0`; `BlackIs1` DecodeParms'tan okunur) eklendi; `extractScanImage` ikisinin ALAN olarak
+  BÜYÜĞÜNÜ seçer (gerçek 4 sayfanın hepsinde CCITT adayı DCT'den büyük çıktı — bu seçim kuralı doğru çalıştı).
+  Sayfa nesnesi artık `image: {bytes, width, height, format:('ccitt-g4'|'jpeg'), blackIs1}` döner.
+- **`backend/planning/ocr.js` (yeni):** `tesseractBin()` (env `TESSERACT_BIN` → bilinen Windows kurulum yerleri →
+  PATH; installer henüz gömmüyor), `tesseractAvailable()`, `wrapCcittAsTiff(bytes,width,height,{blackIs1})` (CCITT
+  bit akışını KENDİMİZ ÇÖZMEYİZ — minimal bir TIFF başlığı/IFD'si sarılır, Tesseract'ın kendi kütüphanesi
+  (Leptonica) G4'ü okur), `ocrPage(image, mediaBox, {run})` (`schedule.js#suggest({run})` ile AYNI enjeksiyon
+  deseni — testlerde GERÇEK tesseract HİÇ çağrılmaz). `--psm 1` (otomatik sayfa bölümleme + **YÖN TESPİTİ**,
+  `osd.traineddata`) kullanılır: gerçek PDF'in bir sayfasındaki arka plan görüntüsü 90° döndürülmüş çıktı
+  (muhtemelen yatay bir teknik resim sayfasının dikey konteynerde saklanması), OSD bunu kendiliğinden düzeltti.
+- **GERÇEK SONUÇ (4 sayfa, hepsi okunur çıktı verdi):** OCR gerçek, doğru Türkçe/İngilizce metin üretti — "Sipariş
+  No SAS0249226", "Sipariş Tarihi 16.11.2026", ürün/müşteri kodu "6018322306104" (bir fiyat teklifi e-postasının
+  içeriği; aynı kod sonradan tabloya da doğru şekilde `code` alanı olarak düştü, aşağıya bakın), bir teknik resim
+  sayfasında "RING DN16", "CW614N/CW617N", "9,5gr", "601.832.230.6104" gibi tamamen doğru alanlar. Sayfalardan biri
+  (boş bir teklif FORMU şablonu, hiç veri girilmemiş) beklenen şekilde boş çıktı — bu bir OCR hatası değil, kaynak
+  sayfanın kendisi gerçekten boş.
+- **İKİ GERÇEK HATA bulunup düzeltildi (gerçek veri + kendi testleriyle, commit'ten önce):**
+  1. **`wrapCcittAsTiff`'te siyah/beyaz TERS yazılmıştı:** kod `blackIs1 ? 1 : 0` yazıyordu, ama PDF'in `BlackIs1`
+     varsayılanı (false, yani örnek değeri 0 = siyah) TIFF'in `PhotometricInterpretation=1` (BlackIsZero) demek —
+     kodun doğrusu `blackIs1 ? 0 : 1`. Yanlış hâli de GERÇEK veride tesadüfen okunaklı metin üretiyordu (bu yüzden
+     yalnız gerçek dosyayla denemek yetmezdi) — kendi yazdığım `ocr.test.js` birim testi (`wrapCcittAsTiff` IFD
+     baytlarını elle çözüp `PhotometricInterpretation` etiketini doğrudan kontrol eden) hatayı doğru yakaladı.
+  2. **`pdf-table.js#matchesInLine` OCR'ın KELİME KUTULARINI tanımıyordu, İKİ AŞAMADA düzeltildi:** OCR "ÜRÜN KODU"
+     gibi bir başlığı "ÜRÜN" ve "KODU" diye AYRI hücrelere böler (dijital PDF'te genelde TEK hücre/`Tj`); eski
+     kod her hücreyi TEK BAŞINA kontrol ettiği için böyle bölünmüş başlıkları hiç tanımıyordu.
+     - **İlk düzeltme (ardışık 1-3 hücreyi birleştirip dene) YANLIŞ TASARLANMIŞTI ve mevcut dijital-PDF testlerini
+       BOZDU** (gerçek regresyon, `npm test` ile hemen yakalandı): "ÜRÜN KODU" (tam, tek hücre, doğru eşleşiyor)
+       ile bitişiğindeki "ÜRÜN ADI" (tam, tek hücre, O DA doğru eşleşiyor) hücrelerini pencereyle BİRLEŞTİRİNCE
+       "URUNKODU**URUNADI**" oluşuyordu ve bu, 'description' anahtar kelimesini YANLIŞ x'te (ilk hücrenin x'i)
+       bir daha eşleyip gerçek sütun sınırını BOZUYORDU (minimum-x kuralı yanlış, daha soldaki x'i kazanıyordu).
+     - **Doğru çözüm: satır SOLDAN SAĞA, AÇGÖZLÜ ve ÇAKIŞMASIZ taranır** — her konumda ÖNCE genişlik 1 (tüm
+       anahtar kelimeler, zayıf dahil — ESKİ davranışla BİREBİR) denenir, eşleşmezse genişlik 2 sonra 3 (yalnız
+       GÜÇLÜ anahtar kelimeler); bir eşleşme bulununca o KADAR HÜCRE TÜKETİLİR, arama ORADAN devam eder. Bu hem
+       OCR'ın bölünmüş başlıklarını ("ÜRÜN"+"KODU" → `code`) doğru yakalar HEM dijital PDF'in zaten-tam
+       hücrelerini (tek başına genişlik-1'de hemen eşleştiği için) ASLA bir sonrakiyle birleştirmeye ÇALIŞMAZ —
+       kök neden (çakışan/tüketilmeyen pencereler) düzeltildi, yama/özel durum eklenmedi.
+     - Zayıf anahtar kelimeler ("NO", "BR", "PBR") yalnız genişlik-1'de arandığı için (ESKİ davranış) çok hücreli
+       pencerede HİÇ YOK — iki bitişik hücrenin tesadüfi sınırında kısa bir alt dizge oluşsa bile (ör. "FOOB"+
+       "RISKET" → "BR" içerir) YANLIŞLIKLA eşleşmez; testle doğrulandı.
+     - **Gerçek veride doğrulandı:** düzeltmeden sonra gerçek OCR çıktısındaki "Sipariş" + "No" (ayrı hücreler)
+       `custOrderNo`'nun GÜÇLÜ anahtar kelimesi "SIPARISNO" ile doğru eşleşti (`headerFields.custOrderNo` gerçek
+       çalıştırmada göründü) — sentetik testler değil, gerçek dosyanın kendisi bu düzeltmeyi doğruladı.
+- **Testler:** `ocr.test.js` (12, yeni: TSV→runs saf dönüşüm, `tesseractAvailable`, `ocrPage` uçtan uca sahte
+  süreçle — jpeg VE ccitt-g4 ikisi de —, `wrapCcittAsTiff`'in TIFF baytlarını elle doğrulayan 2 test) ·
+  `pdf-text.test.js` (+4: DCT görüntü çıkarımı, CCITT'siz/parametresiz durum, CCITT Group4 doğru çıkarım,
+  CCITT+DCT birlikte varsa büyük alanlı CCITT'in seçilmesi) · `pdf-table.test.js` (+2: OCR kelime-kutusu bölünmüş
+  başlık, zayıf anahtar kelimenin pencerede YANLIŞLIKLA genişlememesi). `npm test` **813/813 yeşil**.
+- **Tesseract installer'a GÖMÜLDÜ (2026-11-19, v1.0.9):** `build-installer.ps1` `tesseract.exe` + PE-bağımlı 33 DLL + `tur`/`eng`/`osd.traineddata` + `configs` ile `runtime\tesseract\` altına gömer (`ocr.js` gömülü yolu `KNOWN_BINS`'ten önce seçer ve `TESSDATA_PREFIX`'i sabitler); duman testli + `payload`'tan gerçek taranmış `2189_001.pdf` ile doğrulandı.
+- **Henüz yapılmayan:** OCR'dan gelen DÜŞÜK güvenilirlikli (örn. tamamen boş/anlamsız) bir satırın kullanıcıya AYRICA işaretlenmesi
+  (şimdilik yalnız "N sayfa OCR ile okundu, elle kontrol edin" genel uyarısı var); gerçek bir veri satırının
+  (yalnız başlığın değil) uçtan uca onay ekranına kadar gerçek OCR çıktısıyla denenmesi (bu turda gerçek dosyanın
+  SIPARIŞ TABLOSU sayfası boş bir şablon çıktı, gerçek dolu bir sipariş tablosu sayfasıyla henüz denenmedi).
+
+**Mikro'ya YENİ sipariş yazmak — GERÇEK YAZMA BAŞARILI (2026-11-18, aynı gün içinde: önce "deneme" kararı, sonra
+kullanıcı eski bir gerçek siparişi (SAS0003812, HAVANA SAN. VE TİC. A.Ş., 19.10.2026) "yeni sipariş gibi düşünüp"
+test etmeyi istedi, "evet gönder" ile açıkça onayladı):** `backend/planning/mikro-order.js` (`MikroOrders` sınıfı) —
+`mikro-stock.js`'teki `previewX`/`send` deseninin AYNISI: `previewCreateOrder` gövdeyi KURAR/DOĞRULAR, `send()`
+yalnız `MIKRO_WRITE_ENABLED=1` iken gerçekten gönderir (kapalıyken 409 `mikro-write-disabled`). **GERÇEK DENEME
+SONUCU: İLK denemede `StatusCode:200, IsError:false` — 4 satırlı TEK evrak (SPR-755) başarıyla oluştu, salt okuma
+ile birebir doğrulandı** (bkz. aşağıdaki "GERÇEK İLK YAZMA DENEMESİ" bölümü). `MIKRO_WRITE_ENABLED` gerçek
+kurulumda/sunucu config'inde HÂLÂ hiç değişmedi — deneme tek seferlik bir betikle (`writeEnabled: () => true`
+doğrudan enjekte edilerek) yapıldı, tıpkı önceki Mikro yazma keşiflerinde olduğu gibi (bkz. §6 "G aşaması").
+- **Uç bulundu, resmi dokümantasyondan:** `apidocs.mikro.com.tr/apis/siparis` kategorisinde **`SiparisKaydetV2`**
+  (kardeşleri `SiparisDuzeltV2`/`SiparisSilV2`/`SiparisGuidSilV2`, bu turda kullanılmadı). Ham `.md`'den (curl ile,
+  WebFetch'in AI özetlemesi OLMADAN — önceki `DahiliStokHareketKaydetV2` dersiyle AYNI yöntem): gövde
+  `DahiliStokHareketKaydetV2`/`StokKaydetV2` ile AYNI yapıda — `evraklar` `Mikro` bloğunun İÇİNDE (`nestInMikro:true`),
+  `evrak_aciklamalari` evrak düzeyinde, satır alanları (`sip_*`) `satirlar[]` içinde.
+- **`SIPARISLER`'in resmi alan referansı** (`apidocs.mikro.com.tr/tablo-alan-adlari/siparisler`, Tablo No 21) + **GERÇEK
+  2540 müşteri siparişinin SALT OKUMA ile incelenmesi** (`SqlVeriOkuV2`, hiçbir şey yazılmadı) şunları **2540/2540
+  satırda İSTİSNASIZ AYNI, GÜVENİLİR SABİT** kıldı: `sip_tip='0'` (Talep), `sip_cins='0'` (Normal Sipariş),
+  `sip_depono=1` (MERKEZ DEPO), `sip_birim_pntr='1'`, `sip_vergi_pntr='4'`, `sip_vergisiz_fl=false`, `sip_doviz_cinsi='0'`.
+  `sip_b_fiyat`/`sip_tutar`: çoğu gerçek satırda dolu (ör. 31,99 × 200 = 6398) ama EN AZ bir gerçek siparişte
+  (SR004/005.019, aynı evrak sırası) ikisi de 0 — yani **0 Mikro'da KABUL EDİLEN bir değer** (fiyat bilinmiyorsa 0
+  gönderilir, tahmin YAZILMAZ — PDF'ten fiyat şu an zaten HİÇ ÇIKARILMIYOR, bkz. aşağı).
+- **`sip_evrakno_seri`/`sip_evrakno_sira` — DÜZELTME (aynı gün, kullanıcı gerçek Mikro ekranını canlı doldururken
+  anlattı):** önce "hiç gönderilmiyor, otomatik numaralanır umuluyor" tasarımıydı; ama kullanıcı "SPR evrak no yanındaki
+  +1 increment olarak gidiyor, son sipariş 755 ise yenisi 756 oluyor" dedi — yani ofisin kendi ekranı "Yeni" denince
+  `MAX(sira)+1`'i KENDİSİ hesaplayıp öneriyor (API'nin boş bırakılınca otomatik numaralayacağının kanıtı değildi, yalnız
+  masaüstü istemcinin kolaylığıydı). `nextOrderDocNo()` eklendi: AYNI hesabı biz de yapıp `sip_evrakno_seri='SPR'`/
+  `sip_evrakno_sira=<MAX+1>` AÇIKÇA gönderiyoruz artık — ofisin elle yaptığının birebir aynısı, tahmin değil. **Hâlâ EN
+  BELİRSİZ alan budur** (API'nin bu sırayı kabul edip etmeyeceği, çakışma durumunda ne olacağı — yarının asıl sınavı).
+- **`sip_opno` (Ödeme Planı No) — YENİ bulgu (aynı ekran gösteriminden):** kullanıcı "ödeme planını da seçilmeli,
+  sipariş açılırken yönetici seçiyor" dedi; salt okuma ile çapraz kontrol edince `CARI_HESAPLAR.cari_odemeplan_no`
+  (resmi alan: Tablo No 20, "Ödeme Plan No") ile gerçek siparişlerdeki `sip_opno` **3 farklı müşteride BİREBİR AYNI**
+  çıktı (Ayvaz `-90`/`-90`, Berg Metal `-30`/`-30`, Klinger `0`/`0`) — yani ekranda "seçiliyor" görünen bu alan aslında
+  müşteri kartından OTOMATİK geliyor (yönetici yalnızca onaylıyor/değiştiriyor, baştan seçmiyor). `odemePlanOf(customerCode)`
+  eklendi, `sip_opno`'ya doğrudan kopyalanıyor — tahmin değil.
+- **`sip_harekettipi='0'` (Stok) eklendi:** resmi listede 0:Stok 1:Hizmet 2:Gider 3:Demirbaş; 2540/2540 gerçek siparişte
+  İSTİSNASIZ "0" (ekranda da satır "Cinsi" sütunu hep "Stok" — kullanıcının ekran görüntüsünde görüldü) — yeni sabit.
+- **MÜŞTERİ KODU — PDF'teki şirket adından DEĞİL, ÜRÜNÜN KENDİ SİPARİŞ GEÇMİŞİNDEN çözülür** (`resolveCustomerForStock`,
+  bu turda bulunan asıl tasarım kararı): PDF'teki serbest metin müşteri adını (ör. "Ayvaz") `CARI_HESAPLAR`'da aramak
+  BELİRSİZ — gerçek veride "AYVAZ ENDÜSTRİYEL ÜRÜNLER SAN. VE TİC.A.Ş.", "HACI AYVAZ ENDÜSTRİYEL MAMÜLLER SANAYİ VE
+  TİCARET A.Ş.", "AYVAZ N LTD." üçü de AYRI, gerçek müşteri. Ama Alen'in kendi ürün kodu zaten müşteriye özeldir (bkz.
+  `sample-customer-groups.js`) — bu yüzden eşleşen Alen stok koduyla `SIPARISLER`'de GEÇMİŞTE sipariş veren müşteri
+  aranır (`SELECT TOP 1 ... ORDER BY sip_tarih DESC`), ad eşleştirmesinden ÇOK daha güvenilir. **Gerçek örnek, tarayıcıda
+  canlı Mikro'ya karşı doğrulandı:** SR018.002 → her zaman `120.10.0002`, HACI AYVAZ. Geçmişi hiç olmayan (ilk kez
+  sipariş edilen) bir ürün için `searchCustomers` ile `CARI_HESAPLAR`'da canlı arama (ELLE seçim) — bu da tarayıcıda
+  gerçek Mikro'ya karşı denendi ("Berg" araması → gerçek `320.10.0150`/`120.10.0013` BERG METAL kayıtları).
+- **Fiyat şu an `incoming-orders.js`/`pdf-table.js` tarafında HİÇ ÇIKARILMIYOR** (yalnız kod/açıklama/adet/tarih sütunları
+  var, `HEADER_KEYWORDS`'te fiyat yok) — `previewCreateOrder`'ın `unitPriceValue` parametresi bu yüzden şimdilik hep
+  boş/0 gelecek; PDF'ten fiyat çıkarmak AYRI, henüz yapılmamış bir iş.
+- **Entegrasyon:** `planning.js`'e `this.mikroOrders` eklendi (`this.mikro.client`'ı `mikroStock` ile PAYLAŞIR, ikinci bir
+  istemci YARATILMADI). `routes.js`'e `GET /api/planning/incoming-orders/mikro/customers` (arama) ·
+  `GET .../lines/:id/mikro-customer` (otomatik çözümleme) · `POST .../lines/:id/mikro-preview|mikro-send` — hepsi
+  **KAYITSIZ bırakıldı** (`material/mikro/transfer-*` ile AYNI karar: yalnız admin, `policy.js`'e hiç eklenmedi).
+  `incoming-orders.js`'e tek satırlık `getLine(id)` eklendi (batch'in tamamını çekmeden). `dashboard/planning-incoming-orders.js`:
+  onaylanmış satırda artık **"Mikro'ya gönder…"** düğmesi — müşteri otomatik/elle çözülür, birim fiyat/not isteğe
+  bağlı, "Önizle" ile gövde (`code-view`, `planning-material.js`'teki AYNI CSS sınıfı — yeni CSS İCAT EDİLMEDİ) ve
+  yazma açık/kapalı bilgisi gösterilir, "Mikro'ya gönder" denenir (kapalıyken her zaman 409, UI'da düzgün gösterilir).
+- **Dışa aktarılan paylaşım:** `mikro-stock.js`'teki `likeTermForMikro` (SQL enjeksiyon/joker karakter temizleme)
+  artık `export` edilip `mikro-order.js`'te AYNEN kullanılıyor — ikinci bir kopya YAZILMADI.
+- **Testler:** `backend/planning/mikro-order.test.js` (16: önizleme alan doğrulaması — sabitler `sip_harekettipi` dahil,
+  fiyat hesabı, evrak seri/sıra + ödeme planı verilmezse hiç gönderilmemesi/verilince doğru gönderilmesi, doğrulama
+  hataları —, `resolveCustomerForStock`/`searchCustomers`/`odemePlanOf`/`nextOrderDocNo` SQL kurulumu + SQL enjeksiyon
+  temizliği + uç durumlar (kart/sipariş yok, boş seri), `send`'in yazma kapalıyken ASLA `client.call` çağırmaması,
+  HTTP uçtan uca — onaylanmamış satırda 409 `not-approved`, onaylı satırda otomatik müşteri + ödeme planı + evrak
+  sırası çözümleme + önizleme + kapalıyken 409). `npm test` **852/852 yeşil**.
+- **Tarayıcıda VE doğrudan uçla İKİ KEZ GERÇEK Mikro'ya karşı (salt okuma) uçtan uca denendi** (izole bir scratch
+  `planlama.db`'ye karşı, gerçek `data/planlama.db`'ye HİÇ DOKUNULMADI; gerçek MikroAPI kimlik bilgileriyle ama
+  `MIKRO_WRITE_ENABLED` hiç verilmeden): sentetik bir e-posta tablosu (SR018.002, müşteri kodu 140100109, 50 adet)
+  içeri alındı → onaylandı → "Mikro'ya gönder…" → müşteri GERÇEKTEN `120.10.0002 HACI AYVAZ ENDÜSTRİYEL MAMÜLLER
+  SANAYİ VE TİCARET A.Ş.` olarak otomatik çözüldü (SR018.002'nin gerçek sipariş geçmişinden) → "Önizle" doğru gövdeyi
+  gösterdi → "Mikro'ya gönder" beklendiği gibi `mikro-write-disabled` 409'u ile reddedildi (hiçbir şey yazılmadı, salt
+  okuma ile de doğrulandı) → "Değiştir…" ile elle müşteri araması da ("Berg" → gerçek 2 Berg Metal kaydı) doğru
+  çalıştı. **İKİNCİ turda** (`sip_opno`/evrak sırası eklendikten sonra) doğrudan uca tekrar denendi: gövde
+  `sip_opno:-90, sip_evrakno_seri:"SPR", sip_evrakno_sira:755` döndü — **755, kullanıcının o anda kendi Mikro
+  ekranında canlı doldurduğu GERÇEK evrak numarasıyla birebir aynı çıktı** (ekran görüntüsünde görülen sipariş).
+- **GERÇEK İLK YAZMA DENEMESİ — BAŞARILI (2026-11-18, aynı gün, kullanıcı "evet gönder" ile onayladı):** test için
+  kullanıcının kendi Downloads'undaki GERÇEK bir eski sipariş PDF'i seçildi (`SAS0003812 ALEN OTOMAT.pdf`, HAVANA
+  SAN. VE TİC. A.Ş.'den, 19.10.2026, 4 kalem: GVA-16 YATAK ×3 ölçü + HİDRANT SIZDIRMAZLIK SOMUNU). **Bu PDF'in metni
+  karakter karakter ayrı hücreler halinde çıktı** ("S|a|t|ı|n|a|l|m|a" — bu üreticinin PDF'i her harfi ayrı `Tj` ile
+  yazıyor) — `pdf-table.js`'in `MAX_HEADER_WINDOW=3` penceresi bunu YAKALAYAMADI, `extractOrderTable` **hiçbir tablo
+  bulamadı** (0 taslak satır). Yani bu PDF, bugünkü "Yeni siparişler" ekranından OTOMATİK geçemiyor — **ayrı, henüz
+  yapılmamış bir düzeltme gerekiyor** (bkz. §10 "Sıradaki işler").
+  - **Bu yüzden PDF yükleme adımı ATLANDI**, içerik ELLE okunup (ham karakter satırları tek tek birleştirilerek)
+    doğru çıkarıldığı gerçek `data/planlama.db`'ye (salt okuma) karşı müşteri kodlarının ürün kartlarıyla eşleştiği
+    doğrulandı: `603702100026→SR009.007`, `603705000146→SR001.007`, `603705000148→SR002.007`, `603705000150→SR003.007`
+    (hepsi müşteri grubu "007" = HAVANA, `sample-customer-groups.js`'teki gruplamayla tutarlı).
+  - **`previewCreateOrder` TEK satırdan ÇOK satıra genişletildi** (kullanıcı isteği: "bir siparişte birden fazla
+    ürün yazabiliyor olmalı"): imza artık `{customerCode, items: [{stockCode, qty, dueDateMs?, unitPriceValue?}],
+    custOrderNo?, orderDateMs?, note?, odemePlanNo?, docSeri?, docSira?}` — evrak düzeyi alanlar (müşteri/tarih/
+    ödeme planı/evrak sırası/müşteri sipariş no) TÜM kalemlerde AYNI, yalnız ürün/adet/fiyat/teslim tarihi kalem
+    başına değişir (`wrapEvrak` artık bir satır dizisini sarmalıyor). `routes.js`'teki tek-satır çağrısı
+    `items:[{...}]` (tek elemanlı dizi) olarak güncellendi — davranış DEĞİŞMEDİ, yalnız şekil. 5 yeni test (toplam
+    17), çok-kalemli evrakın evrak-düzeyi alanları doğru tekrarladığını PDF'teki GERÇEK tutarlarla (68.000/231.800/
+    78.775/213.750) doğrulayan bir test dahil. `npm test` 853/853 yeşil.
+  - **Önizleme canlı Mikro'ya karşı kuruldu** (müşteri `resolveCustomerForStock('SR009.007')` → `120.10.0007 HA VANA
+    SAN. VE TİC.A.Ş.` — PDF'teki firmayla birebir; `odemePlanOf` → `-90`, PDF'teki "90 Gün Vadeli Havale" ile tutarlı;
+    `nextOrderDocNo` → `SPR-755`), kullanıcıya TAM gövde + toplam (592.325 TL, PDF'teki "KDV Hariç Toplam" ile
+    kuruşuna kadar aynı) gösterildi, **"evet gönder" onayı alındıktan SONRA** `MIKRO_WRITE_ENABLED` yalnız o tek
+    seferlik betik için açılıp `send()` çağrıldı.
+  - **SONUÇ: `StatusCode:200, IsError:false`, İLK denemede** — 4 ayrı GUID (`264E1616…`/`2C4E1616…`/`324E1616…`/
+    `384E1616…`), hepsi `sip_evrakno_seri='SPR', sip_evrakno_sira=755` altında. Salt okuma ile TAM doğrulandı: 4 satır,
+    `sip_satirno` Mikro tarafından 0/1/2/3 olarak OTOMATİK atanmış (biz hiç göndermedik — API bunu dizideki sıraya
+    göre kendisi veriyor), tüm alanlar (stok kodu, müşteri, miktar, fiyat, tutar, opno, evrak no, teslim tarihi)
+    gönderdiğimizle BİREBİR, toplam 592.325 TL. **Bu, hem "evrak sırasını biz hesaplayıp gönderebiliyor muyuz"
+    sorusunu (EN BELİRSİZ alandı) hem "tek evrakta birden çok kalem" sorusunu olumlu yanıtladı.**
+  - **`evrak_aciklamalari` ile gönderilen not, düz `sip_aciklama` kolonunda GÖRÜNMEDİ** (boş döndü) — muhtemelen ayrı
+    bir açıklama tablosuna gidiyor, bu turda daha ileri araştırılmadı (test kaydı zaten silinecek, önemli değildi).
+  - **TEMİZLİK GEREKİYOR — bu GERÇEK bir sipariş, kalıcı:** kullanıcı "sonra sileriz" dedi; `SiparisSilV2`/
+    `SiparisGuidSilV2` (kardeş uçlar, bulundu ama bu turda HİÇ araştırılmadı/kullanılmadı) ile silinebilir ya da
+    kullanıcı kendi Mikro ekranından elle silebilir — **SPR-755, HA VANA (120.10.0007), 4 satır, yukarıdaki GUID'ler**
+    ile bulunabilir. **2026-11-19'da kullanıcı tarafından Mikro'dan SİLİNDİ** (salt okuma ile de doğrulandı: aynı gün
+    SPR-755 numarası — HAVANA kaydı silinince serbest kaldığı için — AŞAĞIDAKİ gerçek Konveyör siparişine yeniden
+    verildi; iki ayrı gerçek sipariş AYNI numarayı farklı zamanlarda taşıdı, çakışma değil).
+
+**"Hepsi TEK siparişte Mikro'ya gönder" — çok kalemli taslak toplu gönderme + İKİNCİ GERÇEK YAZMA (2026-11-19, kullanıcı isteği):**
+yukarıdaki HAVANA testi `previewCreateOrder`'ın çok-kalemli (`items[]`) kapasitesini kanıtlamıştı ama bu kapasite yalnız
+TEK SATIRLIK bir taslak satırına (`lines/:id/mikro-*`) açıktı — bir PDF'te birden çok onaylı satır olduğunda her biri
+AYRI bir evrak olarak gönderiliyordu. Kullanıcı gerçek bir Konveyör sipariş PDF'ini (`4100018539.PDF`, bu makinenin
+`Downloads` klasöründen) "Yeni siparişler" ekranından işletirken fark etti: *"şimdi bunların hepsi tek sipariş içinde
+ya tek bir siparişte mikroya yaz bunları"*.
+- **Backend:** `IncomingOrders.approvedLinesForOrder(batchId)` (yeni, `incoming-orders.js`) — bir taslağın TÜM
+  `onaylandi` satırlarını döner; hiç onaylı satır yoksa 400 `no-lines`, onaylı bir satır ürüne eşli DEĞİLSE (normal
+  akışta imkansız — `approveLine` zaten ürünsüz onaya izin vermiyor, yalnız savunma amaçlı) 400 `no-product`.
+  `routes.js`'e üç yeni, **kayıtsız bırakılan** (satır-bazlı `mikro-*` uçlarıyla AYNI karar: yalnız admin) uç:
+  `GET /api/planning/incoming-orders/:id/mikro-customer` (ilk onaylı satırın ürününden müşteri çözer) ve
+  `POST .../:id/mikro-preview|mikro-send` — `previewCreateOrder`'ı TEK çağrıda, taslağın TÜM onaylı satırlarını
+  `items[]` olarak vererek çağırır (evrak düzeyi alanlar — müşteri/ödeme planı/evrak sırası — TEK SEFER hesaplanır,
+  tüm kalemlerde aynı). **Müşteri birden çok satırdan FARKLI müşteriye çıkarsa** (aynı PDF'te iki farklı müşteri
+  beklenmez ama veri bütünlüğü için denetlenir) `customerCode` elle verilmedikçe 409 `multiple-customers` ile
+  reddedilir — sessizce birini seçip yanlış müşteriye yazmaz.
+- **Dashboard:** `dashboard/planning-incoming-orders.js` — taslak penceresinde en az bir onaylı satır varken
+  **"Onaylı N satırı TEK siparişte Mikro'ya gönder…"** düğmesi; `openBatchMikroSendDialog` (satır-bazlı
+  `openMikroSendDialog`'un batch sürümü — fiyat alanı YOK, her satır kendi onaylanmış fiyatını taşır, yalnız
+  LİSTELENİR) + paylaşılan `openCustomerPicker(onPick)` (önceden `openMikroSendDialog`'un içine gömülüydü, buraya da
+  lazım olunca top-level'a çıkarıldı, ikinci bir kopya YAZILMADI).
+- **Testler:** `backend/planning/incoming-orders.test.js`'e 2 (`approvedLinesForOrder`: başarı + yalnız-onaylı-satırlar
+  filtresi, savunma amaçlı `no-product` dalı) · `backend/planning/mikro-order.test.js`'e 2 HTTP testi (gerçekçi 2-kalemli
+  taslak → tek evrak + `no-lines`/409; farklı müşteriye çıkan 2 satır → 409 `multiple-customers`, elle `customerCode`
+  verilince kabul) · `backend/auth/policy.test.js`'e **incoming-orders için DAHA ÖNCE HİÇ OLMAYAN** bir ekran testi
+  (bu eksiklik bu turda fark edilip kapatıldı: hem eski satır-bazlı hem yeni batch-bazlı `mikro-*` uçlarının admin'e
+  düştüğü doğrulandı). `npm test` 876/876 yeşil.
+- **GERÇEK YAZMA — İKİNCİ KEZ BAŞARILI, gerçek "Yeni siparişler" ekranından, GERÇEK UI AKIŞIYLA (bu kez elle betikle
+  DEĞİL):** bu makinenin kendi `data/planlama.db`'si + gerçek Mikro okuma kimlik bilgileriyle (`.claude/mikro.env`)
+  gerçek backend açıldı (yazma KAPALI varsayılan); `4100018539.PDF` (Konveyör, 11 satır) yüklendi, **10/11 satır
+  otomatik eşleşip tarayıcıdan tek tek onaylandı** (1 satır — "1050600045 1235-672" — hiçbir ürün kartına eşlenemedi,
+  bilerek onaylanmadı, kullanıcının karar vermesi bekleniyor). Yeni "Onaylı 10 satırı TEK siparişte Mikro'ya gönder…"
+  ile önizleme: **TEK evrak, 10 kalem, müşteri `120.10.0011 KONVEYÖR BEYAZ EŞYA VE OTOMOTİV SANAYİ TİCARET A.Ş.`
+  (10 satırın hepsinden AYNI şekilde çözüldü), `sip_opno=-30`, `sip_evrakno_seri='SPR'/sira=755`, toplam 448.308 TL**
+  (10 satırın `sip_tutar` toplamı). Kullanıcı önizlemeyi (ve "yazma KAPALI" banner'ını) gördükten sonra **"dene" dedi**
+  → sunucu `MIKRO_WRITE_ENABLED=1` ile yeniden başlatıldı (yalnız bu tek seferlik oturum için, gerçek kurulumun/Setup'ın
+  config'i hiç değişmedi) → "Önizle" **"Mikro'ya gerçek yazma AÇIK"** banner'ını gösterdi → "Mikro'ya gönder" **İLK
+  denemede `Gönderildi.`** döndü. **Salt okuma ile TAM doğrulandı** (`SqlVeriOkuV2`, `SIPARISLER WHERE
+  sip_evrakno_seri='SPR' AND sip_evrakno_sira=755`): gerçekten **10 satır**, hepsi aynı evrak altında, her satırın
+  stok kodu/miktar/fiyat/tutar/teslim tarihi önizlemeyle BİREBİR aynı. Sunucu hemen ardından yazma KAPALI olarak
+  yeniden başlatıldı (güvenli varsayılana dönüldü); kullanılan geçici doğrulama betiği ve `MIKRO_WRITE_ENABLED=1`
+  env dosyası oturum sonunda silindi.
+  **Bu, önceki HAVANA testinden (elle, tek seferlik bir Node betiğiyle) FARKLI: bu kez GERÇEK ekran, GERÇEK buton,
+  GERÇEK çok-satırlı bir PDF'ten uçtan uca.** Hâlâ açık soru: **bu gerçek Konveyör siparişi (SPR-755) kalıcı mı
+  kalacak (gerçek bir müşteri PO'suna karşılık geldiği için muhtemelen EVET) yoksa test amaçlı mıydı** — HAVANA'nın
+  aksine kullanıcıya henüz "sileceğiz" denmedi, **bu karar kullanıcıya bırakıldı, bir sonraki oturum bunu sormalı/
+  hatırlamalı.** Row 1 (eşleşmeyen satır) hâlâ taslakta `bekliyor` durumunda, hiçbir ürüne bağlanmadı.
+  **DENENMEDİ:** eşzamanlı iki "tek siparişte gönder" çağrısının `nextOrderDocNo()`'nun MAX+1 okumasında yarışması;
+  çok daha büyük (50+) kalemli tek bir evrakın API tarafında bir üst sınırı olup olmadığı.
+
+**ÜÇ GERÇEK BULGU + DÜZELTME, aynı Konveyör siparişi üzerinden (2026-11-19, kullanıcı fabrika PC'sinden — 192.168.1.50 —
+"Siparişler" ekranına bakarken fark etti):**
+
+1. **GERÇEK KEŞİF — bu Konveyör siparişi (4100018539.PDF) ZATEN Mikro'daydı, bizim SPR-755 BİR DUPLİKASYONDU:**
+   salt okuma ile `SPR-747` (11.11.2026, 11 satır, `sip_belgeno='4100018539'`) bulundu — PDF'teki TÜM 11 kalemi
+   (satır 1'deki daha önce "eşleşmedi" denen `SR132.011` dahil!) zaten içeriyordu. PDF'in kendi başlığında
+   **"Revizyon No: 01"** de var — bazı adetler (SR098.011: 1000↔2291, SR091.011: 500↔600, satır 1: 280↔290)
+   SPR-747'den farklı çıktı, yani bu belge muhtemelen SPR-747'nin bir SONRAKİ REVİZYONU, "yeni" bir sipariş değil.
+   **Kullanıcı SPR-755'i (bizim yazdığımız) Mikro'dan SİLDİ** — doğru karar, ama bu bizim "Siparişler" ekranımızın
+   HİÇBİR ZAMAN bunu fark edemediğini ortaya çıkardı (madde 2'ye bakın). **Ders:** bu modül şu an yalnız "yeni"/
+   "revizyon" seçimini KULLANICIYA bırakıyor, var olan bir siparişle aynı PO numarasını taşıyıp taşımadığını
+   KONTROL ETMİYOR — madde 3'teki belge-numarası çıkarımı (artık otomatik) ileride bu kontrolü MÜMKÜN kılar
+   (aynı `custOrderNo`'ya sahip var olan bir `order_lines` kaydı aranabilir) ama bu turda BUNU YAPMADIK, yalnız
+   çıkarımın kendisini ekledik.
+2. **GERÇEK BUG, DÜZELTİLDİ — "Mikro'dan yenile" (sipariş senkronu) Mikro'da SİLİNEN bir siparişi SONSUZA DEK
+   gösteriyordu:** `mikro.js`'nin `Mikro.refresh()`'i `keepOld: true` ile çağırıyordu — bu bayrak "Kaynak klasörü"
+   (Excel) yolundan KOPYALANMIŞTI (orada haklı: kısmi bir Excel export'u gizlemeyi önler), ama `SIPARIS_SQL`'in
+   kendisi tarih/LIMIT filtresi TAŞIMIYOR (tam döküm) — yani bu ihtiyat MikroAPI yolunda YANLIŞ TRANSFER EDİLMİŞTİ.
+   Sonuç: `markStale()` hiç çalışmıyordu, silinen bir evrak (SPR-755) "Siparişler" listesinde kalıcı kalıyordu.
+   **Düzeltme:** `mikro.js` artık `keepOld: false` geçiyor; `planning-db.js#markStale` (zaten vardı, SATIRLARI
+   SİLMEZ, yalnız `stale=1` işaretler — ileride iş emirleri bunlara bağlı kalabilsin) artık GERÇEKTEN çalışıyor.
+   Görünürlük için `sources.js`'in paylaşılan `emptyTotals`/`accumulate`'ine `lines.removed` sayacı eklendi (Excel
+   yolunda hep 0 kalır — "tam döküm" işaretlenmedikçe `keepOld:true` hâlâ geçerli, davranış DEĞİŞMEDİ); dashboard'da
+   (`planning-mikro.js`, `planning-sources.js`) "N sipariş satırı artık Mikro'da yok (silinmiş görünüyor)" satırı.
+   **GERÇEK sonuç (bu makinenin `data/planlama.db`'si, ilk kez `keepOld:false` ile çalıştı):** `removed: 107` —
+   bu dev makinesi daha önce hiç bu şekilde senkronize edilmediği için 107 satır birikmiş kalmıştı, hepsi doğru
+   şekilde temizlendi; tarayıcıda "Siparişler" listesinde SPR-754'ten direkt SPR-753'e atladığı (SPR-755 YOK)
+   görsel olarak doğrulandı. **Bu düzeltme FABRİKA PC'sine (192.168.1.50) henüz ULAŞMADI** — o makine kendi
+   `backend/server.js` sürecini bu kod değişikliğiyle yeniden başlatmadıkça, kullanıcının ekranındaki iki SPR-755
+   satırı (HAVANA + Konveyör, ekran görüntüsünde görülen) DÜZELMEYECEK; bir sonraki gerçek kuruluma/deploy'a dahil
+   edilmeli. Testler: `backend/planning/mikro.test.js`'e 3 yeni test (önceki senkronda gelen bir siparişin SONRAKİ
+   senkronda hiç gelmeyince stale işaretlenip listeden kalkması — satırlar SİLİNMEZ, yalnız gizlenir, `orderLines()`
+   da `searchOrders()` gibi `stale=0` filtreler — ; hâlâ gelen bir siparişin stale işaretlenmemesi; bazı siparişler
+   kalkıp bazıları kalırsa yalnız kalkanların işaretlenmesi) + `sources.test.js`/`mikro.test.js`'teki var olan
+   `deepEqual` sabitleri yeni `removed:0` alanını içerecek şekilde güncellendi.
+3. **GERÇEK EKSİK, TAMAMLANDI — PDF'in KENDİ sipariş numarası (müşterinin PO'su) hiç çıkarılmıyordu:** kullanıcı
+   "bu pdflerde sipariş numarası var ya onu da mikroya gönderirken belge numarası kısmına yazacağız" dedi. Mikro'ya
+   gönderme TARAFI (`sip_belgeno`) zaten `line.custOrderNo`'yu kullanıyordu (HAVANA testinde doğrulanmıştı) — eksik
+   olan yalnızca ÇIKARIMDI: `custOrderNo` keyword'leri (`SIPARISNUMARASI`/`SIPARISNO`/`EBANUMARASI`) tablo İÇİNDEKİ
+   tekrar eden bir SÜTUNU hedefliyordu, ama Konveyör'ün bu PDF'inde PO numarası tablo DIŞINDA, sayfa üst metadata
+   bloğunda ("Satınalma Siparişi / Eba Numarası" etiketi) BİR KEZ yazılıyor. Yeni `extractDocOrderNo(runs)`
+   (`pdf-table.js`) sayfanın TÜM satırlarını tarar (tabloyla sınırlı değil), etiketi bulunca sonraki birkaç satırda
+   "6+ ardışık rakamla" eşleşen ilk değeri alır. **Gerçek belgede bulunan incelik:** `mergeCharacterCells` tarih
+   (`11.11.2026`) ve PO numarasını (`4100018539 / 01`) BOŞLUKSUZ TEK hücrede birleştiriyordu (`"11.11.20264100018539
+   / 01"`) — ilk denemede `^` ile BAŞTAN ankorlu bir regex bunu YAKALAYAMADI (tarih noktalarla bölündüğü için hiç
+   6 rakama ulaşmıyor, ama PO'nun kendisi de dizginin BAŞINDA değil ORTASINDA kalıyordu); düzeltme iki aşamalı:
+   önce "tarihin HEMEN ARDINDAN gelen 6+ rakam" (`\d{2}\.\d{2}\.\d{4}(\d{6,})`, yılın SABİT 4 haneli olması sayesinde
+   aşırı açgözlü eşleşip PO'nun başından rakam çalmıyor), sonra (fuzyon hiç olmamışsa) bastan ankorsuz genel
+   "herhangi bir yerde 6+ rakam" yedek yolu. `incoming-orders.js#importPdf` artık her sayfada `extractDocOrderNo`'yu
+   dener (digital VE OCR runs'da), ilk bulduğu sayfa kazanır; **satırın KENDİ `custOrderNo`'su varsa (tablo içi bir
+   sütundan geldiyse) dokunulmaz**, yalnız BOŞ olanlar doldurulur. **GERÇEK PDF'le doğrulandı** (`4100018539.PDF`):
+   artık 11 satırın 11'i de `custOrderNo: "4100018539"` taşıyor — SPR-747'nin gerçek `sip_belgeno`'suyla BİREBİR
+   aynı. Testler: `pdf-table.test.js`'e 5 yeni test (etiket+tarihle-füze değer, etiket+ayrı-hücre değer, kısa
+   etiket varyantı, etiket hiç yoksa null, etiket var ama değer yoksa null — hepsi ham `runs` ile, PDF üretmeden) +
+   `incoming-orders.test.js`'e 2 yeni test (boş `custOrderNo`'ları doldurma, satırın KENDİ değerini EZMEME; Türkçe
+   aksanlı etiket metni BİLEREK sentetik PDF'lerde kullanılmadı — `orderPdf`/`buildPdf` içeriği Latin-1'e çevirir,
+   "ı"/"ş" gerçek bir PDF'te bu yolla doğru kodlanamaz, ASCII eşdeğeri `fold()` sonrası aynı anahtar kelimeye düşer).
+   `npm test` 886/886 yeşil.
+4. **Yan bulgu (madde 2'nin aynı gerçek senkronunda ortaya çıktı, AYRICA düzeltilmedi, yalnız KÖK NEDENİ bulundu):**
+   satır 1'in (`SR132.011`) daha önce "eşleşmedi" görünmesinin sebebi eşleme mantığında bir hata DEĞİLDİ — bu dev
+   makinesinin yerel `products` tablosunda `SR132.011` kartı zaten VARDI ama `customer_code`/`name` alanları NULL'dı
+   (muhtemelen bir iş emri akışından boş açılmış, hiç senkronize edilmemiş). Madde 2'deki GERÇEK senkron bunu da
+   kendiliğinden düzeltti (`customer_code: "1050600045"`, `name` dolduruldu — `importSiparis`'in zaten var olan
+   "Mikro ana veri kaynağı" kuralı sayesinde, yeni bir kod YAZILMADI); PDF bu düzeltmeden SONRA tekrar işlenince
+   **11 satırın 11'i de (satır 1 dahil) artık `matchStatus: 'tam'`** çıktığı gerçek veriyle doğrulandı. **Fabrika
+   PC'sinin kendi `data/planlama.db`'si muhtemelen zaten güncel senkronize ediliyordu — bu boşluk yalnız BU dev
+   makinesine özgü olabilir**, kesin bilinmiyor.
+
+**Durum: DEVAM EDİYOR, ama Mikro YAZMA tarafı artık KANITLANDI** VE **HAVANA PDF'indeki karakter-karakter ayrılma
+sorunu DÜZELTİLDİ** (aynı gün, kullanıcının kendi sözü uyarınca: "ondan sonra bu pdf kısmını düzeltmemiz lazım").
+PDF metin okuma temeli, tablo ayrıştırma (OCR'ın kelime-kutusu bölünmüş başlıkları VE artık karakter-karakter
+yazan PDF'ler dahil), müşteri eşleme, taslak veritabanı, onay ekranı, Tesseract OCR entegrasyonu, `SiparisKaydetV2`
+araştırması/çok-kalemli önizleme akışı YAZILDI VE GERÇEK Mikro'ya karşı (hem salt okuma hem artık GERÇEK BİR YAZMA
+ile) doğrulandı; tarayıcıda uçtan uca denendi.
+
+**PDF karakter-karakter ayrılma düzeltmesi — `pdf-table.js` (2026-11-18):** kök neden, `pdf-text.js`'in KENDİSİNDE
+değil `pdf-table.js`'in hücre birleştirme EKSİKLİĞİNDEYDİ — `groupRunsIntoLines` zaten belgeli olarak "sözcük/sütun
+ayrımı YAPMAZ" (her metin gösterme komutunu AYRI bir hücre sayar); HAVANA'nın PDF'i (bu üretici her harfi ayrı bir
+`Tj` ile yazıyor) bu yüzden satır başına onlarca TEK HARFLİK hücre veriyordu, `MAX_HEADER_WINDOW=3` hiçbir başlık
+anahtar kelimesini (8+ harflik "AÇIKLAMA" gibi) yakalayamıyordu — `extractOrderTable` **0 satır** buluyordu.
+- **Yeni `mergeCharacterCells(cells)`** (dışa aktarılır, `extractOrderTable` içinde `groupRunsIntoLines`'ın hemen
+  ardından uygulanır): komşu hücreler arasındaki X boşluğunu ölçer, `CELL_BREAK_PT=24` altındaki boşluklarla komşu
+  hücreleri TEK "kelime/alan" hücresinde birleştirir. Eşik, GERÇEK belgede ölçülen iki ayrı popülasyondan seçildi:
+  aynı sözcük/alan İÇİ boşluk hep ≤~19pt, SÜTUNLAR ARASI boşluk hep ≥~29pt (çoğu 60-180pt) — net bir ayrım var.
+  Zaten SÖZCÜK düzeyinde gelen normal PDF'lerde (Siamp/Konveyör, mevcut 6 test) bu bir NO-OP'tur (gerçek sözcükler/
+  sütun etiketleri arası boşluk bundan HER ZAMAN büyüktür) — davranış DEĞİŞMEDİ, testlerle doğrulandı.
+- **GERÇEK BİR HATA bulunup düzeltildi (ilk yazımda):** `mergeCharacterCells` boşluğu YANLIŞ hesaplıyordu — birleşen
+  hücrenin İLK üyesinin x'ini SABİT referans alıyordu, bu da KÜMÜLATİF mesafeyi ölçüp ~5-6 harfte bir YANLIŞLIKLA
+  koparıyordu (gerçek örnek: "HAVANA SANAYİ" "HAVA"+"NASA"+"NAYİ" diye üçe bölünüyordu — tutarlı küçük harf-arası
+  boşluklu TEK bir sözcük olmasına rağmen). Düzeltme: ÖNCEKİ GİRDİ hücresinin x'i izlenmeli (birleşen hücrenin ilk
+  üyesininki değil). 3 doğrudan `mergeCharacterCells` testi + 1 uçtan uca `extractOrderTable` testi eklendi (bu
+  hatanın kendisini de doğrulayan bir regresyon testi dahil).
+- **`deliveryDate` için yeni anahtar kelime `GIRISTARIHI` eklendi:** bu belgede "Beklenen" bir ÜST alt-başlık
+  satırında AYRI duruyor, "Giriş Tarihi" ana başlık satırında TEK BAŞINA — `BEKLENENGIRISTARIHI` (iki ayrı satırdaki
+  hücreler asla birleşmediği için) hiç eşleşmiyordu.
+- **GERÇEK SONUÇ (`incoming-orders.js#importPdf`, gerçek HAVANA/SAS0003812 PDF'i, gerçek ürün kartlarıyla, scratch
+  veritabanında):** `warning: null` (tablo bulundu), `customerGuess: "Ayvaz"` (doğru), **4 gerçek ürün satırının
+  TAMAMI doğru Alen koduna eşlendi** (`matchStatus: "tam"`: SR003.007/SR002.007/SR001.007/SR009.007), teslim tarihi
+  4'ünde de doğru çözüldü (6.11.2026 — `extractDateToken`'ın regex'i, rakamların başına bitişik başka rakamlar
+  gelse bile GEÇERLİ `D.M.YYYY` alt-dizgeyi bulmakta sağlam çıktı, ayrıca doğrulandı). **5 "gürültü" satırı da
+  çıktı** (malzeme-spec devam satırları gibi `matchStatus: "yok"` olan, zararsız — kullanıcı onay ekranından
+  reddeder).
+- **`qty` (adet) sütun bazlı bulunamıyor AMA AÇIKLAMA METNİNDEN KURTARILIYOR (düzeltildi/doğrulandı, 2026-11-18):**
+  "Miktar"/"Birim"/"Birim" alt-başlıkları bu belgede birbirine ÇOK yakın (~19-21pt, `CELL_BREAK_PT`'nin altında)
+  duruyor, TEK bir tanınmayan "M ktarB r m B r m " blob'una birleşiyor (bu belgede lowercase 'i' harfi bazı
+  sözcüklerde — Miktar, Birim, Tarih, Vergi — ayrı, SESSİZCE boşluğa/hiçliğe düşen bir koda decode ediliyor,
+  `pdf-text.js`'in font çözümündeki AYRI bir bilinmeyen; "GirişTarihi" gibi BAŞKA sözcüklerde aynı harf doğru
+  çıkıyor, tutarsız — bu daha derin decode sorunu ARAŞTIRILMADI/düzeltilmedi). **Ama `incoming-orders.js#insertLine`'da
+  ZATEN var olan bir kurtarma mekanizması bunu telafi ediyor:** adet sütunu bulunamadığında (`qty == null`) açıklama
+  metninde `/(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\s*adet/i` aranır — bu belgede "GVA-16 YATAK **500,00Adet** DN50-65
+  Ms58" gibi miktar AÇIKLAMANIN İÇİNDE geçiyor ("Adet" sözcüğünde 'i' yok, bu yüzden decode bozulmuyor). **Gerçek
+  HAVANA/SAS0003812 PDF'iyle doğrulandı (2026-11-18):** 4 satırın 4'ünde de adet doğru çıkarıldı (500/2000/1000/1500,
+  gerçek belgedeki değerlerle birebir) — bu, önceki "adet hiç çıkmıyor" notunun ARTIK GEÇERSİZ olduğunu kanıtlıyor.
+- **Testler:** `pdf-table.test.js` 10 test (4 yeni: 2 doğrudan `mergeCharacterCells`, 1 Siamp/Konveyör-stili NO-OP
+  regresyonu, 1 uçtan uca karakter-karakter `extractOrderTable`). `npm test` **857/857 yeşil**.
+- **DENENMEDİ:** bu düzeltmenin BAŞKA karakter-karakter PDF üreten bir müşteriden gelecek farklı bir belgede de
+  işe yarayıp yaramayacağı (yalnız bu TEK gerçek örnekle kalibre edildi); tarayıcıdan gerçek dosya yükleyerek
+  (yalnız doğrudan API/fonksiyon çağrısıyla test edildi, diğer PDF özellikleriyle aynı bilinen sınır).
+
+**TÜM 4 GERÇEK PDF, ÜRETİM YOLUYLA (`incoming-orders.js#importPdf`) UÇTAN UCA YENİDEN DOĞRULANDI (2026-11-18, kullanıcı
+isteği: "pdf kısmında hala sıkıntı yaşıyor muyuz" — salt okuma, scratch kopya `planlama.db`'ye karşı, Mikro'ya HİÇBİR
+ŞEY YAZILMADI):**
+| PDF (müşteri) | Sayfa | Sonuç |
+|---|---|---|
+| `2611000084...` (Siamp) | 1 | 1 satır, tam eşleşti (Nİ002.001, 5000 adet, 15.11.2026) |
+| `SAS0003812...` (Ayvaz/HaVana) | 1 | **4/4 satır tam eşleşti** (SR001-003.007 + SR009.007), adetler DOĞRU çıkarıldı (yukarıdaki "Adet" kurtarma mekanizması sayesinde) |
+| `4100018539...` (Konveyör) | 4 | 11 satır, 10/11 tam eşleşti (1 satır gerçekten kartı olmayan bir ürün — hata değil) |
+| `2189_001...` (Ayvaz, taranmış) | 4 | OCR ile 3 sayfa okundu (1 sayfa gerçekten boş bir form şablonu — OCR hatası değil), 1 gerçek satır tam eşleşti (SR070.002) |
+
+**Sonuç: dört belgenin dördünde de artık gerçek bir "ayrıştırma sıkıntısı" YOK** — hepsi doğru müşteri tahmini,
+doğru satır sayısı ve (eşleşen ürün kartı varsa) doğru Alen koduyla çıkıyor. `npm test` 857/857 yeşil (kod
+değişmedi, yalnız üretim koduna karşı gerçek veriyle yeniden doğrulama). O sırada kalan tek bilinen sınır PDF'ten
+FİYAT'ın hiç çıkarılmaması idi — bu, aynı gün AYNI oturumda eklendi (bkz. aşağıdaki "Fiyat çıkarma + her alan
+düzenlenebilir").
+
+**Sıradaki (§10'a da yazıldı):** SPR-755 test kaydının Mikro'dan gerçekten silinip silinmediğini doğrulamak (bir
+önceki bölüme bakın), bu belgedeki 'i'-decode sorununu araştırmak (qty'yi kurtarmak için, isteğe bağlı/düşük
+öncelik), Tesseract'ın installer'a gömülmesi, revizyon karşılaştırmasının gerçek bir e-posta HTML'iyle
+doğrulanması, Graph API/mail bağlantısı (henüz kimlik bilgisi yok).
+
+#### Fiyat çıkarma + her alan düzenlenebilir (2026-11-18, kullanıcı isteği: "niye fiyat çıkarılamıyor o da çıksın
+ama fieldlar zaten check edilecek... her şey düzenlenebilir olsun")
+
+Yukarıdaki 4 gerçek PDF'in GERÇEK başlık metinleri incelenerek (tahmin değil) birim fiyat sütunu bulundu:
+**Siamp** "BR FİYATI"/"TOP. FİYATI", **Konveyör** "Tutar"/"Net Tutar" (bu belgede birim fiyat sütununun adı
+literal olarak "Tutar"dır — "Net Tutar" asıl satır toplamıdır; `84,18 × 280 = 23.570,4` ile doğrulandı). İki
+belgede de aynı hücrede HEM birim fiyat HEM satır toplamı art arda gelebiliyor (header sınırları iki ayrı sütunu
+her zaman ayıramıyor) — bu yüzden `pdf-table.js`'e tek bir **`price`** alanı eklendi (`HEADER_KEYWORDS`, anahtar
+kelimeler `FIYAT`/`TUTAR`), ayrı bir `lineTotal` alanı İCAT EDİLMEDİ: `extractPriceToken` (incoming-orders.js) bir
+hücrenin metninden virgüllü İLK sayıyı alır — iki sayı art arda gelse de (Türkçe yazımda virgül her zaman ondalık
+olduğu için) ilk eşleşme her zaman birim fiyattır.
+
+- **SIRA KRİTİK (gerçek regresyon riski, testle doğrulandı):** `price` alanı `HEADER_KEYWORDS` dizisinde
+  **`deliveryDate`'DEN SONRA** eklendi. Gerçek HAVANA/SAS0003812 belgesinde "Tutar" ve "Giriş Tarihi" başlıkları
+  TEK hücrede birleşiyor ("TutarGirişTarihi") — anahtar kelime eşleştirme `matchesInLine`'ın dizi sırasına göre
+  İLK bulduğu alanı seçtiği için, `price` daha ÖNCE kontrol edilseydi `deliveryDate`'in kendi anahtarı
+  (`GIRISTARIHI`) hiç denenmeden bu alanı KAZANIRDI — gerçek teslim tarihi çıkarımı BOZULURDU. Bu sırayla
+  `deliveryDate` (checked önce) kazanıyor, `price` bu belgede hiç kendi sütununu BULAMIYOR (bilinçli, kabul
+  edilen bir sınır — aşağıdaki fallback bunu telafi ediyor).
+- **Fallback — başlık eşleşmezse (HAVANA gibi) `deliveryDate` alanının HAM metninden kurtarılır:** bu belgede
+  fiyat/tutar/tarih AYNI hücrede kalıyor ("Mal yet 157,55 78.775,006.11.2026"); `#insertLine` `price == null`
+  olduğunda AYNI metni (`row.deliveryDate`) `extractPriceToken` ile TEKRAR tarar (qty'nin açıklamadan
+  "<sayı>Adet" kalıbıyla kurtarılmasıyla AYNI ilke) — qty bu metinde HİÇ YOK (ayrı sütunda/description'da), bu
+  yüzden yanlışlıkla qty'yi fiyat sanma riski yok.
+- **Her şey düzenlenebilir — `updateLine(id, {qty?, deliveryDate?, custOrderNo?, price?, stockCode?})`:** kullanıcının
+  açık isteği — fieldlar onaylanıp Mikro'ya gönderilmeden önce ZATEN kontrol edilecek, bu yüzden hiçbir çıkarılan
+  alan "kesin" olmak zorunda değil. Yalnız `bekliyor` durumundaki bir satırda çalışır (409, karara bağlanmışsa).
+  Doğrulama paylaşılan `fields.js` (`number`/`day`/`text`) üzerinden — `price` `allowZero:true` (Mikro'nun
+  kendisi de 0'ı kabul ediyor, "fiyat bilinmiyorsa 0" — bkz. `mikro-order.js`). `stockCode` verilirse `approveLine`
+  ile AYNI eşleme mantığı (ürün kartı aranır, bulunamazsa 404). Uç: `PUT /api/planning/incoming-orders/lines/:id`
+  (`yenisiparis`/yazma, `policy.js`).
+- **Dashboard** (`dashboard/planning-incoming-orders.js`): taslak tablosuna **"Fiyat"** sütunu eklendi (salt
+  gösterim, `fmtDec`); bekleyen her satırda **"Düzenle…"** düğmesi (Onayla/Reddet'in yanında) adet/teslim
+  tarihi/müşteri sipariş no/fiyatı düzeltip kaydeder. "Mikro'ya gönder…" penceresinin "Birim fiyat" alanı artık
+  taslağın (çıkarılmış ya da elle düzeltilmiş) fiyatıyla ÖNCEDEN DOLU açılır (`priceInputValue`: `fmtDec`'in
+  binlik-ayraçlı biçimi BİLEREK kullanılmadı — gönderim kodu metni yalnız "," → "." çevirip gönderiyor, binlik
+  noktası olsaydı "1.500,50" → "1.500.50" = YANLIŞ sayı olurdu; bu yüzden gruplamasız, yalnız ondalık virgüllü
+  düz metin üretildi).
+- **`routes.js`'teki mikro-preview/mikro-send:** istek gövdesi `unitPriceValue` göndermezse (anahtar hiç yok,
+  `undefined`) satırın `price`'ına DÜŞER; **açıkça `null` gönderilirse** (kullanıcı kutuyu BİLEREK boşalttıysa)
+  bu YOK SAYILMAZ, 0 gönderilir — `undefined` kontrolü SART (gevşek bir `??` kullanılsaydı kasıtlı boşaltma
+  sessizce eski fiyata dönerdi).
+- **Testler:** `pdf-table.js`'in testleri (sıra/pencereleme) dokunulmadan 23/23 yeşil kaldı (regresyon yok);
+  `incoming-orders.test.js`'e 5 yeni test (FİYAT başlıklı sütundan doğrudan çıkarım, başlık eşleşmezse
+  `deliveryDate`'ten fallback + tarihin BOZULMADIĞI, tek hücrede iki sayı varsa İLKİNİN alınması, `updateLine`'ın
+  tüm alanları + kısmi güncelleme + 0 fiyatın kabulü + karara bağlanmış satırda 409, `stockCode` ile eşleme);
+  `mikro-order.test.js`'e 1 HTTP testi (`unitPriceValue` gönderilmezse taslağın fiyatına düşme, açıkça gönderilen
+  değerin onu ezmesi, açık `null`'ın 0'a düşmesi). `npm test` 863/863 yeşil.
+- **GERÇEK 4 PDF'le (salt okuma, scratch kopya `planlama.db`, Mikro'ya HİÇBİR ŞEY YAZILMADI) yeniden doğrulandı:**
+  Siamp → 0,54 (BR FİYATI ile birebir); HAVANA → 157,55 / 115,90 / 68,00 / 142,50 (dördü de fallback'ten, önceki
+  turda elle doğrulanan çarpım kontrolüyle — `fiyat × adet = Net Tutar` — birebir); Konveyör → 10 satırın 10'unda
+  da kendi sütunundan doğru birim fiyat (84,18…92,8 arası); taranmış Ayvaz (OCR) → `null` (bu sayfada fiyat
+  sütunu OCR ile güvenilir çıkmadı, elle girilecek — yanlış bir değer göstermek yerine boş kalması BİLİNÇLİ).
+- **DENENMEDİ:** tarayıcıdan "Düzenle…" ve "Mikro'ya gönder…" pencerelerinin gerçek tıklamayla uçtan uca akışı
+  (yalnız kod incelemesi + backend testleriyle doğrulandı); e-posta tablosu (`parseEmailTable`) yolundan fiyat
+  çıkarımı (gerçek bir e-posta örneği hâlâ yok, bkz. yukarıdaki "DENENMEDİ"); gerçek Mikro'ya price'lı bir sipariş
+  GÖNDERME (yalnız önizleme/gövde doğrulandı, `MIKRO_WRITE_ENABLED` bu oturumda hiç açılmadı).
+
+**Revizyon e-postasının GERÇEK biçimi bulundu, ilk tasarım YANLIŞTI, düzeltildi (2026-11-19, kullanıcı gerçek bir
+revizyon e-postasının görünür içeriğini (plain-text kopyalanmış, gerçek HTML değil) paylaştı):** kullanıcının asıl
+sorusu — "bir revizyon dosyasında birden fazla (kendi SPR'imiz DEĞİL, müşterinin kendi) sipariş numarasıyla ilgili
+revizyon olabilir, hepsini doğru buluyor mu" — önce KOD OKUNARAK cevaplandı: `#insertLine` zaten satır bazında
+çalışıyor, her satırın KENDİ `custOrderNo`'su (o satırın "SİPARİŞ NUMARASI" sütun değeri) ile `order_lines`'ta arama
+yapıyor, batch/dosya düzeyinde "tek sipariş no" varsayımı YOK — bu doğru çıktı. Ama kullanıcının verdiği GERÇEK
+revizyon örneği, **"sarı vurgulu hücre" tasarım varsayımının (2026-11-17'de yalnız bir ekran görüntüsünden kurulmuş,
+hiç gerçek HTML ile denenmemiş) YANLIŞ olduğunu ortaya çıkardı:**
+- **Gerçek biçim, hücre dizisini (kopyalanan düz metin, satır-öncelikli sıra) elle takip ederek çözüldü:** normal
+  bir satır 5 değer taşır (`tarih, sipariş no, kod, açıklama, miktar`); REVİZE edilen bir satır **6 değer** taşır —
+  son (6.) değer **YENİ hedef** (yeni miktar, yeni tarih, ya da `"iptal"`/`"İPTAL"`), 5. değer (başlığın kendi
+  "SIPARIS MIKTARI" sütunu) ise **ESKİ (hâlâ Mikro'daki) değer**. Örnek, çapraz doğrulandı: revizyon e-postasındaki
+  `211015073 / D.DÖKÜM RAKOR SOMUN` satırı `1.200 → 1500` diyor — kullanıcının AYNI oturumda daha önce paylaştığı
+  TAM sipariş listesinde bu AYNI (sipariş no, ürün) çifti artık 1.500 olarak duruyor: iki bağımsız gerçek kaynak
+  birbirini doğruladı. **Hiç sarı vurgu/renk YOK** — sinyal tamamen YAPISAL (fazladan bir hücre), görsel değil.
+  Bu, admin'in e-postadan tabloyu Ctrl+C/Ctrl+V ile kopyalayıp **doğrudan bu uygulamaya yapıştıracağı** akışla
+  (kullanıcının kendi sözü: "mail üzerinden okuma yapmaya gerek yok") tam uyumlu — gerçek HTML clipboard'ı
+  `parseEmailTable`'a ulaşacak, bu konuşmada görülen (biçimi bozulmuş) düz metin değil.
+- **İKİ gerçek hata bulunup düzeltildi** (`backend/planning/incoming-orders.js`):
+  1. `parseEmailTable`: `revisionNote` artık YALNIZ vurgulu hücreden değil, **başlığın hücre SAYISINI aşan fazladan
+     bir hücre** varsa ondan da alınır (`row.length > headerWidth` → son hücre). Vurgulu hücre hâlâ ÖNCELİKLİ
+     (başka bir müşteri gerçekten renk kullanıyorsa bozulmasın); hiçbiri yoksa `null` (eskisi gibi).
+  2. `#insertLine`: revizyon notu `'miktar'`/`'tarih'` tipine sınıflandığında, **ESKİDEN yalnız `revisionType`
+     etiketleniyordu, taslağın `qty`/`deliveryDate` alanı hep ESKİ (5. sütun) değerde KALIYORDU** — yani sistem
+     revizyonu doğru TANIYORDU ama yanlış sayıyı SAKLIYORDU (kullanıcı ekranda "1200" görürdü, "1500" değil).
+     Artık not'un değeri (varsa) `qty`/`deliveryMs`'YE YAZILIR; var olan siparişi ARARKEN (`#findExistingLine`)
+     ise KASITLI OLARAK satırın ESKİ (henüz Mikro'da geçerli olan) tarihi kullanılır — YENİ hedef tarihle aramak
+     "tarih değişti" revizyonlarında var olan kaydı BULAMAZDI (Mikro henüz güncellenmedi, kayıt hâlâ eski tarihte).
+  `"iptal"` durumunda `qty` bilerek DEĞİŞTİRİLMEZ (0 yapılmaz) — iptal edilen adedi bilgi olarak taşımaya devam eder.
+- **Testler** (`incoming-orders.test.js`): yeni `parseEmailTable` testi (fazladan hücre → not; normal 5-hücreli
+  satırda not YOK) + kullanıcının TAM gerçek revizyon örneğiyle (5 satır, 2 farklı sipariş no: `211015073` ×4 +
+  `211027082` ×1, "iptal" ×2 + "miktar" ×2 + "tarih" ×1) uçtan uca bir test: her satırın doğru sipariş no'ya
+  bağlandığı, `qty`/`deliveryDate`'in YENİ hedefe döndüğü, `existingQty`/`existingDueDate`'in ESKİ var olan
+  kayıttan geldiği VE aynı sipariş no'yu paylaşan 4 satırın birbirinin `existingLineId`'sini ÇALMADIĞI (4 farklı
+  ürün → 4 farklı var olan kayıt) ayrı ayrı doğrulandı. `npm test` 894/894 yeşil.
+- **Hâlâ DENENMEDİ:** bu gerçek HTML'in KENDİSİ (yalnız kullanıcının düz-metin kopyası elle HTML'e çevrilip test
+  edildi — Outlook/webmail'in bu tabloyu kopyalarken ÜRETTİĞİ gerçek `<table>`/`<tr>`/`<td>` markup'ı hâlâ hiç
+  görülmedi); tarayıcıdan admin'in GERÇEK Ctrl+C/Ctrl+V akışıyla "E-posta tablosunu yapıştır…" penceresine
+  yapıştırması (`clipboardData.getData('text/html')`'in bu özel e-posta istemcisinden ne ürettiği bilinmiyor).
+  Kullanıcının "mail üzerinden okuma yapmaya gerek yok, yönetici kopyalayıp yapıştırır" netleşmesiyle, Graph
+  API/otomatik mail tarama artık bu özellik için GEREKSİZ görünüyor (§10'daki ilgili madde buna göre güncellendi).
+
+**Müşteri tahmini artık ürün kodunun SONUNDAKİ 3 haneden de çıkarılır (2026-11-19, kullanıcı isteği):** gerçek
+dosyadan alınan bir ekran görüntüsünde e-posta tablosu taslağının `customerGuess`'i her zaman "müşteri tahmin
+edilemedi" diyordu — `importEmailTable` bu alanı hiç hesaplamıyor, hep `null` yazıyordu (yalnız PDF yolundaki
+`detectPdfCustomer`, sayfa metninde "SIAMP"/"AYVAZ"/"KONVEYOR" gibi sabit anahtar kelimeler arıyordu). Kullanıcının
+kendi tarifi: *"mail üzerinden bu şekilde tablo olarak siparişi sadece Berg gönderiyor zaten birde mantık olarak bu
+ürünlerin orada kodları var sonunda 013 olduğunu görüyor oradan da berg olduğunu anlıyoruz."*
+- **İKİNCİ bir müşteri grubu listesi İCAT EDİLMEDİ** — Numune Takip'in (EYS.FR.012) yeni ürün kodu üretme akışı için
+  zaten var olan **AYNI 19 sabit grup** (`sample-customer-groups.js`, kodun SONUNDAKİ 3 hane → müşteri; ör. "013" =
+  Berg Metal, "011" = Konveyör) doğrudan yeniden kullanıldı (`sampleGroupByCode`): proje genelindeki "tek kaynak,
+  kopyalama" ilkesiyle aynı.
+- **`customerGroupOfStockCode(stockCode)`** (`incoming-orders.js`, yeni): eşleşen bir satırın `matchedStockCode`'unun
+  (ör. "SR009.013") sonundaki `.NNN`'i regex'le (`/\.(\d{3})$/`) çıkarıp `sampleGroupByCode`'a verir; biçime uymayan
+  (eski/numune, ".013" gibi bir son ek taşımayan) bir kod için `null`.
+- **`#guessCustomerFromProducts(batchId)`**: taslağın (yalnız `match_status='tam'`, yani GERÇEKTEN eşleşmiş) tüm
+  satırlarının eşleşen stok kodlarını toplar; **hepsi AYNI müşteri grubuna çıkarsa** o grubun adını döner, **farklı
+  gruplar karışıksa ya da bir kod biçime uymuyorsa `null`** — CLAUDE.md'nin "asla belirsizken tahmin etme" ilkesiyle
+  aynı (tek bir aykırı/bilinmeyen kod bile tüm tahmini durdurur, en yakın çoğunluğu VARSAYMAZ).
+- **E-posta tablosunda HER ZAMAN denenir** (eskiden hep `null`'dı, kaybedecek bir şey yok); **PDF'te yalnız
+  `detectPdfCustomer` metinden bir isim BULAMADIYSA** (YEDEK sinyal — metinden gelen isim zaten varsa EZİLMEZ, metin
+  daha güvenilir bir kanıt sayılır). İnsert sırası: önce `#insertBatch` + tüm satırlar `#insertLine` ile kaydedilir
+  (eşleşme bilgisi veritabanında olmalı), sonra `customerGuess` hâlâ boşsa `UPDATE incoming_batches SET
+  customer_guess = ?` ile tek seferlik doldurulur.
+- **Testler** (`incoming-orders.test.js`): var olan gerçek-e-posta testine (5 ürün, hepsi ".013") `customerGuess ===
+  'Berg Metal'` doğrulaması eklendi + 6 yeni test (e-posta: tüm eşleşenler aynı grup → doldurulur, farklı gruplar
+  karışık → `null`, biçime uymayan kod → `null`, hiç eşleşen yok → `null`; PDF: metinden bulunamayınca kod-sonu
+  YEDEK tahmini, metinden ZATEN bir isim bulunduysa EZİLMEDİĞİ). `npm test` 899/899 yeşil.
+- **DENENMEDİ:** gerçek bir e-posta/PDF taslağında (yalnız sentetik veriyle test edildi); birden çok müşterinin
+  AYNI grup koduna (ör. hem Berg hem başka biri ".013" paylaşırsa) denk gelmesi gibi bir çakışma hiç gözlenmedi,
+  teorik olarak mümkünse sessizce yanlış bir isim önerebilir (yalnız öneri, onaydan önce elle düzeltilebilir —
+  Mikro'ya hiçbir şey yazmaz).
+
+### Sipariş fişi (atölye malzeme/takım talebi) — 2026-11-17, kullanıcı isteği
+
+Fabrikada usta, üretimde ihtiyaç duyduğu parça/takım/sarf malzemesini elle bir **"SİPARİŞ FİŞİ"** kağıdına
+(fotoğrafla verildi: genel-amaçlı matbu bir sipariş fişi defteri, "Dilman" yalnızca kağıdı basan kırtasiyeci) yazıp
+kesiyordu — İsim, Tarih ve Adet/Malın Cinsi sütunlarını doldurup, kağıdın "YEKÜN" sütununu MARKA için kullanıyordu
+(örnekte "HORN" bir kez yazılıp altına "aynı" işareti (″) çekilmiş). Kağıdın Adres/Şehir/V.D./H.No./Fatura No/Ambar
+gibi genel-amaçlı alanları hiç kullanılmıyor, buraya alınmadı. Kullanıcının kendi tarifi: *"adet, malın cinsi ve
+marka sütunları var sadece."*
+
+**Netleşen kararlar (AskUserQuestion ile soruldu, 2026-10-30'daki esnek rol sistemi mimarisine göre):**
+- **Erişim:** `siparisfisi` ekranına yazabilen HER role açık (Tezgah başı/Paketleme ile AYNI desen — admin Ayarlar >
+  Roller'den hangi role bu ekranı vereceğine karar verir; göçle gelen İzleyici/Operatör rollerine OTOMATİK
+  eklenmedi, diğer tüm yeni ekranlarla aynı ilke). Silme kayıtsız → admin.
+- **Durum takibi:** `bekliyor` → `verildi` (sipariş verildi) → `geldi` (teslim alındı); yanlışlıkla ileri götürülürse
+  **"Bir adım geri al"** ile tek adım geri döner (Hurda Girişi'nin `reopen()`'ıyla AYNI felsefe — burada üç durum
+  olduğu için "bir adım", iki değil).
+
+**Tasarım:** `products` tablosuyla HİÇ BAĞLANMAZ (Numune Takip/Hurda Girişi/Fiyat çalışması ile AYNI ilke) — "malın
+cinsi" genelde tedarikçi katalog numarasıdır (ör. `B114.0016.2.02`, `RS114.0200.D2 TH35`), Alen ürün kodu değil.
+**Kalemler (satırlar) TEK SEFERDE yazılır/değiştirilir** (wholesale replace, JSON sütun) — ölçü planı editörüyle
+(`measure.js` `normalizePlan`, `dashboard/planning-measure.js`'teki "satır ekle/sil") AYNI desen; kalem başına ayrı
+ekle/sil ucu YOK, bilerek basit tutuldu. Ayrı bir sayaç İCAT EDİLMEDİ: görüntü kodu (`S000001`) doğrudan DB
+id'sinden türetilir (Ürün Tanıtım Kartı `K000001`/Hurda Girişi `H000001` ile AYNI görünüm).
+- **Dosyalar:** `backend/planning/supply-requests.js` (`SupplyRequests`, tablo `supply_requests`, `planlama.db`'de
+  kendi `CREATE TABLE IF NOT EXISTS`'i ile — diğer alt modüllerle aynı desen, hangi modülden önce ilklenirse
+  ilklensin bağımsız çalışır), `planning.js` (`this.supplyRequests`), `routes.js`, `dashboard/planning-supply-requests.js`.
+- **Ekran:** `shared/screens.js`/`dashboard/screens.js`'e `siparisfisi` (`writable:true`, `isemirleri`'nin hemen
+  ardında) eklendi; `NAV_LAYOUT`'ta "Depo" grubuna (Paketleme/Hurda girişi'nin yanına) girdi. `backend/auth/policy.js`
+  `SCREEN_ROUTES`'a GET/POST/PUT/order/receive/back (okuma/yazma role'e); `DELETE` kayıtsız → admin.
+- **Uçlar:** `GET/POST /api/planning/supply-requests` (liste `?q=&status=` / yeni fiş, `{requestedBy, requestedOn?,
+  note?, lines:[{qty, item, brand?}]}`, en az bir kalem zorunlu) · `GET/PUT /api/planning/supply-requests/:id`
+  (ayrıntı / düzenle — `lines` gönderilirse TÜM kalemler değişir) · `DELETE .../:id` (admin) · `POST
+  .../:id/order` ("sipariş verildi") · `POST .../:id/receive` ("teslim alındı") · `POST .../:id/back` (bir adım geri).
+- **Gerçek bir UI hatası bulunup düzeltildi (tarayıcıda denerken):** kalem ekle/sil (`"＋ Kalem ekle"`/`"Sil"`)
+  dialog'un TÜM `innerHTML`'ini yeniden kuruyordu; yeni kayıt oluştururken (`s` henüz `null`) bu redraw İsim/Tarih/
+  Açıklama alanlarını `s?.requestedBy ?? ''` gibi hep BOŞ bir değerden yeniden kurduğu için, kullanıcı bu alanlara
+  bir şey yazıp SONRA bir kalem eklerse/silerse yazdığı İsim/Tarih/Açıklama SESSİZCE SİLİNİYORDU (numune ekranındaki
+  `gen-group` değişince tam `draw()`'ın aynı sınıf hatasıyla AYNI kök neden). Düzeltme: `lines` dizisiyle AYNI
+  şekilde kalıcı bir `fields` nesnesi eklendi (`requestedBy`/`requestedOn`/`note`), her redraw'dan önce `read()` ile
+  DOM'dan senkronize edilir, `draw()` artık `s?.alan` yerine `fields.alan`'dan okur.
+- **Testler:** `backend/planning/supply-requests.test.js` (4: oluşturma + kalem doğrulama — adet/malın cinsi/60 sınırı
+  —, durum geçişleri — sırasız geçiş reddi, "geri al"ın bekliyorken no-op olması, alanların temizlenmesi —, kısmi
+  düzenleme + wholesale kalem değişimi + arama/liste/silme, HTTP uçtan uca) + `backend/auth/policy.test.js` +
+  `backend/apps.test.js`/`backend/features.test.js` (yeni ekran eklenince sabit sekme sayısı/listesi güncellendi,
+  diğer yeni ekranlarla aynı). `npm test` 825/825 yeşil.
+- **Tarayıcıda gerçek dev sunucusuna (bu makinenin `data/planlama.db`'si) karşı uçtan uca denendi:** 2 kalemli
+  (`B114.0016.2.02` · HORN, `RS114.0200.D2 TH35` · HORN) bir test fişi oluşturuldu (yukarıdaki kalem-ekleme hatası
+  BU testte bulunup aynı oturumda düzeltildi) → "Sipariş verildi" → "Teslim alındı" (chip'ler doğru göründü) →
+  "Formu görüntüle/yazdır" (kağıt fişin düzenine uygun önizleme) → API ile doğrulanıp silindi (`window.confirm()`
+  native onayı bu oturumun tarayıcı aracında sınanmadı, diğer "Sil…" düğmeleriyle AYNI bilinen sınır — silme
+  doğrudan API çağrısıyla yapıldı).
+- **DENENMEDİ:** gerçek yazıcıdan A4 baskı ve kağıt fişle yan yana karşılaştırma; fabrika PC'sinde gerçek kullanım;
+  admin'in bu ekranı hangi role (yeni ya da var olan) açacağına karar vermesi (göçle gelen roller otomatik almadı);
+  `window.confirm()` ile "Sil…" akışının tarayıcıdan uçtan uca tıklanması.
+
+### Takım ve Pens Takip (EYS.LS.026 "Pens ve Takım Takip Listesi" + "Takım Uçları ve Tutucuları") — 2026-11-17, kullanıcı isteği
+
+Kullanıcı iki gerçek Excel dosyası verdi ve "bunlarla ilgili yeni bir tab istiyorlar takip için kullanılacak isim
+yazılacak adet yazılacak var olan kayıt düzenlenecek vs birde bu excelleri direkt içeri aktarabilelim" dedi — Ölçüm
+Cihazları Takip (EYS.LS.006) ile AYNI desende yeni bir envanter takip ekranı, artı Excel içeri aktarma.
+
+**Dosyaların gerçek yapısı (salt okuma ile çözüldü):** `EYS.LS.026 PENS ve TAKIM TAKİP LİTSESİ.xlsx` İKİ farklı alt
+liste taşıyor (aynı çalışma kitabının iki sayfası) + bir ÜÇÜNCÜ, eski/yinelenen kopya sayfa:
+  1. **"… TAKIM TAKİP"** (165 satır): SIRA NO/MARKA/KOD/İSİM/STOK/KRİTİK STOK/AÇIKLAMA — İSİM takımın TÜRÜdür
+     (ör. "Matkap", "KILAVUZ", "Karbür Freze"), STOK/KRİTİK STOK sütunlarında sayı YANINDA "X" gibi sayısal
+     olmayan işaretler de var (muhtemelen "stok yok/tükendi" anlamında).
+  2. **"… PENS TAKİP"** (53 satır): ÜÇ şekil grubu (YUVARLAK/ALTI KÖŞE/SEKİZ KÖŞE) yan yana, her biri kendi
+     Ölçü/Adet/Not üçlüsü — klasik `findHeaderByKeys` ile OKUNAMAZ (aynı başlık 3 kez tekrarlanıyor, generic
+     eşleyici yalnız İLK tekrarı yakalardı); bu yüzden ÖZEL bir sütun-grubu tarayıcı yazıldı.
+  3. **"Sayfa2"**: resmi Pens Takip sayfasıyla AYNI 65 ölçünün (Ø12…Ø42, AK11…AK38) BİREBİR AYNI adet değerleriyle
+     yinelenen bir kopyası (yalnız sütun adları "Ölçü/Adet/Not" yerine "ÇAP/ADET", "Not" sütunu yok) — açıkça eski
+     bir çalışma kopyası, gerçek ek veri taşımıyor.
+  Ayrı, bağımsız `Takım uçları ve Tutucuları v2.xlsx` dosyası: **"Takım Uçları"** (165 satır) ve **"Takım Tutucular"**
+  (14 satır) sayfaları, ikisi de Marka/Kodu/İsmi/Adet — kategori ayrımı SÜTUNLARDA değil, SAYFA ADINDA (üçüncü,
+  boş bir "Sayfa1" de var, hiçbir veri taşımıyor).
+
+**Tasarım (Ölçüm Cihazları Takip ile AYNI ilke):** `products` ile BAĞLANMAZ; **kategori SERBEST METİN** ("yeniler
+de alınıyor" — yeni takım türleri kısıtlanmadan eklenebilmeli). Üç farklı kaynağı TEK alan setine normalize eder:
+`category` (Takım Takip'te İSİM/takım türü; Pens'te "Pens - Yuvarlak" vb.; Uç/Tutucu'da sayfa adından), `name`
+(zorunlu tanım — Takım Takip'te KOD, yoksa İSİM; Pens'te ölçü; Uç/Tutucu'da İsmi, yoksa Kodu), `brand`, `code`,
+`qty`, `criticalQty`, `note`. **`qty`/`criticalQty` SERBEST METİNdir, sayı DEĞİL** — gerçek veride "X" gibi
+sayısal olmayan işaretler zorla sayıya çevrilseydi bu bilgi kaybolurdu.
+
+**İçeri aktarma — gerçek bir dedup hatası bulunup düzeltildi (tarayıcıda gerçek dosyayla denerken):** Pens Takip'te
+"kod" gibi doğal bir benzersiz anahtar YOK (aynı ölçü — ör. "AK13" — gerçek dosyada İKİ AYRI satırda, muhtemelen
+iki ayrı fiziksel parti olarak tekrar ediyor) — bu yüzden dedup **sayıma dayalı**: (kategori+tanım+marka+kod)
+anahtarı için veritabanında zaten kaç kayıt varsa sayfadaki aynı anahtarlı satırların o kadarı "zaten var" sayılıp
+atlanır, fazlası yeni kayıt olur (aynı dosyayı iki kez yüklemek güvenli, ama gerçek tekrarlar veri kaybetmeden
+korunur). **İlk gerçek dosya testinde bulunan hata:** bu sayım mantığı yalnız "ÖNCEKİ bir API çağrısından kalan"
+veritabanı durumunu karşılaştırıyordu, AYNI çağrı içinde BİRDEN FAZLA sayfa işlenirken (official Pens Takip
+sayfası + "Sayfa2" kopyası AYNI import isteğinde) veritabanı henüz güncellenmediği için ikisi de "hiç yok" görüp
+HER İKİSİNİ de ekliyordu — 65 pens kaydı yerine 126 (AK13 gibi gerçek tekrarlar 2 yerine 4) oluştu. **Düzeltme:**
+aynı çalışma kitabında BİREBİR AYNI kategori kümesini üreten İKİNCİ bir sayfa (ör. Sayfa2, Pens Takip ile AYNI 3
+kategoriyi üretiyor) TAMAMEN atlanır — Takım Uçları/Tutucular gibi FARKLI kategoriye düşen sayfa çiftleri
+(sayfa adından geldiği için) birbirini ETKİLEMEZ, ikisi de işlenir. Düzeltme sonrası gerçek dosyada doğrulandı:
+227 satır (165 Takım Takip + 62 Pens), "Sayfa2" uyarıyla atlandı, AK13 tam 2 kayıtla kaldı; aynı dosyanın İKİNCİ
+yüklemesi `added:0, skipped:227` ile tam idempotent.
+- **Dosyalar:** `backend/planning/tool-inventory.js` (`ToolInventory`; saf ayrıştırıcılar `parseTakimSheet`/
+  `parseUcTutucuSheet`/`parsePensSheet` dışa aktarılır, tablo `tool_items`, `planlama.db`'de kendi
+  `CREATE TABLE IF NOT EXISTS`'i ile), `planning.js` (`this.toolInventory`), `routes.js`, `dashboard/planning-tool-inventory.js`.
+- **Ekran:** `shared/screens.js`/`dashboard/screens.js`'e `takimtakip` (`writable:true`, `bakim`'in hemen ardında)
+  eklendi; `NAV_LAYOUT`'ta "Kalite" grubuna (Bakım'ın yanına) girdi. `backend/auth/policy.js` `SCREEN_ROUTES`'a
+  GET/POST/PUT (okuma/yazma role'e); `DELETE` ve Excel içeri aktarma kayıtsız → admin (Ölçüm Cihazları Takip'teki
+  AYNI "günlük kullanım role'e, toplu/geri dönüşsüz işlemler admin'e" deseni).
+- **Uçlar:** `GET/POST /api/planning/tool-items` (liste `?q=` / yeni kayıt, yalnız kategori+tanım zorunlu) ·
+  `GET /api/planning/tool-items/categories` (DISTINCT kategori listesi, öneri açılır kutusu için) · `POST
+  /api/planning/tool-items/import` (gövde = ham `.xlsx`; çalışma kitabındaki HER sayfa sırayla üç şekille de
+  denenir) · `GET/PUT /api/planning/tool-items/:id` (ayrıntı/düzenle) · `DELETE .../:id` (admin).
+- **Testler:** `backend/planning/tool-inventory.test.js` (7: oluşturma + doğrulama, Takım Takip sayfası ayrıştırma,
+  Pens Takip şekil-grubu ayrıştırma + gerçek tekrarların korunması + idempotent yeniden yükleme, **yinelenen
+  "Sayfa2" kopyasının tamamen atlanması + farklı-kategorili sayfa çiftlerinin birbirini etkilememesi** — yukarıdaki
+  hatanın regresyon testi, Uç/Tutucu sayfası ayrıştırma, tanınmayan dosya/bozuk dosya hatası, HTTP uçtan uca) +
+  `backend/auth/policy.test.js` + `backend/apps.test.js`/`backend/features.test.js` (sabit sekme sayısı/listesi
+  güncellendi). `npm test` 833/833 yeşil.
+- **Gerçek dosyalarla tarayıcıda uçtan uca denendi (bu makinenin `data/planlama.db`'si):** her iki dosya da
+  gerçekten içeri aktarıldı (227 + 177 = **404 gerçek kayıt**, 88 farklı kategori), arama (marka/kategori/kod),
+  bir kaydı düzenleme (Stok/Adet değişikliği API ile doğrulandı), "Yeni kayıt ekle" ile manuel kayıt oluşturma,
+  "Listeyi yazdır" önizlemesi (EYS.LS.026 başlığıyla, süzülmüş listeyi basıyor) — hepsi çalıştı. Test amaçlı
+  eklenen manuel kayıt silindi, gerçek 404 kayıt `data/planlama.db`'de kaldı (diğer EYS.LS içeri aktarımlarıyla
+  AYNI ilke: sentetik test verisi temizlenir, gerçek içeri aktarım kalır).
+- **Bilinen bir veri çakışması (düzeltilmedi, kullanıcıya iletilmeli):** kullanıcının İKİ kaynak dosyası bazı
+  GERÇEK takımlar için ÇAKIŞIYOR — ör. "Iscar Picco R-MFT606-4 L12 908" hem dosya 1'in Takım Takip sayfasında
+  (kategori "4'lük Picco Diş Çekme Metrik Derece" ile) HEM dosya 2'nin Takım Uçları sayfasında (kategori
+  "Takım Ucu" ile) ayrı ayrı kayıtlı — iki kaynağın kendi iç verisi farklı şekilde kategorize ettiği için dedup
+  bunları AYNI kayıt saymaz (kategori anahtara dahil), ikisi de ayrı satır olarak kalır. Bu bir import HATASI
+  değil, kullanıcının kendi iki Excel dosyasının GERÇEKTEN örtüşmesi — hangi kaydın "doğru" sayılacağına (ya da
+  ikisinin birleştirilip birleştirilmeyeceğine) kullanıcı/usta karar vermeli, sistem kendiliğinden birleştirmez.
+- **DENENMEDİ:** gerçek yazıcıdan baskı (EYS.LS.026 listesi A4 dikey); fabrika PC'sinde gerçek kullanım; admin'in
+  bu ekranı hangi role açacağına karar vermesi (göçle gelen roller otomatik almadı); yukarıdaki iki dosya
+  arasındaki örtüşen kayıtların kullanıcı tarafından nasıl ele alınacağı.
+
+### Planlama yan menüsünde yalnız EYS kodu, resmi listeye göre (2026-11-18, kullanıcı isteği)
+
+Kullanıcı resmi doküman kayıt dosyasını (`ALEN - takip listeleri.xlsx` — LİSTE TAKİP LİSTESİ `EYS.LS.001` ve FORM TAKİP
+LİSTESİ `EYS.LS.003` sayfaları) verip iki şey istedi: (1) yan menüdeki ekran açıklamalarının yerine, o ekranın karşılık
+geldiği resmi EYS kodu yazılsın ("altlarındaki başlat bitir duruş nedeni gibi yazılar kalksın, orada sadece eys kodu
+yazsın"); (2) ekranların bastığı belgelerin İÇİNDE de bu kod görünsün ("belge içinde de yazsın... hangisi nedir diye").
+
+- **Resmi kayıttan doğrulanan YENİ bir eşleme:** İş emirleri ekranı/formu → **EYS.FR.002 "İŞ EMRİ FORMU"** (dosyadan
+  önce hiçbir yerde bu kodla anılmamıştı; kayıttaki ad birebir örtüşüyor). `wo-form-pdf.js`'in ürettiği PDF'in alt
+  bilgisine eklendi — **sona** eklendi, **başa değil**: `wo-form-pdf.test.js`'teki "İPTAL EDİLDİ formun alt bilgisinin
+  İLK sözcüğü olmalı" testi (Türkçe karakter kodlaması tüm alt bilgiyi TEK bir metin gösterme çağrısında taşıdığı için
+  belirli bir hex dizgesinin BAŞINDA olmasını sınıyor) koddan ÖNCE eklenince kırıldı; `EYS.FR.002` artık
+  `... · Sistemden üretildi · <tarih saat> · EYS.FR.002` biçiminde en sonda.
+- **Ürün Tanıtım Kartı'nın basılan kartında (`planning-card.js` `cardHtml`) EYS.FR.001 hiç gösterilmiyordu** — eklendi
+  (`"EYS.FR.001 · Sistemden basıldı ..."`, diğer formlarla (GKK/numune/hurda/ölçü föyü/paketleme formu) AYNI "kod ·
+  Sistemden basıldı/üretildi" deseni).
+- **Diğer tüm basılan belgeler zaten kodu taşıyordu** (kontrol edildi, değişiklik gerekmedi): GKK/ilk onay/numune/
+  ölçüm cihazları/takım-pens/hurda liste yazdırmaları (`openListPrint`'in `formNo` parametresi), numune/hurda tekil
+  form yazdırmaları, ölçü föyü (`planning-measure.js`), paketleme formu (`planning-packing-form.js` `FORM_NO`).
+- **Nav alt yazısı (`dashboard/planning-view.js` TABS `sub` alanı) artık YALNIZ resmi kodu taşıyor**, birden fazla
+  belgeye dağılan ekranlarda ikisi birden (`·` ile): `paketleme→EYS.FR.007`, `hurda→EYS.FR.043 · EYS.FR.049`,
+  `isemirleri→EYS.FR.002`, `gkk→EYS.FR.011`, `ilkonay→EYS.FR.013`, `numune→EYS.FR.012`, `olcuraporlari→EYS.FR.005`,
+  `olcucihazlari→EYS.LS.006`, `bakim→EYS.FR.016`, `takimtakip→EYS.LS.026`, `teknikresim→EYS.LS.007`. Eski açıklayıcı
+  metinler SİLİNMEDİ, `hint` alanına taşındı (ekran açılınca başlığın altında görünür; nav'da görünmez).
+- **Resmi karşılığı olmayan ekranlarda `sub` BİLEREK BOŞ** (kullanıcı kararı, AskUserQuestion ile netleşti):
+  `tezgahbasi` (başlat/bitir EYS.FR.002'ye, kart basma EYS.FR.001'e, ölçü kontrolü EYS.FR.005'e dağılıyor — TEK koda
+  indirgenemez; üçü de `hint`'te sayılıyor), `siparisler`, `yenisiparis`, `siparisfisi` (dahili, Dilman kırtasiye
+  formu — EYS dokümanı değil, listede karşılığı yok), `hammadde`, `fiyat`, `programlar`, `urunler`, `verimlilik`.
+  **`cizelgeleme`'ye BİLEREK dokunulmadı:** resmi listede `EYS.FR.053 "CNC ÜRETİM PLANLAMA FORMU"` (2026-03-03
+  yayınlanmış) var ve isim güçlü eşleşiyor, ama kullanıcı emin olmadığı için bağlamamayı seçti — `sub` eski
+  açıklamasını (`tezgah önerisi (OR-Tools)`) korudu. **Bu eşleme ileride doğrulanırsa** eklenmesi gereken tek satır
+  `TABS` dizisindeki `cizelgeleme` girdisinin `sub` alanı.
+- **Kapsam dışı/dokunulmayan:** Bakım (EYS.FR.016) ve Teknik resim takip (EYS.LS.007) ekranlarının "Listeyi yazdır"ı
+  zaten yok (CLAUDE.md'de "bilinçli olarak eklenmedi" diye kayıtlı); Paketleme ekranının 3. görünümü olan "Liste"
+  (EYS.LS.005, `packing-specs`) ayrı bir nav girdisi DEĞİL (Paketleme sekmesinin içindeki bir iç-görünüm düğmesi),
+  bu yüzden `TABS`'ta değişecek bir `sub` yok; kodu zaten dosya başı yorumunda ve ekran içi metinlerde geçiyor.
+- **Doğrulama:** `npm test` 833/833 yeşil (yalnızca `wo-form-pdf.test.js`'teki konum testi, EYS kodu sona taşınınca
+  düzeldi). Tarayıcıda gerçek dev sunucusuna karşı uçtan uca denendi: `document.querySelectorAll('.mi-main')` ile
+  TÜM nav alt yazıları tek tek doğrulandı (plandaki ile birebir); İş emri formu PDF'inin ham baytları Node'da ayrıca
+  çözülüp `EYS.FR.002`'nin alt bilginin SONUNDA (hex dizge olarak) gerçekten yazıldığı doğrulandı (PDF metni WinAnsi
+  hex dizgesi olarak yazılıyor, düz ASCII değil — bu yüzden basit bir metin arama ilk denemede YANILTICI "bulunamadı"
+  sonucu verdi, test dosyasındaki `hexOf()` yöntemiyle doğru doğrulandı). Ürün Tanıtım Kartı önizlemesi tarayıcıda
+  açılıp hint metninin doğru göründüğü teyit edildi; kartın kendi alt bilgisindeki `EYS.FR.001` basit bir HTML dizge
+  birleştirmesi olduğu için (PDF değil) ayrıca bayt-düzeyinde doğrulamaya gerek görülmedi.
+- **DENENMEDİ:** gerçek yazıcıdan baskıda `EYS.FR.001`/`EYS.FR.002`'nin okunabilirliği/konumu; Çizelgeleme↔EYS.FR.053
+  eşleşmesinin kullanıcı tarafından teyidi.
+
+### Fiyat çalışması: toplu PDF yükleme + sürükle-bırak + "bekliyor" rozeti (2026-11-18, kullanıcı isteği)
+
+Kullanıcı (fabrika PC'sinin ağına bağlıyken, `192.168.1.50:3000`) iki şey istedi: (1) "Fiyat çalışması" ekranında
+teknik resimler **tek tek** değil **toplu** yüklensin — "10 PDF seçsin, liste olarak çıksın, sonra her PDF için isim
+girsin"; **yerinde** (ekranın üzerine doğrudan) sürükle-bırak da olsun. (2) Admin yeni bir çalışma yükleyince, bunu
+dolduracak "usta"ya **bildirim gibi** bir işaret görünsün — gerçek bir mesaj/push DEĞİL ("direkt mesaj gibi bildirim
+gitmesine gerek yok"), yalnız nav'da fark edilir bir şey.
+
+- **Backend değişmedi.** `POST /api/planning/price-studies` zaten tek seferde bir PDF + `title`/`name` alıyordu;
+  toplu yükleme TAMAMEN istemci tarafında, bu ucu SIRAYLA (bir dosya bitmeden ötekine geçmeden) çağırarak yapılır —
+  yeni bir toplu uç İCAT EDİLMEDİ. Bir dosyanın reddedilmesi (geçersiz PDF, boyut limiti) DİĞERLERİNİ DÜŞÜRMEZ: her
+  satır bağımsız dener, başarısız olan satırda "Yeniden dene" tek başına o dosyayı tekrar gönderir.
+- **`dashboard/planning-price.js` `openUploadDialog`** (admin) artık tek dosya değil bir **liste** gösterir:
+  her satırda dosya adı+boyutu, **düzenlenebilir başlık** (`titleFromName()`: dosya adından öneri — uzantı atılır,
+  `_`/`-` boşluğa çevrilir; admin isterse değiştirir), durum (`◔ bekliyor` / `… yükleniyor` / `✓ yüklendi` / `✕ hata`
+  + hata metni), "Kaldır" (yüklemeden önce listeden çıkar). Dosya eklemenin İKİ yolu: pencerenin kendi **dropzone**'u
+  (`.pl-drop`, sürükle-bırak ya da tıklayıp çoklu dosya seçici) ve ana ekrandan **sürüklenerek** açılan pencere (aşağı
+  bakın) — ikisi de AYNI `addFiles()`'tan geçer, aynı ad+boyutlu dosya iki kez eklenmez.
+- **"Yerinde" sürükle-bırak (2026-11-18 isteğinin birebir kelimesi):** `renderPriceStudies`'in `host`'una (yalnız
+  admin) `dragover`/`drop` dinleyicileri eklendi — PDF'ler **doğrudan listenin üzerine** bırakılınca (ayrıca pencereyi
+  açmaya gerek YOK) `openUploadDialog` o dosyalarla AÇILIR. PDF olmayan dosyalar süzülür (`type==='application/pdf'`
+  ya da `.pdf` uzantısı); hiçbiri PDF değilse `window.alert` ile uyarır, pencere açmaz.
+- **Rozet — "bildirim gibi" (gerçek bir push/mesaj DEĞİL):** `dashboard/planning-view.js` `renderPlanningNav`'a
+  eklenen `refreshFiyatBadge`: yalnız `canWrite('fiyat')` olan (usta) için `GET /api/planning/price-studies?
+  status=bekliyor&limit=1`'in `total`'ını okuyup **"Fiyat çalışması" nav öğesine kırmızı bir sayı rozeti**
+  (`.mi-badge`) basar. Nav sabit kaldığı için (yalnız sekme değişince yeniden çizilir, bkz. `app.js`) zamanlayıcı
+  **bir KEZ** kurulur (`nav.dataset.wired` korumasıyla) ve **30 sn'de bir** tazeler — admin başka bir ekrandayken
+  yeni bir çalışma yüklese bile usta ekranından ayrılmadan fark eder. **Grup kapalıyken rozet görünmez sorunu da
+  çözüldü:** "Fiyat çalışması" `g-uretim` grubunun İÇİNDE; grup kapalıysa (`<details>` açık değilse) rozet DOM'da
+  durur ama görünmez — bu yüzden `paintFiyatBadge` ayrıca grup başlığına (`.mi-grp-h`) küçük bir **nokta**
+  (`.mi-grp-dot`) ekler, grup kapalıyken de "orada bekleyen bir şey var" belli olsun diye. İkisi de sayı/nokta
+  0 olunca kendiliğinden kalkar.
+- **Doğrulama:** `npm test` 833/833 yeşil (backend hiç değişmedi, bu tamamen dashboard/JS+CSS). Tarayıcıda gerçek
+  dev sunucusuna (AUTH_DISABLED) karşı uçtan uca denendi: (a) sürükle-bırak ile iki dosya bırakılınca pencere o
+  dosyalarla açıldı, her satırda dosya adından türetilen başlık önerisi doğru çıktı; (b) GERÇEK (geçersiz PDF
+  içerikli) dosyalarla "Hepsini yükle" denendi → ikisi de `✕ hata "PDF kabul edilmedi: ..."` ile beklendiği gibi
+  reddedildi, özet uyarı satırı ve "Yeniden dene" doğru göründü; (c) GERÇEK GEÇERLİ iki PDF (bu oturumda Node'da
+  `backend/pdf-merge.js`'in kendi xref/offset deseniyle elle üretilip doğrulanmış minik bir PDF) ile tekrar denendi
+  → ikisi de `✓ yüklendi`, API'den `title`'ların dosya adından doğru türetildiği (`REAL-TEST-ALPHA.pdf` →
+  `"REAL TEST ALPHA"`) teyit edildi; (d) dialog kapanınca ana liste 2 kayıtla tazelendi VE **"Fiyat çalışması" nav
+  rozetinde "2" ile "ÜRETİM" grup başlığında kırmızı nokta** gerçekten belirdi; (e) iki test kaydı `DELETE` ile
+  silinince rozet ve nokta kendiliğinden kalktı. Test kayıtları temizlendi, gerçek veri bırakılmadı (bu özellik
+  için gerçek bir PDF yüklenmedi — yalnız sentetik test verisiyle, hepsi silindi).
+- **DENENMEDİ:** tarayıcının native dosya seçiciyle gerçek çoklu PDF seçimi (bu oturumda da, projedeki diğer çoklu
+  dosya seçimi özellikleriyle aynı bilinen sınır — yalnız `DataTransfer`/`drop` olayı programatik olarak
+  simüle edilerek test edildi, gerçek OS dosya seçici/gerçek sürükle-bırak hiç sürülemedi); 10+ dosyalık gerçek
+  bir toplu yüklemenin süresi/kullanılabilirliği; rozetin 30 sn'lik tazeleme aralığının fabrika kullanımında
+  yeterli/rahatsız edici olup olmadığı.
+
+**Dolduruldıktan sonra da düzenlenebilir (aynı gün, kullanıcı isteği: "kaydettikten sonra düzenlenebilsin"):**
+`dashboard/planning-price.js` `openDetailDialog` eskiden `p.status === 'bekliyor'` şartıyla formu bir KERE
+gösterip sonra salt metne ("Dolduruldu: ...") dönüyordu — usta bir kez kaydedince hammadde/süre/not yanlış girilse
+bile düzeltilemiyordu. Backend (`price-studies.js` `fill()`) zaten durum kontrolü yapmıyordu (yeniden çağırmayı hiç
+engellemiyordu, yalnız `filled_at/filled_by` en son düzenleyene göre güncellenir) — bu yüzden **yalnız frontend
+değişti**: `yazabilir` artık yalnız `canWrite('fiyat')` (duruma bakmaz), form HER ZAMAN gösterilir ve doluysa
+değerler ÖNCEDEN DOLU gelir; gönder butonu ilk doldurmada "Kaydet", sonraki düzenlemelerde "Güncelle" yazar. Liste
+satırındaki düğme de "dolduruldu" durumunda "Aç" yerine **"Düzenle…"** olur (yazabilen rol için). Salt-okunur
+(yazamayan) roller değişmedi: dolu kaydı hâlâ yalnız metin olarak görür.
+- **Doğrulama:** backend değişmediği için `npm test` 834/834 (sayı değişmedi). İzole bir test sunucusunda (geçici
+  `PLANNING_DB_FILE`, gerçek dev veritabanına dokunulmadı) tarayıcıda uçtan uca denendi: gerçek bir PDF yüklendi →
+  "Doldur…" ile ilk kayıt girildi (hammadde/süre/not) → liste "dolduruldu" + "Düzenle…" oldu → tekrar açılınca form
+  aynı değerlerle ÖNCEDEN DOLU geldi, buton "Güncelle" yazdı → değerler değiştirilip kaydedildi → liste YENİ
+  değerleri gösterdi. Test sunucusu/geçici veritabanı ve test PDF'i oturum sonunda tamamen silindi.
+- **DENENMEDİ:** fabrika PC'sinde gerçek kullanım; aynı anda iki kişinin aynı kaydı düzenlemesi (son kaydeden
+  kazanır, çakışma uyarısı yok — kasıtlı basit tutuldu, zaten tek bir ustanın doldurduğu bir ön-çalışma kaydı).
+
+**Listede "Not" sütunu (2026-11-19, kullanıcı isteği):** ekran görüntüsünde listenin kalabalık göründüğünü, bir kaydın notu olup
+olmadığını görmek için her satırı tek tek açmanın gerektiğini belirtti — "hepsinin içine girip açıklama var mı diye bakmakla
+uğraşılmasın". `note` zaten `list()`'in döndürdüğü alanlardan biriydi (backend hiç değişmedi), yalnız ekranda hiç gösterilmiyordu.
+`dashboard/planning-price.js` `draw()`'a **"Not"** sütunu eklendi (Süre ile Yüklendi arasında): not doluysa ortalanmış **✓** (hücrenin
+`title`'ında tam metin — üzerine gelince görülür, açmaya gerek kalmadan), boşsa soluk **—** (`is-null`, CLAUDE.md §7 "okunamayan alan
+görsel olarak ayırt edilir" kuralıyla aynı). Yeni, genel amaçlı `.tbl td.ctr,.tbl th.ctr{text-align:center}` yardımcı sınıfı eklendi
+(`styles.css`, `.num`'un sağa-yaslama kardeşi) — ileride başka bir ekranda da tek-ikonluk bir sütun gerekirse yeniden kullanılabilir.
+**Doğrulama:** backend değişmediği için `npm test` 871/871 (sayı değişmedi). İzole bir scratch sunucuda (geçici `PLANNING_DB_FILE`,
+gerçek dev veritabanına dokunulmadı) iki test kaydı açılıp biri notlu biri notsuz dolduruldu; tarayıcıda listede notlu satırda ✓ +
+hover'da tam not metni, notsuz satırda soluk — göründüğü doğrulandı. Scratch sunucu/dosyalar oturum sonunda tamamen silindi.
+**DENENMEDİ:** fabrika PC'sinde gerçek kullanım.
+
+### İş emrinde bitmiş adedi düzeltme — GEÇİCİ ÖZELLİK (2026-11-18, kullanıcı isteği)
+
+Kullanıcının kendi tarifi: "İş emirlerinde adet düzeltme kısmına bitirdikten sonra da adet düzeltebiliyor olmak
+lazım... bu geçici depoda yaratma akışına ters oluyor ama şu anda geçici depoda ürün yaratmıyor ya iş emrinini
+bitirince... o yüzden bir oryantasyon süreci var yanlış girebiliyorlar şimdilik iş emri bittikten sonra da adetleri
+düzenleyebilelim mikrodaki ürün akışını açınca kaldırırız." Yani: ustalar sistemi yeni kullanıyor ve "Bitir"
+ekranında (elle adet override, zaten yalnız yönetici) yanlış adet girebiliyor; şimdiye kadar düzeltmenin tek yolu
+**"Üretime geri al" + yeniden "Bitir"** idi (tezgahın o anki canlı sayacına göre yeniden hesaplar — geriye dönük bir
+adet DÜZELTMESİ için uygun değil, tezgah telemetri olmadan ya da farklı bir sayaçla yeniden "bitirmek" gerekirdi).
+
+- **Kasıtlı olarak GEÇİCİ:** bitmiş ürün depo akışı (`product-depot.js`, §6 "Bitmiş ürün depo akışı") iş emri
+  bitince `result.produced`'ı okuyup (admin "Geçici depoya aktar…" ile elle tetiklediğinde) Mikro'ya gönderiyor;
+  bu akış `PRODUCT_DEPOT_ENABLED` ile hâlâ KAPALI (fabrika PC'si/paketleme henüz sahada değil) olduğu için adedi
+  dondurulmuş sonuçta doğrudan değiştirmek şimdilik risksiz. **O akış açılınca bu özellik KALDIRILMALI ya da
+  kısıtlanmalı** (bkz. §10): düzeltilen adet, Geçiciye ZATEN gönderilmiş bir miktarı geriye dönük değiştiremez
+  (`sendFinishTransfer`'ın delta'sı azalışta "zaten aktarıldı" der, negatif göndermez — ama Mikro'daki o eski,
+  artık yanlış miktar kendiliğinden düzelmez).
+- **Backend:** `backend/planning/planning.js` `correctFinishedQty(no, {qty, note?})` — yalnız `bitti` durumunda;
+  adet 0–10.000.000 tam sayı, aynı değerle çağrılırsa reddedilir. `result_json`'daki `produced` YERİNDE güncellenir
+  (diğer dondurulmuş alanlar — `from/to/cycle/programs/shifts/sample/warnings` — dokunulmaz); tamamen elle
+  bitirilmiş (`finishWorkOrderManually`, `source:'elle'`) bir kayıtta `source` aynen `'elle'` kalır, telemetriden
+  gelen/elle-adetli bir kayıtta `source:'elle-adet'` olur ve İLK (hiç düzeltilmemiş) adet `telemetryProduced`'da
+  korunur (zincirleme düzeltmelerde bile değişmez — `finishWorkOrder`'ın kendi `elle-adet` override'ıyla AYNI alan,
+  yeni bir alan İCAT EDİLMEDİ). Hedef sapması uyarısı (`finishWorkOrder` ile aynı metin) ve Geçiciye zaten
+  gönderilmiş bir miktar varsa onu da bildiren bir uyarı döner (bilgi amaçlı, engellemez).
+  **Hammadde rezervasyonu/tüketimi ve Mikro depo akışı YENİDEN HESAPLANMAZ** — bu düzeltme bilerek yalnız
+  görüntülenen/raporlanan ÜRETİM ADEDİNİ düzeltir, finiş anındaki hammadde tüketimine dokunmaz (kapsam bilerek dar
+  tutuldu: amaç veri-giriş hatasını hızlıca düzeltmek, finansal/stok kayıtlarını yeniden oynatmak değil).
+- **Yetki:** `isemirleri` ekranı yapısal olarak `writable:false` (§6 "Esnek rol sistemi") — bu uç da `reopen`/
+  `reassign-machine`/`finish-manual` ile AYNI desenle `policy.js`'e HİÇ KAYDEDİLMEDİ, varsayılan reddetten admin'e
+  düşer. `POST /api/planning/work-orders/:no/correct-qty {qty, note?}`.
+- **Arayüz:** `dashboard/planning-workorders.js` `openWorkOrderDialog` — bitmiş iş emrinde "Üretime geri al…"in
+  yanına **"Adedi düzelt…"** (yalnız admin bu dialogu zaten açabiliyor); açılan kutuda şimdiki adet önceden
+  doldurulmuş, yeni adet + isteğe bağlı not; kaydedince iş emri YERİNDE yeniden çizilir (liste/ilerleme/geçmiş hemen
+  günceli gösterir), varsa uyarılar `window.alert` ile gösterilir. Geçmişte `adet-duzeltildi` → "adet düzeltildi".
+- **Doğrulama:** `backend/planning/lifecycle.test.js`'e yeni test (durum/değer/tip doğrulamaları, zincirleme
+  düzeltmede `telemetryProduced`'ın ilk değerde sabit kalması, `source:'elle'` kaydında değişmemesi, iptal edilmiş
+  iş emride reddedilmesi) + `backend/auth/policy.test.js` (`correct-qty` admin-only). `npm test` 834/834 yeşil.
+  **İzole bir test ortamında (gerçek sunucu süreci, geçici/boş `PLANNING_DB_FILE`, gerçek dev veritabanına HİÇ
+  DOKUNULMADI) tarayıcıda uçtan uca denendi:** sentetik bir iş emri oluşturulup başlatıldı, elle adet=3 ile
+  bitirildi, "Adedi düzelt…" ile önce 8'e (hedefin üstünde uyarısı), sonra 4'e (hedefin altında uyarısı)
+  düzeltildi; liste ("4 · %80"), ilerleme çubuğu ve geçmiş listesi ("8 → 4 adet · tarayıcıdan test") hepsi doğru
+  güncellendi. Test sunucusu/geçici veritabanı oturum sonunda tamamen silindi.
+- **DENENMEDİ:** fabrika PC'sinde/gerçek kullanımda; Geçiciye zaten gönderilmiş bir iş emrinde düzeltme yapılıp
+  sonra tekrar "Geçici depoya aktar…" denendiğinde gerçek Mikro'ya karşı davranış (yalnız kod okumayla ve uyarı
+  metniyle sağlandı, `PRODUCT_DEPOT_ENABLED`/Mikro bu oturumda hiç açılmadı).
+
+### İlk onay etiketi — A5 yapışkan etiket, numara alınınca otomatik basılır (2026-11-18, kullanıcı isteği)
+
+Kullanıcının kendi tarifi: "bir tezgaha her yeni ürün bağlandığında 2 ürün alınıyor, çıkan ürünler içinden bunlar
+ayrılıyor ve saklanıyor, bunların üstüne sticker yapıştırılıyor" — üretimden ayrılan bu 2 numune/ilk baskı
+parçasına yapıştırılan fiziksel etiketin kendisi. Fotoğrafla verilen kâğıt etiketin alanları (TARİH, İLK BASKI/
+NUMUNE NO, MÜŞTERİ ÜRÜN KODU, İŞ EMRİ NO, GKK RAPOR NO, OPERATÖR İSMİ, CNC NO) **EYS.FR.013'ün (İlk Baskı Onay /
+Numune Takip Listesi) kendi alanlarıyla birebir aynı** — ayrı bir kayıt/kod/form İCAT EDİLMEDİ, bu zaten var olan
+`first_approvals` kaydının tek-kayıtlık, A5 yapışkan-etiket görünümü. İstenen davranış: "ilk onay numarası
+alındıktan sonra bunun pop upı çıksın, çıktısını alsın direkt" — numara alma akışı (Tezgah başı'ndaki "İlk onay
+numarası al", "İş emrini düzenle"'deki "Numara al…", "İlk onay raporu" ekranındaki "İş emrinden numara al…" — **üçü
+de AYNI paylaşılan `createFirstApproval` fonksiyonunu çağırıyor**, tek yeri değiştirmek hepsini kapsadı) artık
+numara alınır alınmaz etiketi gösterir ve otomatik yazdırır.
+
+- **Gerçek bir hata bulunup düzeltildi (bu özelliği eklerken fark edildi, kullanıcı bildirmedi):** "İlk onay
+  raporu" listesindeki/basılan EYS.FR.013 formundaki **"CNC NO" sütunu HER SATIRDA HER ZAMAN BOŞTU** — `quality.js`
+  `listApprovals()` kayıtları `#approvalView()`'den (yalnız `cncNo: machineNumber(a.machineId)` HESAPLAYAN yer)
+  GEÇİRMİYORDU; `machineId` doluydu ama görünen `cncNo` asla hesaplanmıyordu. Tek kayıt okuma/oluşturma (`createApproval`,
+  `updateApproval`) zaten doğruydu, yalnız LİSTE etkilenmişti. Düzeltildi: liste de `#approvalView()`'den geçer.
+- **MÜŞTERİ ÜRÜN KODU, `cncNo` ile AYNI ilkeyle TAZE hesaplanır, kayıtta SAKLANMAZ** (kartın/kasanın "GKK rapor no"
+  ve "İlk onay no" alanlarıyla AYNI felsefe, CLAUDE.md §6 "İLK ONAY NO" notu: donmuş bir anlık görüntü değil, O
+  ANKİ değer): `quality.js` `#approvalView()` — iş emri bağlıysa (`a.woNo`) `w.customerCode` (iş emrinin zaten
+  `resolveCustomerCode` ile çözülmüş alanı), yoksa (elle kayıt, yalnız ürün kodu) ürün kartından AYNI şekilde
+  çözülür (`this.planning.db.getProduct` + `resolveCustomerCode`); ürün kartı da yoksa `null` (asla 0/boş string,
+  CLAUDE.md §7 "okunamayan alan null" kuralı).
+- **Etiket HTML'i:** `dashboard/planning-approvals.js` `approvalLabelHtml(a)` — Ürün Tanıtım Kartı'yla
+  (`planning-card.js` `cardHtml`) **AYNI** `.pl-card`/`.pl-c-table`/`page:kart` CSS'i (A5, 8mm kenar boşluğu)
+  yeniden kullanılır, yeni bir stil İCAT EDİLMEDİ (kullanıcının "ürün tanıtım kartıyla aynı boyutu" sözü bunu
+  doğrudan istiyordu). Alt bilgi "EYS.FR.013 · Sistemden basıldı …" (diğer tüm basılan formlarla aynı desen).
+- **Otomatik popup + yazdırma:** `createFirstApproval()`'ın başarı ekranı artık yalnız metin değil, etiketin
+  KENDİSİNİ gösterir ve `setTimeout(printModal, 80)` ile Ürün Tanıtım Kartı'nın "Kartı oluştur ve yazdır" akışıyla
+  BİREBİR aynı desende otomatik yazdırma tetikler; "Yeniden yazdır" düğmesi manuel tekrar basım için kalır
+  (yazıcı/çıktı kaçırılırsa). Pencere `pl-form-dlg` sınıfını (ekranın geri kalanını gizleyip yalnız etiketi basan
+  `body.pl-printing` CSS'i için) fonksiyonun BAŞINDA alır, yükleme/seçim ekranlarında da zararsız durur.
+- **Doğrulama:** `backend/planning/quality.test.js`'e yeni assertionlar (iş emri bağlıyken `customerCode` ürün
+  kartından TAZE çözülür; elle kayıtta da aynı; ürün kartı yoksa `null`, patlamaz; liste artık `cncNo`/`customerCode`
+  taşır — bulunan hatanın regresyon testi). `npm test` 834/834 yeşil. **İzole bir test ortamında (gerçek sunucu
+  süreci, geçici/boş `PLANNING_DB_FILE`, gerçek dev veritabanına HİÇ DOKUNULMADI) tarayıcıda uçtan uca denendi:**
+  Tezgah başı'ndan gerçek bir iş emri için "İlk onay numarası al" → operatör adı girildi → numara alındı (İ26-001)
+  → popup anında etikete döndü, 7 satır da (TARİH, İ26-001, gerçek müşteri kodu 601999999, iş emri no, GKK rapor
+  no, operatör adı, CNC no 5) doğru çıktı; "Yeniden yazdır" hatasız çalıştı; "Kapat" ile pencere kapandı; Tezgah
+  başı kartında "İlk onay: İ26-001" göründü; "İlk onay raporu" listesinde **CNC NO sütunu artık doğru "5" gösterdi**
+  (önceki hatanın düzeldiği teyit edildi). Test sunucusu/geçici veritabanı oturum sonunda tamamen silindi.
+- **DENENMEDİ:** gerçek yazıcıdan/etiket yazıcısından A5 baskı (sticker kâğıdına gerçek çıktı — ürün tanıtım
+  kartının kendisi de aynı şekilde yalnız ekran/PDF görüntüleyicide doğrulanmıştı); fabrikada gerçek yapışkan
+  etiket kâğıdıyla fiziksel kullanım; "İş emrini düzenle"/"İlk onay raporu" ekranlarındaki diğer iki giriş noktası
+  (aynı paylaşılan fonksiyonu çağırdıkları için davranışları aynı olmalı, ama tek tek tıklanarak denenmedi).
+
 ---
 
 ## 7. Kod kuralları
@@ -2182,7 +3285,7 @@ periyodu seçmez/değiştirmez.
 | `dashboard/format.js` | Alan tanımları ve etiketler — **arayüzün tek kaynağı**. |
 | `dashboard/config-view.js` | Ayarlar ekranı. |
 | `dashboard/production-view.js` | Tezgah detayındaki vardiya adetleri paneli ve "Üretim raporu" ekranı (makine / ürün / günlük görünümü). |
-| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`; yanlış teslimatta hammadde karantinası `material-quarantine.js`, §6 "Hammadde karantinası"), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · GKK rapor no (`planning-gkk.js`, `gkk.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`; sabit müşteri grubu listesi `sample-customer-groups.js`, tezgaha bağlama + yeni ürün kodu oluşturma + Mikro yazma §6 "Tezgaha bağlama + YENİ ürün kodu oluşturma", hammadde seçimi (Mikro canlı arama, dar uç) + teknik resim ekleme §6 "Numune formunda hammadde seçimi…") · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, iş emri bağlantısı + Mikro Karantina deposu `quarantine-depot.js`, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Bakım (`planning-maintenance.js`, `maintenance.js`; makine tipi → bakım kalemi (periyot admin ayarlar) → makine başına tik/rutin-arızi geçmişi, EYS.FR.016 + Bakım Sicil Kartları, §6 "Bakım") · Teknik resim takip (`planning-drawing-tracking.js`, `drawing-tracking.js`; her ürünün resim durumu/rev no/tarihleri, EYS.LS.007, §6 "Teknik Resim Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`) · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
+| `backend/planning/` · `dashboard/planning-*.js` · `PLANLAMA-TASARIM.md` | Planlama uygulaması (A, B, C, T aşamaları): `downtime.js` (duruşlar), `config/downtime-codes.json` + `shared/downtime-codes.js` (neden kodları), `planning-db.js` (SQLite), `importers.js`/`csv-read.js` (Excel CSV), `program-map.js` (eşleme önerisi), `calc.js` (iş emri hesapları), `progress.js` (gerçekleşen üretim: telemetri olaylarından adet/vardiya/süre, saf hesap), `planning.js` (doğrulama, eşleme, iş emri yaşam döngüsü), `routes.js`; ekranlar Tezgah başı (`planning-shop.js`, operatör), Verimlilik (`planning-efficiency.js`, `efficiency.js` hesapları), Hammadde (`planning-material.js`, `material.js` hesapları; Mikro depo transfer/virman `mikro-stock.js`; yanlış teslimatta hammadde karantinası `material-quarantine.js`, §6 "Hammadde karantinası"), Bitmiş ürün depo akışı (`planning-depot.js`, `product-depot.js`; §6 "Bitmiş ürün depo akışı"), Ölçü kontrolü (`planning-measure.js`, `measure.js` saf hesapları), Paketleme (`planning-packing.js`), ürün tanıtım kartı ve iş emrindeki kasa paneli (`planning-card.js`, işlem kutuları `card-steps.js`), İş emirleri (`planning-workorders.js`, canlı üretim paneli ve başlat/bitir pencereleri `planning-production.js`, yazdırılabilir form + arka sayfa `planning-wo-form.js`) · Sipariş fişi (`planning-supply-requests.js`, `supply-requests.js`; atölye malzeme/takım talebi, bekliyor/verildi/geldi, §6 "Sipariş fişi") · GKK rapor no (`planning-gkk.js`, `gkk.js`; kalite raporu PDF klasörü `gkk-folder.js` + `planning-gkk-folder.js`) · İlk onay raporu (`planning-approvals.js`, `first-approval.js`) · teknik resim PDF'leri (`planning-drawings.js`, `backend/pdf-merge.js`) · iş emri formu PDF'i (`wo-form-pdf.js`) · Ölçü raporları (`planning-reports.js`) · Çizelgeleme (`planning-schedule.js`, hesaplar `schedule.js` + `optimizer/schedule_solver.py`, bkz. aşağıdaki `optimizer/` satırı) · Numune takip (`planning-numune.js`, `sample-tracking.js`; sabit müşteri grubu listesi `sample-customer-groups.js`, tezgaha bağlama + yeni ürün kodu oluşturma + Mikro yazma §6 "Tezgaha bağlama + YENİ ürün kodu oluşturma", hammadde seçimi (Mikro canlı arama, dar uç) + teknik resim ekleme §6 "Numune formunda hammadde seçimi…") · Hurda girişi (`planning-hurda.js`, `quarantine.js`; karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, iş emri bağlantısı + Mikro Karantina deposu `quarantine-depot.js`, §6 "Hurda Girişi") · Ölçüm cihazları takip (`planning-devices.js`, `measuring-devices.js`; mastar/kumpas/mihengir envanteri + kalibrasyon, EYS.LS.006, §6 "Ölçüm Cihazları Takip") · Bakım (`planning-maintenance.js`, `maintenance.js`; makine tipi → bakım kalemi (periyot admin ayarlar) → makine başına tik/rutin-arızi geçmişi, EYS.FR.016 + Bakım Sicil Kartları, §6 "Bakım") · Teknik resim takip (`planning-drawing-tracking.js`, `drawing-tracking.js`; her ürünün resim durumu/rev no/tarihleri, EYS.LS.007, §6 "Teknik Resim Takip") · Takım ve Pens Takip (`planning-tool-inventory.js`, `tool-inventory.js`; takım/pens/uç/tutucu envanteri, kategori serbest metin, EYS.LS.026, §6 "Takım ve Pens Takip") · Fiyat çalışması (`planning-price.js`, `price-studies.js`; toplu PDF yükleme + sürükle-bırak + "bekliyor" rozeti, §6 "Fiyat çalışması: toplu PDF yükleme") · Yeni siparişler (`planning-incoming-orders.js`, `incoming-orders.js` + `pdf-table.js` + `backend/planning/pdf-text.js` + `ocr.js` (Tesseract OCR, taranmış sayfalar için); mail'den gelen PDF/e-posta tablosu → taslak satır, göster-onayla, Mikro'ya yazma `mikro-order.js` (SiparisKaydetV2; ARAŞTIRILDI, GERÇEK DENENMEDİ) ile ARAŞTIRILDI, §6 "Mail'den otomatik sipariş girişi") · rol/sekme tablosu (`planning-tabs.js`) · Ürünler · Siparişler · Program eşleme. Tasarım ve sonraki aşamalar (telemetri bağlantısı, hammadde, verimlilik, tablet): `PLANLAMA-TASARIM.md`. Testler: `backend/planning/*.test.js`. |
 | `backend/planning/packing.js` · `dashboard/planning-packing-form.js` | Paketleme formu (EYS.FR.007): vardiya sayfası, satırlar, hava basıncı, koli içi adet öğrenme/öneri, yazdırma. Bkz. §6 "Paketleme formu". |
 | `backend/planning/packing-specs.js` · `dashboard/planning-packing-list.js` | Paketleme listesi (EYS.LS.005): koli boyutu/kasa özelliği/kat sayısı/koli içi adet/koli etiketi/koli ağırlığı referans kaydı, Paketleme ekranının "Liste" görünümü. Bkz. §6 "Paketleme listesi (EYS.LS.005)". |
 | `backend/planning/doc-folder.js` · `dashboard/planning-docs.js` | Teknik resim klasörü ve etiket klasörü (iki ayrı `DocFolder`): dosyaları ürün koduna göre ürün kartlarına bağlama, eşle penceresi. Bkz. §6 "Teknik resim klasörü ve Etiket klasörü". |
@@ -2226,7 +3329,10 @@ periyodu seçmez/değiştirmez.
 | `GET /api/planning/packing/specs?q=&limit=&offset=` · `PUT packing/specs/:kod` · `POST packing/specs/import` | **Paketleme listesi** (EYS.LS.005, §6): koli boyutu/kasa özelliği/kat sayısı/koli içi adet/koli etiketi/koli ağırlığı referans kaydı, `paketleme` ekranının "Liste" görünümü — liste (okuma), düzenle (yazma; satır yoksa oluşturulur), Excel'den içeri aktar (gövde = ham `.xlsx`, kayıtsız → admin). |
 | `/api/planning/drawing-folder` · `sticker-folder` (GET) · `…/dir` (PUT) · `…/match` (POST) · `/api/planning/product-files/:id` (GET/DELETE) | **Teknik resim / etiket klasörü** (yalnız admin; `product-files/:id` GET operatör + yönetici, DELETE yönetici): klasör ve dosya durumu · klasörü ayarla (`{dir}`) · dosyaları ürün koduna göre eşle (`{update?}`; yanıt: bağlananlar, eşleşmeyen/kabul edilmeyen dosyalar, hâlâ dosyası olmayan ürünler) · ürüne bağlı dosyayı indir/kaldır. |
 | `/api/planning/sources` (GET) · `sources/dir` (PUT) · `sources/refresh` (POST) | **Kaynak klasörü** (yalnız admin): klasör + dosyaların durumu (yeni/değişmiş/güncel) · klasörü ayarla (`{dir}`, boş = varsayılan `data/kaynak`) · klasörü oku ve değişenleri uygula (`{force?}`; yanıt: dosya durumları, toplamlar, `changes` listeleri). |
-| `/api/planning/summary` · `products[/:kod]` · `import` · `orders[/lines]` · `programs[/map\|/confirm-exact\|/product-search]` | **Planlama** (yalnız admin; **`programs*` uçları 0.17.2'den beri operatöre de açık**, `programs/product-search` dar ürün araması): özet · ürün kartı listesi/arama, oluştur (POST), düzenle (PUT) · Excel içeri alma: `.xlsx` (tüm sayfalar taranır) ya da CSV (gövde = ham dosya, tür içerikten anlaşılır, `?filename=&keepOld=1`) · siparişler (`?q=&open=1`) ve bir siparişin satırları · tornalarda görülen programlar ve eşleme durumu, eşle (PUT), kaldır (DELETE), toplu onay (POST). |
+| `/api/planning/summary` · `products[/:kod]` · `import` · `orders[/lines]` · `programs[/map\|/confirm-exact\|/product-search]` | **Planlama** (yalnız admin; **`programs*` uçları 0.17.2'den beri operatöre de açık**, `programs/product-search` dar ürün araması): özet · ürün kartı listesi/arama, oluştur (POST), düzenle (PUT) · Excel içeri alma: `.xlsx` (tüm sayfalar taranır) ya da CSV (gövde = ham dosya, tür içerikten anlaşılır, `?filename=&keepOld=1`) · siparişler (`?q=&open=1`) ve bir siparişin satırları · tornalarda görülen programlar ve eşleme durumu, eşle (PUT), kaldır (DELETE), toplu onay (POST; gövde `{kind?}` — vars. `'kod'` stok koduyla birebir, `'musteri-kodu'` müşteri koduyla tek adaylı önerileri onaylar). |
+| `GET/POST /api/planning/supply-requests` · `supply-requests/:id` (GET/PUT/DELETE) · `.../:id/order\|receive\|back` (POST) | **Sipariş fişi** (atölye malzeme/takım talebi, §6 "Sipariş fişi"; `products` ile bağlanmaz): liste/arama (`?q=&status=`), yeni fiş (`{requestedBy, requestedOn?, note?, lines:[{qty, item, brand?}]}`, en az bir kalem), ayrıntı/düzenle (`lines` gönderilirse TÜMÜ değişir)/sil (admin), durum ilerlet ("sipariş verildi"/"teslim alındı") / bir adım geri al. |
+| `GET /api/planning/incoming-orders[/:id]` · `incoming-orders/product-search?q=&limit=` · `POST incoming-orders/pdf?kind=&filename=` · `incoming-orders/email-table?kind=&filename=` · `PUT incoming-orders/lines/:id` · `incoming-orders/lines/:id/approve\|reject` | **Yeni siparişler** (`yenisiparis` rolü): mail'den gelen PDF/e-posta tablosundan TASLAK çıkarır (`kind`: `yeni`\|`revizyon`; PDF'ten fiyat da çıkarılır — `price`); `pdf` gövde = ham PDF, `email-table` gövde = ham HTML (tabloyu yapıştırırken `clipboardData.getData('text/html')`); `PUT lines/:id {qty?,deliveryDate?,custOrderNo?,price?,stockCode?}` bekleyen satırı düzeltir (onaydan önce HER alan düzenlenebilir, §6 "Fiyat çıkarma + her alan düzenlenebilir"); taslak satırı eşleşmiş ürünle (`stockCode`) ya da elle onayla/reddet; dar ürün araması (`programs/product-search`'ün kopyası değil, bu ekranın kendi yetkisinden geçer). **Onaylanana kadar Mikro'ya hiçbir şey yazmaz.** |
+| `GET /api/planning/incoming-orders/mikro/customers?q=&limit=` · `incoming-orders/lines/:id/mikro-customer` · `POST incoming-orders/lines/:id/mikro-preview\|mikro-send` · `incoming-orders/:id/mikro-customer` (GET) · `POST incoming-orders/:id/mikro-preview\|mikro-send` | **Mikro'ya sipariş yazma** (SiparisKaydetV2; GERÇEK YAZMA BAŞARILI — §6 "Mikro'ya YENİ sipariş yazmak" + "Hepsi TEK siparişte"; kayıtsız, yalnız admin): müşteri ara (CARI_HESAPLAR) · satırın (`lines/:id`) ya da **taslağın TÜM onaylı satırlarının** (`:id`, tek evrak/çok kalem) ürününden müşteriyi otomatik çöz (farklı müşteriye çıkarsa 409 `multiple-customers`) · önizle/gönder (`{customerCode?, unitPriceValue?, note?}`; `mikro-send` `MIKRO_WRITE_ENABLED=1` olmadan 409 `mikro-write-disabled`). |
 | `/api/planning/downtime-codes` · `shop/overview` · `shop/stops?machine=&hours=` · `shop/downtime-reasons` (POST) · `shop/downtime-reasons/:id` (DELETE) | **Fabrika PC'si / Tezgah başı** (operatör + yönetici): duruş nedeni kodları ve grupları · tezgah başına canlı durum, üretimdeki iş emri, bekleyenler, nedeni sorulmamış duruşlar · bir tezgahın ölçülmüş duruşları ve nedenleri · duruşa neden bağla (`machineId, from, to, code, note?, person?`) · nedeni kaldır. |
 | `/api/planning/efficiency[.csv]` · `downtime-report[.csv]` | **Verimlilik ve duruş raporları** (yalnız admin): `?from=&to=&machine=` (varsayılan bu ay); verimlilik özeti/matris/günlük satırlar/ürün/gün/tezgah ve termin riski; duruş neden dakikaları ve nedeni belirsiz; CSV `&view=gunluk\|matris\|urun\|tezgah` ve `durus\|durus-kod-gun`. |
 | `POST /api/planning/schedule/suggest` · `schedule/apply` | **Çizelgeleme önerisi** (OR-Tools CP-SAT, yalnız admin; ASLA otomatik uygulanmaz): bekleyen iş emirlerini tezgahlara önerir (gövde yok) · onaylanan atamaları işler (`{assignments: [{no, machineId}]}` → `{applied, skipped}`; başlamış iş emri sessizce atlanır). |
@@ -2236,7 +3342,8 @@ periyodu seçmez/değiştirmez.
 | `/api/planning/work-orders/:no/cards` (POST) · `work-orders/:no/fields` (POST) | **Ürün tanıtım kartı bas** (tek adım; operatör + yönetici; gövde `{person?, gkkReportNo?, steps?}`: `steps` = yıkama/kurutma/tavlama kutuları) ve **tezgah başından iş emri alanı düzenleme** (ilk onay rapor no, ölçülen net gramaj, GKK rapor no, kullanılan hammadde, açıklama). |
 | `/api/planning/work-orders/:no/measurements` (GET/POST) · `work-orders/:no/measure-plan` (PUT) · `crates/:id/sheet` (GET) | **Ölçü kontrolü** (operatör + yönetici): plan + sütunlar, saatlik ölçüm kaydı, kartın föyü. |
 | `/api/planning/crates` · `crates/:id` · `crates/:id/close\|pack\|void` · `work-orders/:no/crates` (POST) · `crates/sequence` (PUT, yönetici) | **Kasa / Ürün Tanıtım Kartı** (operatör + yönetici): kasalar (`?woNo=&machine=&state=`), kasa + kart bilgileri, kapat (`person?`), paketleme adedi (`qty, person?`), iptal (`reason`), iş emrinde yeni kasa aç (kart numarasını sistem verir), kart numarası sırası tabanı (`last`). |
-| `/api/planning/gkk` (GET/POST) · `gkk/sequence` (PUT) · `gkk/:id` (PUT/DELETE) | **GKK rapor numaraları** (EYS.FR.011): liste/arama (`?q=&erpMaterial=&stockCode=`; `matches[]` iş emri hammaddesine uyanlar, `match`: `tam`/`islemli`/`urun`), yeni numara (POST), düzenle/sil, numara tabanı. **Okuma: herkes (izleyici dahil); yazma yalnız yönetici.** |
+| `/api/planning/gkk` (GET/POST) · `gkk/sequence` (PUT) · `gkk/:id` (PUT/DELETE) | **GKK rapor numaraları** (EYS.FR.011): liste/arama (`?q=&erpMaterial=&stockCode=`; `matches[]` iş emri hammaddesine uyanlar, `match`: `tam`/`islemli`/`urun`; liste öğeleri `fileCount` taşır — kalite raporu PDF'i), yeni numara (POST), düzenle/sil, numara tabanı. **Okuma: herkes (izleyici dahil); yazma yalnız yönetici.** |
+| `GET /api/planning/gkk/:id/files` · `/api/planning/gkk-folder` (GET/PUT dir/POST match) · `gkk-files/:id` (GET/DELETE) | **GKK kalite raporu PDF'i, klasörden (2026-11-17, §6):** bu kaydın hammaddesine bağlı dosyalar (satırın üstüne basınca açılır; okuma herkes) · klasör durumu/ayarı/tek seferlik eşleme (dosya adından hammadde çıkarılır; **yalnız yönetici**) · dosyayı indir/aç (herkes) / kaldır (yönetici). Manuel (elle) yükleme ucu YOK — yalnız klasörden. |
 | `/api/planning/first-approvals` (GET/POST) · `first-approvals/sequence` (PUT) · `first-approvals/:id` (PUT/DELETE) | **İlk onay raporu** (EYS.FR.013): liste (`?q=&year=`), numara al (`woNo, person?, again?`; **operatör + yönetici**, iş emrinin alanına da yazar), elle kayıt/düzeltme/silme/numara tabanı yalnız yönetici; okuma herkes. |
 | `/api/planning/samples` (GET/POST) · `samples/:id` (GET/PUT/DELETE) · `samples/:id/decide\|reopen` (POST) · `samples/sequence` (PUT) · `samples/stats` (GET) | **Numune takip** (EYS.FR.012, `products`'a bağlanmaz — **YENİ ürün kodu oluşturma akışı HARİÇ**, bkz. altta): liste (`?q=&status=`), yeni form (yalnız müşteri zorunlu; `customerGroupCode`+`codePrefix` birlikte verilirse YENİ Alen ürün kodu üretir), ayrıntı/düzenle (`machineId` dahil), sil (admin), müşteriden gelen karar (`{status, decidedOn?, note?}`) ve geri al, numara tabanı (admin), **analiz** (`?from=&to=`: karar tarihine göre ret oranı + talep edilen/bekleyen, vars. aralık bu ayın başından bugüne). `numune` ekranı: GET okuma, POST/PUT/decide/reopen yazma. |
 | `GET /api/planning/samples/customer-groups` · `samples/next-stock-code?group=&prefix=` (GET) · `samples/:id/retry-mikro-product\|retry-mikro-weight` (POST) | **Numune: yeni ürün kodu + Mikro** (2026-11-13, §6 "Tezgaha bağlama + YENİ ürün kodu oluşturma"): sabit 19 müşteri grubu listesi · kod önizlemesi (rezerve ETMEZ; `prefix`: `SR`\|`Nİ`) · Mikro'daki stok kartı oluşturma/ağırlık güncellemeyi elle yeniden dener (yalnız `autoGenerated` numunede; **`StokKaydetV2` gerçek Mikro'ya karşı hiç denenmedi**). `numune` ekranı: GET okuma, POST yazma. |
@@ -2244,8 +3351,9 @@ periyodu seçmez/değiştirmez.
 | `/api/planning/quarantine` (GET/POST) · `quarantine/:id` (GET/PUT/DELETE) · `quarantine/:id/exit\|reopen\|corrections` (POST) · `quarantine/corrections/:id` (DELETE) | **Hurda girişi** (karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049, `products`'a bağlanmaz, §6 "Hurda Girişi"): liste (`?q=&status=`), yeni giriş kaydı (`wo_no?` ile iş emrine bağlanabilir), ayrıntı (tashih geçmişi + toplamlar + `depot`: Mikro Karantina deposu özeti) / düzenle, sil (admin), çıkış yap (`{exitReason, exitedOn?, exitedBy}`), geri al, tashih ekle (`{doneOn?, operator, description, qty, okQty?, scrapQty?, manHours?, note?}` — bağlıysa Mikro'ya otomatik yansır, §6), tashih sil (admin). `hurda` ekranı: GET okuma, POST/PUT/exit/reopen/corrections yazma. |
 | `GET /api/planning/quarantine/hurda-deposu?from=&to=` · `POST quarantine/:id/depot/retry-giris` | **Karantina deposu** (Mikro dep_no=5, §6 "Karantina deposu"): Karantina→Hurda(3) başarılı transferlerin dökümü · başarısız Karantina GİRİŞ'ini elle yeniden dener. `hurda` ekranı: GET okuma, POST yazma. |
 | `/api/planning/devices` (GET/POST) · `devices/import` (POST) · `devices/:id` (GET/PUT/DELETE) | **Ölçüm cihazları takip** (EYS.LS.006, `products`'a bağlanmaz, §6 "Ölçüm Cihazları Takip"): liste (`?q=&active=&usable=&calibration=`, kalibrasyon durumu hesaplanır), yeni cihaz ekle, Excel'den ilk kurulum aktarımı (gövde = ham `.xlsx`, admin), ayrıntı/düzenle, sil (admin). `olcucihazlari` ekranı: GET okuma, POST/PUT yazma; `import` ve `DELETE` kayıtsız → admin. |
-| `GET /api/planning/maintenance?q=` · `maintenance/import` (POST) · `maintenance/types` (POST) · `maintenance/types/:id` (PUT/DELETE) · `maintenance/types/:id/items` (POST) · `maintenance/items/:id` (PUT/DELETE) · `maintenance/assets` (POST) · `maintenance/assets/:id` (PUT/DELETE) · `maintenance/assets/:id/logs` (GET/POST) · `maintenance/logs/:id` (DELETE) | **Bakım** (EYS.FR.016 + Bakım Sicil Kartları, `products`'a bağlanmaz, §6 "Bakım"): tip → makine → kalem ağacı (durum tamam/yaklaşıyor/gecikti hesaplanır), tik at / rutin-arızi kayıt ekle, bir makinenin geçmişi. Periyot (`period_unit/period_every/times_per_period/anchor_months`) yalnız kalem düzenlemeden değişir. `bakim` ekranı: genel görünüm GET okuma, tik/log POST yazma; tip/kalem/makine CRUD, log silme, Excel içeri aktarma kayıtsız → admin. |
+| `GET /api/planning/maintenance?q=` · `maintenance/import` (POST) · `maintenance/types` (POST) · `maintenance/types/:id` (PUT/DELETE) · `maintenance/types/:id/items` (POST) · `maintenance/items/:id` (PUT/DELETE) · `maintenance/assets` (POST) · `maintenance/assets/:id` (PUT/DELETE) · `maintenance/assets/:id/logs` (GET/POST) · `maintenance/logs/:id` (DELETE) · `maintenance/auto-tick` (GET/PUT) | **Bakım** (EYS.FR.016 + Bakım Sicil Kartları, `products`'a bağlanmaz, §6 "Bakım"): tip → makine → kalem ağacı (durum tamam/yaklaşıyor/gecikti hesaplanır), tik at / rutin-arızi kayıt ekle, bir makinenin geçmişi. Periyot (`period_unit/period_every/times_per_period/anchor_months`) yalnız kalem düzenlemeden değişir. **Otomatik tik anahtarı** (§6 "Bakım: otomatik tik"): `{enabled}` — kapalıyken ustanın tikleme davranışını etkilemez, yalnız sistemin kendiliğinden attığı tiki durdurur. `bakim` ekranı: genel görünüm GET okuma, tik/log POST yazma; tip/kalem/makine CRUD, log silme, Excel içeri aktarma ve otomatik tik anahtarı kayıtsız → admin. |
 | `GET /api/planning/drawing-tracking?q=&customer=&limit=&offset=` · `GET drawing-tracking/customers` · `PUT drawing-tracking/:kod` · `POST drawing-tracking/import` | **Teknik resim takip** (EYS.LS.007, `products`'a bağlı okur ama ayrı tabloda tutar, §6 "Teknik Resim Takip"): sistemdeki her ürünün resim durumu (var/yok, dosya sayısı)/rev no (sistem otomatik artırır)/tarihleri, liste (ürün listesiyle aynı arama + `customer` ile müşteriye göre TAM eşleşme filtresi), DISTINCT müşteri adları (açılır kutu), düzenle (satır yoksa oluşturulur), Excel'den ilk/tekrar aktarım (gövde = ham `.xlsx`, admin; Alen koduyla eşler, yinelenen kod en yeniyi baz alır). `teknikresim` ekranı: GET okuma, PUT yazma; `import` kayıtsız → admin. |
+| `GET/POST /api/planning/tool-items` · `GET tool-items/categories` · `POST tool-items/import` · `GET/PUT/DELETE tool-items/:id` | **Takım ve Pens Takip** (EYS.LS.026, `products`'a bağlanmaz, §6 "Takım ve Pens Takip"): liste/ara (`?q=`), yeni kayıt (kategori+tanım zorunlu, kalan alanlar serbest metin — `qty`/`criticalQty` de dahil, "X" gibi sayısal olmayan işaretler kabul edilir), DISTINCT kategori listesi (öneri açılır kutusu), Excel'den içeri aktarma (gövde = ham `.xlsx`; çalışma kitabındaki her sayfa Takım Takip/Pens Takip/Takım Uçları-Tutucuları şekilleriyle sırayla denenir; aynı kategori kümesini üreten yinelenen bir sayfa TAMAMEN atlanır), ayrıntı/düzenle, sil (admin). `takimtakip` ekranı: GET/POST/PUT yazma role'e; `DELETE` ve `import` kayıtsız → admin. |
 | `/api/planning/work-orders/:no/print.pdf` (GET) · `work-orders/:no/drawings.pdf` (GET) · `work-orders/:no/drawings?name=` (POST) · `work-orders/:no/drawings/:id` (DELETE) | **İş emri formu + teknik resimler**: `print.pdf` = form (ön sayfa) + resimler (arka sayfalar) TEK PDF (`application/pdf`, izleyici ve operatör dahil herkes; ekranda gösterilen ve basılan dosya) · `drawings.pdf` = yalnız birleşik resimler · yükle (gövde = ham PDF, yönetici) · kaldır (yönetici). |
 | `/api/planning/measure-reports` · `work-orders/:no/measure-report` · `products/:kod/measure-plan` (PUT) | **Ölçü raporları** (okuma herkes): ölçümü olan iş emirleri ve bir iş emrinin tüm ölçümleri · ürün kartının kalıcı ölçü planı (yönetici). |
 | `/api/planning/work-orders` (+ `/next`, `/sequence`, `/:no`, `/:no/cancel`, `/:no/start`, `/:no/finish`, `/:no/reopen`) | **İş emri** (yalnız admin): liste (`?q=&status=&machine=`), oluştur (POST: `lineId` ya da `stockCode`, `targetQty`, `machineId`, …), sıradaki numara, numara tabanı (PUT), ayrıntı + geçmiş + gerçekleşen üretim (`progress`), düzenle (PUT), iptal (POST, `reason`), **üretime başlat** (`machineId?, startAt?, person?, fields?`), **bitir** (`endAt?, person?`; sonuç dondurulur), **üretime geri al**. |
@@ -2274,6 +3382,67 @@ periyodu seçmez/değiştirmez.
 
 ## 10. Sıradaki işler
 
+- [ ] **"Adedi düzelt…" (bitmiş iş emrinde, 2026-11-18) GEÇİCİDİR — bitmiş ürün depo akışı (`PRODUCT_DEPOT_ENABLED`)
+      açılınca KALDIRILMALI ya da kısıtlanmalı.** Bkz. §6 "İş emrinde bitmiş adedi düzeltme". O akış açılınca
+      düzeltme ile zaten Mikro'ya gönderilmiş bir miktar arasındaki tutarsızlık riski gerçekleşir hâle gelir.
+- [ ] **Mail'den otomatik sipariş girişi — DEVAM EDİYOR.** Bkz. §6 "Mail'den otomatik sipariş girişi" (2026-11-16/17):
+      yeni sipariş + revizyon için göster-onayla kararlaştırıldı. **PDF metin okuma, tablo ayrıştırma + müşteri
+      eşleme + taslak veritabanı + onay ekranı (yeni "Yeni siparişler" sekmesi — `yenisiparis`) VE Tesseract OCR
+      entegrasyonu AYNI oturumda YAPILDI ve kullanıcının verdiği GERÇEK taranmış PDF ile uçtan uca doğrulandı**
+      (bkz. §6 "Tablo ayrıştırma + taslak veritabanı + onay ekranı" ve "Tesseract OCR entegrasyonu"); ilk tahmin
+      ("DCTDecode=JPEG yeter") gerçek veriyle YANLIŞ çıktı (asıl ihtiyaç CCITT Group4, MRC çift katmanlı tarama),
+      yolda 6 gerçek hata bulunup düzeltildi (2 Türkçe sayı ayrıştırma, revizyon notu sınıflandırmasının
+      `matched`'a bağımlılığı, elle onaylanan satırın `match_status` güncellenmemesi, TIFF sarmalayıcıda ters
+      siyah/beyaz, OCR'ın kelime-kutusu bölünmüş başlıkları tanımaması — bu sonuncunun İLK düzeltmesi de kendi
+      regresyonunu yarattı, ikinci denemede kök nedenden (açgözlü/çakışmasız pencere tüketimi) düzeltildi).
+      `npm test` 813/813 yeşil. **Tesseract'ın installer'a gömülmesi (`tur`/`eng`/`osd` dahil) YAPILDI (2026-11-19, v1.0.9).**
+      **Revizyon e-postasının GERÇEK biçimi (vurgulu hücre DEĞİL, fazladan bir hücre: eski değer + yeni değer/"iptal") bulunup
+      DÜZELTİLDİ ve kullanıcının kendi GERÇEK revizyon örneğiyle (5 satır, 2 farklı sipariş no) uçtan uca doğrulandı
+      (2026-11-19) — bkz. §6 "Mail'den otomatik sipariş girişi" sonundaki ilgili bölüm.**
+      **"Mail üzerinden okuma yapmaya gerek yok, yönetici tabloyu kopyalayıp yapıştırır" netleşti (2026-11-19, kullanıcı kararı) —
+      Graph API/otomatik mail tarama bu özellik için artık GEREKSİZ görünüyor, ayrıca istenmedikçe yapılmayacak.**
+      **Sıradaki:** gerçek DOLU bir sipariş tablosu sayfasıyla OCR'ın uçtan uca onay ekranına kadar denenmesi (bu turda
+      gerçek dosyanın sipariş tablosu sayfası boş bir şablon çıktı); revizyon e-postasının GERÇEK HTML markup'ıyla (yalnız
+      değerlerle değil — admin'in gerçek Ctrl+C/Ctrl+V'siyle "E-posta tablosunu yapıştır…" penceresine) doğrulanması;
+      gerçek bir PDF'in tarayıcıdan yüklenmesinin denenmesi (bu oturumda yalnız API'ye doğrudan istekle test edildi).
+      **Mikro'ya YENİ sipariş yazma (`SiparisKaydetV2`) — GERÇEK YAZMA BAŞARILI (2026-11-18)** — bkz. §6 "Mikro'ya YENİ
+      sipariş yazmak" > "GERÇEK İLK YAZMA DENEMESİ". Kullanıcının onayıyla gerçek bir eski sipariş (SAS0003812, HAVANA,
+      4 kalem) "yeni sipariş gibi" yeniden girildi — İLK denemede `StatusCode:200`, SPR-755, 4 satır, salt okuma ile
+      tam doğrulandı; `sip_evrakno_seri`/`sip_evrakno_sira`'yı kendimiz hesaplayıp göndermenin (en belirsiz noktaydı)
+      VE tek evrakta birden çok kalemin (`previewCreateOrder` artık `items[]` alıyor) İKİSİ de çalıştığı kanıtlandı.
+      - [x] **SPR-755 (HA VANA, 120.10.0007) test kaydı Mikro'dan SİLİNDİ (kullanıcı onayı, 2026-11-18).** Eski not:
+            kullanıcı "sonra sileriz" demişti,
+            bir sonraki oturum bunu kontrol etmeli/hatırlatmalı (4 satır, GUID'ler CLAUDE.md'de "GERÇEK İLK YAZMA
+            DENEMESİ" bölümünde kayıtlı; `SiparisSilV2`/`SiparisGuidSilV2` hiç araştırılmadı, muhtemelen kullanıcı
+            kendi Mikro ekranından elle siler).
+      - [x] **PDF ayrıştırma düzeltmesi (karakter-karakter HAVANA PDF'i) YAPILDI ve 2026-11-18'de ikinci kez
+            uçtan uca doğrulandı** (bkz. §6 "PDF karakter-karakter ayrılma düzeltmesi" + hemen altındaki "TÜM 4
+            GERÇEK PDF... YENİDEN DOĞRULANDI" tablosu): `mergeCharacterCells` ile hücreler birleştiriliyor, 4/4
+            satır tam eşleşiyor, adet de (daha önce "çıkmıyor" diye kayıtlıydı — o not YANLIŞTI/güncel değildi)
+            açıklama metnindeki "500,00Adet" kalıbından doğru çıkarılıyor. Dört gerçek PDF'in dördü de artık
+            üretim yolundan (`importPdf`) sorunsuz geçiyor.
+      - [x] **"Hepsi TEK siparişte Mikro'ya gönder" (çok satırlı taslak → tek evrak) YAPILDI ve İKİNCİ KEZ GERÇEK
+            Mikro'ya karşı BAŞARILI (2026-11-19)** — bkz. §6 "Hepsi TEK siparişte Mikro'ya gönder". Gerçek bir
+            Konveyör PDF'i (`4100018539.PDF`, kullanıcının Downloads'undan) "Yeni siparişler" ekranından GERÇEK
+            tarayıcı akışıyla (PDF yükleme hâlâ API'ye doğrudan istekle — tarayıcı dosya seçici kısıtı aynen
+            geçerli, ama onaylama/gönderme adımlarının HEPSİ gerçek düğmelerle) işlendi: 11 satırın 10'u onaylandı,
+            yeni toplu düğmeyle TEK evrakta (SPR-755, müşteri 120.10.0011 KONVEYÖR, toplam 448.308 TL) gönderildi,
+            salt okuma ile tam doğrulandı.
+      - [x] **ÇÖZÜLDÜ (2026-11-19): bu SPR-755 GERÇEKTEN bir DUPLİKASYONDU** — aynı PO (4100018539) zaten
+            `SPR-747` olarak Mikro'da duruyordu (muhtemelen bu PDF'in bir ÖNCEKİ revizyonu). Kullanıcı SPR-755'i
+            kendisi sildi; bu da "Mikro'dan yenile"nin silinen siparişleri HİÇ fark etmediği GERÇEK bir bug'ı
+            ortaya çıkardı — bkz. §6 "ÜÇ GERÇEK BULGU + DÜZELTME" (düzeltildi: `mikro.js` artık `keepOld:false`,
+            `markStale` gerçekten çalışıyor) ve PDF'in kendi PO numarasının (`sip_belgeno` için) artık otomatik
+            çıkarıldığı (`extractDocOrderNo`, aynı bölüm) — ikisi de test edilip gerçek veriyle doğrulandı.
+      - Mükerrer mail tespiti, revizyon eşleştirmesinin gerçek bir e-posta HTML'iyle doğrulanması, Graph API bağlantısı
+        hâlâ bekliyor (yukarıdaki genel maddeyle aynı).
+      - [ ] **FABRİKA PC'sine (192.168.1.50) `mikro.js`'nin `keepOld:false` düzeltmesi henüz ULAŞMADI** — o makinenin
+            kendi backend sürecinin yeniden başlatılması (bir sonraki Setup.exe kurulumu ya da elle güncelleme ile)
+            gerekiyor; o PC'deki "Siparişler" ekranındaki HAVANA + Konveyör SPR-755 kayıtları ancak o zaman düzelir.
+      - [ ] **Henüz yapılmayan: aynı PO numarasıyla (artık otomatik çıkarılan `custOrderNo`) var olan bir `order_lines`
+            kaydı varsa, yeni bir taslak onaylanmadan ÖNCE kullanıcıyı uyarmak** — bu turda yalnız ÇIKARIM eklendi,
+            SPR-747/SPR-755 gibi bir duplikasyonu ÖNLEMEZ (yalnız kullanıcı fark edip elle sildi). Gerçek bir ihtiyaç
+            olarak doğrulandı, henüz tasarlanmadı/yazılmadı.
 - [x] ~~Program kütüphanesi bölünmesi (ortak + makine başına)~~ — yapıldı (2026-11-03), bkz. §6 "Kütüphane bölünmesi: Ortak + makine başına". **Fabrika PC'sinde gerçek kullanımda henüz denenmedi** (yalnız bu makinedeki geliştirme veritabanıyla).
 - [x] ~~Bir tezgahın kütüphanesini flash/USB'ye aktarma (ZIP)~~ — yapıldı (2026-11-03), bkz. §6 "Kütüphaneyi ZIP olarak dışa aktarma".
 - [x] ~~Bitmiş ürün depo akışı (Merkez↔Geçici, Mikro)~~ — kod YAZILDI, GERÇEK Mikro'ya karşı uçtan uca doğrulandı (2026-11-04, SR040.013,
@@ -2282,11 +3451,14 @@ periyodu seçmez/değiştirmez.
       (evrak serisi boş olmalı) çözüldü. Üç adımın (GİRİŞ/TRANSFER/ÇIKAN "Farkı temizle…") hepsi UI'dan uçtan uca denendi. **Sıradaki:**
       `MIKRO_WRITE_ENABLED` gerçek kurulumda/Setup.exe'de açma kararı (yönetici ile birlikte, hâlâ kapalı).
 - [x] ~~Installer'a MikroAPI ortam değişkenlerini GÖM~~ — yapıldı (2026-10-29), bkz. "MikroAPI kimlik bilgileri ve yazma artık installer'a gömülüyor".
-- [ ] **Numune: tezgaha bağlama + yeni ürün kodu + Mikro yazma** — yapıldı (2026-11-13), bkz. §6 "Tezgaha bağlama + YENİ ürün kodu
-      oluşturma". Tarayıcıda gerçek dev sunucusuna karşı uçtan uca denendi (kod üretimi, ürün kartı, ağırlık senkronu). **`StokKaydetV2`
-      (Mikro'da yeni stok kartı oluşturma VE ağırlık güncelleme) GERÇEK MİKRO'YA KARŞI HİÇ DENENMEDİ** — ilk deneme yönetici ile birlikte,
-      küçük/test amaçlı bir numune koduyla yapılmalı (özellikle ağırlık güncellemesinin StokKaydetV2'yi kısmi mi tam değiştirme mi
-      çağırdığı netleşmeden, Mikro'da BAŞKA bir yoldan dolu bir karta asla denenmemeli — bkz. ayrıntılı uyarı §6'da).
+- [x] **Numune: tezgaha bağlama + yeni ürün kodu + Mikro yazma** — yapıldı (2026-11-13), bkz. §6 "Tezgaha bağlama + YENİ ürün kodu
+      oluşturma". Tarayıcıda gerçek dev sunucusuna karşı uçtan uca denendi (kod üretimi, ürün kartı). **Mikro yazma mekanizması
+      2026-11-16'da GERÇEK Mikro'ya karşı doğrulandı** (bkz. §6'daki aynı bölümün sonu) ve `mikro-stock.js`'teki `previewCreateProduct`/
+      `previewUpdateProductWeight` AYNI GÜN bu bulgulara göre düzeltildi: yeni kart `StokKaydetV2`+`user_tablo` ile, var olan kartı
+      güncelleme (ağırlık dahil) `StokKaydetV2` DEĞİL `KayitKaydetV2` (Tablo No 13, KayitTipi '1') ile. SR/Nİ kod numaralandırmasının
+      AYNI müşteri grubunda BAĞIMSIZ değil ORTAK sayıldığı da bu testte bulunup düzeltildi (`nextStockCode()`). **Kalan iş: bu
+      düzeltilmiş kodun bir dahaki gerçek numune testinde yönetici ile birlikte TEKRAR gerçek Mikro'ya karşı doğrulanması** (bugünkü
+      kod değişikliği yalnız sahte istemciyle birim testiyle sınandı, gerçek Mikro'ya bir daha yazılmadı).
 - [x] ~~Hurda Girişi (karantina giriş-çıkış EYS.FR.043 + tashih EYS.FR.049)~~ — yapıldı (2026-11-04), bkz. §6 "Hurda Girişi". Tarayıcıda gerçek
       sunucuya karşı uçtan uca denendi (giriş → tashih → çıkış → geri al → yazdırma önizlemesi). **Sıradaki:** gerçek yazıcıdan baskı, fabrika
       PC'sinde gerçek kullanım, admin'in bu ekranı hangi role (yeni ya da var olan) açacağına karar vermesi (göçle gelen roller otomatik almadı).

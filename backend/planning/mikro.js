@@ -15,6 +15,27 @@
  * (gercek musteri/urun/HM/BR/NT/SN degerleriyle). Tek sorgu hem siparis satirlarini hem urun
  * kartinin hammadde/agirlik/sure ipuclarini verir - importSiparis() bunlari zaten ayni Excel
  * basliklariyla (HM, BR, NT, SN, TAM BOY) okuyordu, burada da degismedi.
+ *
+ * STOK KARTI SENKRONU — SIPARISTEN BAGIMSIZ (2026-11-16, kullanici isteği, GERCEK veride bulunan bir
+ * bosluktan sonra): yukaridaki SIPARIS_SQL yalniz SIPARISLER'de satiri OLAN urunleri getirir. Gercek
+ * Mikro'da (salt okuma ile dogrulandi) bir musteri grubunda GERCEKTEN var olan iki SR kodu (SR004/
+ * SR005.019) hic siparise baglanmamisti (muhtemelen numune/stok kartı acilisi) - "Mikro'dan yenile"
+ * bunlari HICBIR ZAMAN getirmiyordu, kac kere basilirsa basilsin. Bu yalniz goruntu eksikligi degil,
+ * GUVENLIK sorunu da yaratiyor: numune ekraninin "yeni urun kodu olustur" akisi (`sample-tracking.js`
+ * `nextStockCode()`) yerel `products` tablosuna bakiyor - o tablo bu iki kodu hic bilmedigi icin
+ * sonraki kodu YANLIS hesaplayip Mikro'da ZATEN VAR olan bir kodu "sira" diye onerebiliyordu.
+ * STOK_SQL bunu kapatir: SIPARISTEN BAGIMSIZ, dogrudan STOKLAR (+ STOKLAR_USER) uzerinden, Alen'in
+ * KENDI urun kodu bicimine uyan (iki harf + 3 rakam + nokta + 3 rakam - `importers.js`'teki
+ * `PRODUCT_CODE` regex'iyle AYNI bicim, SQL Server'in `[0-9]` karakter sinifiyla) HER kodu okur ve
+ * `importIsEmri`'nin ('isemri' bicimi) ayni "bos alan dolar, dolu alan Mikro'dan farkliysa elle
+ * duzenlenmemisse guncellenir" kuraliyla urun kartlarina isler - SIPARIS_SQL'den TAMAMEN BAGIMSIZ,
+ * ikisi de calisir, biri digerini ATLAMAZ/EZMEZ (ayni stok kodu ikisinden de gelirse ikinci calisan
+ * yalniz "degismedi" der, importIsEmri/importSiparis'in kendi idempotentligi sayesinde). Yalniz
+ * EKSIK olan: 'isemri' bicimi `customerCode` icin MUSTERIKODU sutunu BOS gelince urun adindan turetir
+ * (importIsEmri'nin var olan `customerCodeFromName` dustugu), ayrica Mikro'nun "sip_musteri_kod"u
+ * (hangi musteriye ait oldugu) bu sorguda YOK (STOKLAR'in kendisinde musteri bilgisi tutulmuyor,
+ * yalniz SIPARISLER'de var) - siparisi olmayan bir kod icin musteri grubu/bilgisi zaten bilinemez,
+ * bu BEKLENEN bir sinir (siparis gelince importSiparis zaten dolduracak).
  */
 import { importParsed } from './importers.js';
 import { emptyTotals, emptyChanges, accumulate } from './sources.js';
@@ -49,6 +70,18 @@ const SIPARIS_SQL =
   // "TALAŞ"/"TALAŞ1" serisi gercek musteri siparisi DEGIL - hurda pirinc talasi satisi belgesi (stok PR-001,
   // "PİRİNÇ TALAŞI"; gercek Mikro'da 2026-10-28'de dogrulandi, 231+1 kayit). Sipariş ekraninda gorunmemeli.
   "WHERE s.sip_tip = 0 AND s.sip_evrakno_seri NOT LIKE 'TALA%'";
+
+// Siparisten BAGIMSIZ stok karti senkronu (bkz. dosya basi "STOK KARTI SENKRONU"). 'isemri' bicimindeki basliklar
+// (ALEN KOD, MAMÜL ADI ...) - importIsEmri ayni bu basliklarla cagrilir, yeni bir eslestirme kurali ICAT EDILMEDI.
+// `[0-9]` SQL Server karakter sinifi: iki harf (SR/Nİ) + 3 rakam + nokta + 3 rakam - importers.js'teki PRODUCT_CODE
+// regex'iyle (`^[A-ZİÇĞÖŞÜ]{2}\d{3}\.\d{3}$`) AYNI bicim, SQL tarafinda ayri bir sabit olarak tutulur (iki dilde
+// aynen tekrarlanamaz, ama ikisi de "2 harf + 3 rakam + nokta + 3 rakam" ifade eder).
+const STOK_SQL =
+  'SELECT st.sto_kod AS [ALEN KOD], st.sto_isim AS [MAMÜL ADI], su.HAMMADDE AS HAMMADDE, ' +
+  'su.URETIM_SURESI_SN AS [ÜRETİM SN], (st.sto_birim1_agirlik + st.sto_birim1_dara) AS [BRÜT GR], ' +
+  'st.sto_birim1_agirlik AS [NET GR], su.TAM_BOY AS [TAM BOY] ' +
+  'FROM STOKLAR st LEFT JOIN STOKLAR_USER su ON su.Record_uid = st.sto_Guid ' +
+  "WHERE st.sto_iptal = 0 AND st.sto_hidden = 0 AND st.sto_kod LIKE '__[0-9][0-9][0-9].[0-9][0-9][0-9]'";
 
 export class Mikro {
   /** @param {{planning: import('./planning.js').Planning, client: import('./mikro-client.js').MikroClient}} deps */
@@ -93,12 +126,25 @@ export class Mikro {
       const mikroRows = await this.client.sqlQuery(SIPARIS_SQL, { now: new Date(now) });
       const parsed = toParsed(mikroRows);
       // importParsed kendi beginBatch/finishBatch'ini yapar (importers.js) - burada ikinci kez acilmaz.
-      const result = importParsed(this.#db, parsed, 'siparis', { filename: 'MikroAPI · SIPARISLER', by, now, keepOld: true }, { encoding: 'mikro-api', delimiter: null });
+      // keepOld: false (2026-11-19, kullanici bulgusu) - SIPARIS_SQL hic tarih/LIMIT filtresi TASIMAZ (dosya basi),
+      // yani TAM, GUNCEL bir SIPARISLER dokumu: bu ceviride hic GORUNMEYEN bir satir GERCEKTEN Mikro'dan silinmis
+      // demektir (Excel/Kaynak klasorundeki "kismi export olabilir, gizleme" ihtiyati BURADA GECERLI DEGIL). Eskiden
+      // keepOld:true idi (Excel yoluyla AYNI kod paylasildigi icin kopyalanmisti) - sonuc: Mikro'da silinen bir
+      // siparis (ornek: SPR-755) "Siparisler" ekraninda SONSUZA DEK kalmaya devam ediyordu, kullanici fark etti.
+      const result = importParsed(this.#db, parsed, 'siparis', { filename: 'MikroAPI · SIPARISLER', by, now, keepOld: false }, { encoding: 'mikro-api', delimiter: null });
       accumulate(totals, changes, result);
 
-      const last = { at: now, by, rows: mikroRows.length, totals };
+      // Siparisten BAGIMSIZ stok karti senkronu (bkz. dosya basi "STOK KARTI SENKRONU") - AYRI bir importParsed
+      // cagrisi (ayri batch, 'isemri' bicimi); SIPARIS_SQL'i hic etkilemez/degistirmez, yalniz ikinci bir kaynak
+      // olarak ayni urun kartlarina katilir.
+      const stokRows = await this.client.sqlQuery(STOK_SQL, { now: new Date(now) });
+      const stokParsed = toParsed(stokRows);
+      const stokResult = importParsed(this.#db, stokParsed, 'isemri', { filename: 'MikroAPI · STOKLAR', by, now }, { encoding: 'mikro-api', delimiter: null });
+      accumulate(totals, changes, stokResult);
+
+      const last = { at: now, by, rows: mikroRows.length + stokRows.length, totals };
       this.#db.setSetting(SETTING_LAST, JSON.stringify(last));
-      return { source: 'mikro', at: now, totals, changes, rows: mikroRows.length, warnings: result.warnings };
+      return { source: 'mikro', at: now, totals, changes, rows: mikroRows.length + stokRows.length, warnings: [...result.warnings, ...stokResult.warnings] };
     } finally {
       this.busy = false;
     }

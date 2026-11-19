@@ -191,7 +191,7 @@ export async function renderSamples(host) {
 const FIELD_LABEL = Object.freeze({
   customer: 'Müşteri', customerSampleCode: 'Müşteri numune kodu', customerCode: 'Müşteri ürün kodu', stockCode: 'Alen ürün kodu',
   sampleQty: 'Numune miktarı', dueDate: 'Teslim tarihi', quoteNetG: 'Fiyat teklif net ağırlığı (gr)', sampleNetG: 'Numune net ağırlığı (gr)',
-  productionSec: 'Üretim süresi (sn)', material: 'Hammadde', altMaterial: 'Alternatif hammadde', gauges: 'Kullanılan mastar/lar',
+  productionSec: 'Üretim süresi (sn)', material: 'Hammadde', altMaterial: 'Alternatif hammadde', lengthMm: 'Tam boy (mm)', gauges: 'Kullanılan mastar/lar',
   producedQty: 'Üretim miktarı', sampleSetQty: 'Ayrılan örnek miktarı', producedOn: 'Üretim tarihi', sentQty: 'Gönderilen miktar',
 });
 
@@ -425,6 +425,7 @@ export async function openSampleDialog(id, onDone = () => {}) {
       '<h4 class="sub">Numune üretim bilgileri</h4><div class="fld-grid">' +
       num('quoteNetG', 'Fiyat teklif net ağırlığı (gr)') + num('sampleNetG', 'Numune net ağırlığı (gr)') +
       num('productionSec', 'Üretim süresi (sn)') + matField('material', 'Hammadde') + matField('altMaterial', 'Alternatif hammadde') +
+      num('lengthMm', 'Tam boy (mm)') +
       txt('gauges', 'Kullanılan mastar/lar', 120) + num('producedQty', 'Üretim miktarı') + num('sampleSetQty', 'Ayrılan örnek miktarı') +
       dt('producedOn', 'Üretim tarihi') +
       `<label class="fld"><span>GKK rapor no</span><span class="fld-row"><input name="gkkReportNo" maxlength="40" autocomplete="off" value="${escapeHtml(v('gkkReportNo') ?? '')}"${editable ? '' : ' readonly'}>` +
@@ -539,7 +540,7 @@ export async function openSampleDialog(id, onDone = () => {}) {
           customer: f.elements.customer.value, customerSampleCode: f.elements.customerSampleCode.value, customerCode: f.elements.customerCode.value,
           stockCode: f.elements.stockCode.value, sampleQty: f.elements.sampleQty.value, dueDate: f.elements.dueDate.value || null,
           quoteNetG: f.elements.quoteNetG.value, sampleNetG: f.elements.sampleNetG.value, productionSec: f.elements.productionSec.value,
-          material: f.elements.material.value, altMaterial: f.elements.altMaterial.value, gauges: f.elements.gauges.value,
+          material: f.elements.material.value, altMaterial: f.elements.altMaterial.value, lengthMm: f.elements.lengthMm.value, gauges: f.elements.gauges.value,
           producedQty: f.elements.producedQty.value, sampleSetQty: f.elements.sampleSetQty.value, producedOn: f.elements.producedOn.value || null,
           gkkReportNo: f.elements.gkkReportNo.value, sentQty: f.elements.sentQty.value, customerFeedback: f.elements.customerFeedback.value, note: f.elements.note.value,
           machineId: f.elements.machineId.value,
@@ -574,6 +575,7 @@ function sampleFormHtml(s) {
     sec('Numune üretim bilgileri') +
     row('FİYAT TEKLİF NET AĞIRLIĞI (gr)', decInput(s.quoteNetG)) + row('NUMUNE NET AĞIRLIĞI (gr)', decInput(s.sampleNetG)) +
     row('ÜRETİM SÜRESİ (sn)', decInput(s.productionSec)) + row('HAMMADDE', s.material) + row('ALTERNATİF HAMMADDE', s.altMaterial) +
+    row('TAM BOY (mm)', decInput(s.lengthMm)) +
     row('KULLANILAN MASTAR/LAR', s.gauges) + row('ÜRETİM MİKTARI', s.producedQty) + row('AYRILAN ÖRNEK MİKTARI', s.sampleSetQty) +
     row('ÜRETİM TARİHİ', s.producedOn ? dateText(s.producedOn) : null) + row('TEZGAH', s.machineId) +
     row('GKK RAPOR NO', s.gkkReportNo) + row('GÖNDERİLEN MİKTAR', s.sentQty) +

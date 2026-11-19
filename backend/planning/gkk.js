@@ -31,6 +31,22 @@ export function parseGkNo(raw) {
   return { year, seq, no: formatGkNo(year, seq) };
 }
 
+// (?<![0-9A-Z]) / (?!\d): rakam dizisinin TAMAMINI yakalar, ör. "GK25.100" icindeki "10"yu "GK25.10" diye
+// YARIM yakalamaz (regex o konumda eslesmeyi reddeder, bir sonraki konumdan aramaya devam eder).
+const GK_IN_TEXT_RE = /(?<![0-9A-Z])GK(\d{2})[.\-/](\d{1,4})(?!\d)/;
+
+/**
+ * Serbest bir metinde (dosya adi/yolu) gecen bir GK rapor numarasini bulur (ör. "AA24 X 13 - PB3 - GK25.093.pdf"
+ * -> GK25.093). Hammadde kalite raporu klasorundeki dosyalar GK RAPOR NUMARASINA gore eslenir (gkk-folder.js) —
+ * dosya adinda hammadde cinsi de gecebilir ama o metinle degil, buradaki GK numarasiyla eslenir.
+ * @param {string} text @returns {{year:number, seq:number, no:string}|null}
+ */
+export function findGkNoIn(text) {
+  const t = foldTr(text).replace(/\s+/g, '');
+  const m = GK_IN_TEXT_RE.exec(t);
+  return m ? parseGkNo(`GK${m[1]}.${m[2]}`) : null;
+}
+
 /** Arama/benzersizlik anahtarı: Türkçe harfler ASCII, yalnız harf-rakam ("AA24 X 13 - PB3" → "AA24X13PB3"). */
 export const compactKey = (text) => foldTr(text).replace(/[^A-Z0-9]/g, '');
 

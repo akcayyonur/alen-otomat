@@ -342,6 +342,49 @@ test('bitir (uretimde): istege bagli elle adet telemetri adedinin YERINE gecer, 
   assert.equal(p.finishWorkOrder(b.no, {}, { now: day(11) }).result.source, undefined);
 });
 
+test('adet duzelt (GECICI): BITMIS is emrinde adet "geri al + yeniden bitir" olmadan dogrudan duzeltilir; durum/deger/tip dogrulamalari, gecmise yazilir', () => {
+  const { p, st } = kur();
+  const a = yeni(p, { targetQty: 5 });
+  p.startWorkOrder(a.no, { startAt: day(7) }, { now: NOW });
+  assert.throws(() => p.correctFinishedQty(a.no, { qty: 3 }), (e) => e.code === 'bad-status', 'henuz bitmemis is emri duzeltilemez');
+
+  st.events.push(ev(day(7, 30)), ev(day(8, 0))); // 2 adet
+  p.finishWorkOrder(a.no, { endAt: day(8, 30) }, { now: NOW });
+  assert.equal(p.getWorkOrder(a.no).progress.produced, 2);
+
+  assert.throws(() => p.correctFinishedQty(a.no, { qty: -1 }), /tam sayı olmalı/);
+  assert.throws(() => p.correctFinishedQty(a.no, { qty: 1.5 }), /tam sayı olmalı/);
+  assert.throws(() => p.correctFinishedQty(a.no, { qty: 2 }), /zaten bu değerde/, 'ayni adetle duzeltme reddedilir');
+
+  const r = p.correctFinishedQty(a.no, { qty: 7, note: 'usta yanlış saymış' }, { by: 'yonetici', now: NOW });
+  assert.equal(r.status, 'bitti', 'durum degismez, dondurulmus sonuc yerinde guncellenir');
+  assert.equal(r.result.produced, 7);
+  assert.equal(r.result.telemetryProduced, 2, 'tezgahin ilk saydigi adet kaybolmaz');
+  assert.equal(r.result.source, 'elle-adet');
+  assert.ok(r.warnings.includes('Hedefin üzerinde: 7 / 5 adet.'));
+  assert.equal(r.events.at(-1).kind, 'adet-duzeltildi');
+  assert.equal(r.events.at(-1).detail, '2 → 7 adet · usta yanlış saymış');
+  assert.equal(r.events.at(-1).by, 'yonetici');
+
+  // ikinci duzeltme: ONCEKI telemetryProduced (2) korunur, zincirleme ilk degere gore kalir
+  const r2 = p.correctFinishedQty(a.no, { qty: 4 }, { now: NOW });
+  assert.equal(r2.result.produced, 4);
+  assert.equal(r2.result.telemetryProduced, 2);
+  assert.ok(r2.warnings.some((w) => /altında/.test(w)));
+
+  // tamamen elle bitirilmis (finishWorkOrderManually) is emride source 'elle' kalir, telemetryProduced eklenmez
+  const b = yeni(p, { machineId: 'CNC-03' });
+  p.finishWorkOrderManually(b.no, { qty: 10 }, { now: NOW });
+  const rb = p.correctFinishedQty(b.no, { qty: 12 }, { now: NOW });
+  assert.equal(rb.result.produced, 12);
+  assert.equal(rb.result.source, 'elle');
+  assert.equal(rb.result.telemetryProduced, undefined);
+
+  // iptal edilmis is emride de reddedilir (yalniz bitti durumu kabul edilir)
+  const c = yeni(p, { machineId: 'CNC-01' });
+  p.cancelWorkOrder(c.no, { reason: 'gerek yok' }, { now: NOW });
+  assert.throws(() => p.correctFinishedQty(c.no, { qty: 1 }), (e) => e.code === 'bad-status');
+});
 
 /* ----------------------------------------------------- iptal, guncelleme, liste */
 

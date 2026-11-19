@@ -279,7 +279,9 @@ function drawForm(c, w, now) {
   }
   top += rowH * 9 + 6;
 
-  const foot = `${w.status === 'iptal' ? 'İPTAL EDİLDİ · ' : ''}${slots.length ? 'Vardiya adetleri telemetriden (tezgah sayacı) · ' : ''}Sistemden üretildi · ${stamp(now)}`;
+  // EYS.FR.002 SONDA durur: "İPTAL EDİLDİ" alt bilginin İLK sözcüğü olmalı (wo-form-pdf.test.js bu hex dizgenin
+  // başında olmasını sınar - Türkçe karakter kodlaması tüm dizgeyi tek bir metin gösterme çağrısında taşıyor).
+  const foot = `${w.status === 'iptal' ? 'İPTAL EDİLDİ · ' : ''}${slots.length ? 'Vardiya adetleri telemetriden (tezgah sayacı) · ' : ''}Sistemden üretildi · ${stamp(now)} · EYS.FR.002`;
   c.textRight(right, top + 6, foot, { size: 6.75, gray: 0.33 });
 }
 

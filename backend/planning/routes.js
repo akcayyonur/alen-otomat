@@ -28,6 +28,8 @@
  *   POST .../:no/reopen                                 yanlislikla bitirileni uretime geri al (elle bitirilmisse PLANLANDI'ya doner)
  *   POST .../:no/reassign-machine {machineId} (yalniz yonetici)  yanlis tezgaha baglanmis (UretIMDE) is emrini DOGRU tezgaha tasir (eski tezgahtaki sayim kaybolur, uyari doner)
  *   POST .../:no/finish-manual {qty, finishedAt?, note?} hic baslatilmamis eski is emrini GERIYE DONUK, ELLE bitirir (adet telemetriden SAYILMAZ, sonucta source:'elle')
+ *   POST .../:no/correct-qty {qty, note?} (yalniz yonetici)  BITMIS is emrinde adedi DOGRUDAN duzeltir, "geri al + yeniden bitir" GEREKMEZ
+ *                                          GECICI: bitmis urun depo akisi (asagida) acilinca kaldirilmali/kisitlanmali, bkz. planning.js correctFinishedQty
  *   GET  /api/planning/price-studies?status=            FIYAT CALISMASI listesi (urun karti acilmadan onceki on calisma; `products` ile baglanmaz)
  *   POST /api/planning/price-studies?title=&name=       yeni calisma: govde = ham PDF (yalniz yonetici)
  *   GET  /api/planning/price-studies/:id                 ayrinti;  GET .../drawing.pdf  teknik resim;  DELETE .../:id  (yalniz yonetici)
@@ -46,6 +48,10 @@
  *   GET  /api/planning/samples/materials?q=&limit=           hammadde ara (Mikro'dan canli, HM%; hammadde ekranindaki ucla AYNI mikroStock.searchMaterials, numune-ozel dar uc)
  *   GET/POST /api/planning/samples/:id/drawings              numuneye yuklenen teknik resimler (PDF) listesi / yukle (govde = ham PDF, ?name=)
  *   GET/DELETE .../samples/:id/drawings/:did                 tek PDF'i goruntule/indir / kaldir
+ *   GET  /api/planning/supply-requests?q=&status=         SIPARIS FISI listesi (atolye malzeme/takim talebi; `products` ile baglanmaz; status: bekliyor|verildi|geldi)
+ *   POST /api/planning/supply-requests {requestedBy, requestedOn?, note?, lines:[{qty, item, brand?}]}   yeni fis (en az bir kalem zorunlu)
+ *   GET/PUT /api/planning/supply-requests/:id              ayrinti / duzenle (lines gonderilirse TUM kalemler degisir);  DELETE .../:id  (yalniz yonetici)
+ *   POST .../supply-requests/:id/order                     "sipariş verildi" (bekliyor -> verildi);  POST .../receive  "teslim alindi" (verildi -> geldi);  POST .../back  bir adim geri al
  *   GET  /api/planning/quarantine?q=&status=             HURDA GIRISI listesi (karantina giris-cikis, EYS.FR.043; `products` ile baglanmaz)
  *   POST /api/planning/quarantine                         yeni giris-cikis kaydi ac (urun tanimi, uygunsuzluk tanimi, giris tarihi/personeli)
  *   GET/PUT /api/planning/quarantine/:id                   ayrinti (tashih gecmisi + toplamlar) / duzenle;  DELETE .../:id  (yalniz yonetici)
@@ -71,6 +77,12 @@
  *   GET  /api/planning/maintenance/assets/:id/logs?itemId=&kind=&limit=   bir makinenin tik/rutin/arizi gecmisi
  *   POST /api/planning/maintenance/assets/:id/logs          tik at (`itemId` ile) ya da serbest rutin/arizi kayit ekle (`itemId` yok)
  *   DELETE /api/planning/maintenance/logs/:id                yanlis girilen tik/kayit sil (yalniz yonetici)
+ *   GET/PUT /api/planning/maintenance/auto-tick {enabled}     otomatik tik anahtari (usta tiklemiyor, sistem periyodu gelince rastgele saatte kendisi tikler; yalniz yonetici)
+ *   GET  /api/planning/tool-items?q=&limit=&offset=      TAKIM VE PENS TAKIP (EYS.LS.026 + Takim Uclari/Tutuculari): liste/arama
+ *   POST /api/planning/tool-items                        yeni kayit (yalniz kategori+tanim zorunlu)
+ *   GET  /api/planning/tool-items/categories             kayitli kategoriler (DISTINCT, alfabetik)
+ *   POST /api/planning/tool-items/import                 Excel'den iceri aktar (govde = ham .xlsx; her sayfa sirayla denenir)
+ *   GET/PUT /api/planning/tool-items/:id                 ayrinti / duzenle;  DELETE .../:id  (yalniz yonetici)
  *   GET  /api/planning/drawing-tracking?q=&customer=&limit=&offset=   TEKNIK RESIM TAKIP (EYS.LS.007): sistemdeki her urunun resim durumu/rev no/tarihleri; `customer` TAM eslesme (musteriye gore filtre)
  *   GET  /api/planning/drawing-tracking/customers        EYS.LS.007 kayitlarindaki DISTINCT musteri adlari (filtre acilir kutusu icin)
  *   PUT  /api/planning/drawing-tracking/:kod                izleme alanlarini duzenle (yalniz gonderilen alanlar degisir)
@@ -109,9 +121,12 @@
  *   GET  /api/planning/programs/product-search?q=&limit=  eslemede urun secmek icin DAR arama {total, items: [{stockCode, name, customerCode}]} (operator + yonetici; urun karti degil)
  *   PUT  /api/planning/programs/map                     {program, stockCode}: programi urune bagla
  *   DELETE /api/planning/programs/map?program=          eslemeyi kaldir
- *   POST /api/planning/programs/confirm-exact           stok koduyla birebir tutan onerilerin hepsini onayla
+ *   POST /api/planning/programs/confirm-exact           tek adayli onerilerin hepsini onayla; govde {kind?} 'musteri-kodu' verilirse musteri koduyla tek adayli onerileri onaylar (vars. 'kod' = stok koduyla birebir)
  *   GET  /api/planning/gkk?q=&erpMaterial=&stockCode=   GKK rapor numaralari (EYS.FR.011; okuma: giris yapmis herkes); erpMaterial = is emrinin hammadde kodu -> eslesenler `matches`'te
  *   POST /api/planning/gkk, PUT|DELETE .../gkk/:id, PUT .../gkk/sequence {last}   (yonetici)
+ *   GET  /api/planning/gkk/:id/files                     bu kaydin HAMMADDESINE bagli kalite raporu PDF'leri (satirin ustune basinca acilir; okuma: giris yapmis herkes)
+ *   GET  /api/planning/gkk-folder                        GKK KALITE RAPORU klasoru durumu;  PUT .../dir {dir}  klasoru ayarla;  POST .../match {}  dosyalari HAMMADDE CINSINE gore GKK kayitlarina esle (tek seferlik; yonetici)
+ *   GET  /api/planning/gkk-files/:id                     kalite raporu PDF'ini indir/ac (okuma: giris yapmis herkes);  DELETE ... kaldir (yonetici)
  *   GET  /api/planning/first-approvals?q=&year=         ilk onay raporlari / numune takip listesi (EYS.FR.013; okuma: herkes)
  *   POST /api/planning/first-approvals {woNo, person?, again?}   usta tezgah basinda numara alir (operator + yonetici; elle kayit yoneticiye ozel); PUT|DELETE .../:id, PUT .../sequence (yonetici)
  *   GET  /api/planning/work-orders/:no/drawings.pdf     is emrinin teknik resimleri TEK PDF'te birlesik (okuma: herkes)
@@ -121,6 +136,19 @@
  *   PUT  /api/planning/products/:kod/measure-plan {rows}   urun kartinin kalici olcu plani (yonetici)
  *   POST /api/planning/schedule/suggest                 CIZELGELEME ONERISI (OR-Tools CP-SAT; yalniz yonetici): bekleyen is emirlerini tezgahlara onerir, ASLA yazmaz
  *   POST /api/planning/schedule/apply {assignments: [{no, machineId}]}   onaylanan atamalari isler (mevcut updateWorkOrder yolu; baslamis is emri sessizce atlanir)
+ *   GET  /api/planning/incoming-orders[/:id]            mail'den siparis TASLAKLARI (PDF/e-posta tablosu); Mikro'ya YAZMAZ, bkz. incoming-orders.js
+ *   GET  /api/planning/incoming-orders/product-search?q=&limit=     urun secmek icin DAR arama (programs/product-search'un kopyasi degil: ekranin KENDI yetkisinden gecer)
+ *   POST /api/planning/incoming-orders/pdf?kind=&filename=          govde = ham PDF (yeni|revizyon)
+ *   POST /api/planning/incoming-orders/email-table?kind=&filename=  govde = ham HTML (e-posta govdesindeki tablo)
+ *   PUT  /api/planning/incoming-orders/lines/:id {qty?,deliveryDate?,custOrderNo?,price?,stockCode?}   bekleyen satiri duzeltir (onaydan once her sey duzelenebilir)
+ *   POST /api/planning/incoming-orders/lines/:id/approve {stockCode?}   POST .../reject   bekleyen bir satiri karara baglar
+ *   GET  /api/planning/incoming-orders/mikro/customers?q=&limit=    musteri ara (CARI_HESAPLAR, yalniz admin)
+ *   GET  /api/planning/incoming-orders/lines/:id/mikro-customer     urunun siparis gecmisinden musteriyi coz (yalniz admin)
+ *   POST /api/planning/incoming-orders/lines/:id/mikro-preview|mikro-send {customerCode?, unitPriceValue?, note?}
+ *   GET  /api/planning/incoming-orders/:id/mikro-customer           TASLAGIN TUMU icin: ilk onayli satirin urununden musteriyi coz (yalniz admin)
+ *   POST /api/planning/incoming-orders/:id/mikro-preview|mikro-send {customerCode?, note?}   onayli TUM satirlari TEK evrakta (coklu kalem) onizler/gonderir
+ *     onaylanmis satiri gercek Mikro siparisine cevirir (SiparisKaydetV2; ARASTIRILDI, GERCEK DENENMEDI, yalniz admin,
+ *     mikro-send MIKRO_WRITE_ENABLED=1 olmadan 409 verir)
  */
 import { PlanningError } from './planning.js';
 import { MAX_DRAWING_BYTES } from './quality.js';
@@ -393,6 +421,31 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         return sendJson(res, 200, { drawings: planning.samples.deleteDrawing(Number(m[1]), Number(m[2])) }), true;
       }
 
+      /* ---- siparis fisi (atolye malzeme/takim talebi) ---- */
+      if (path === '/api/planning/supply-requests') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.supplyRequests.list({
+            q: url.searchParams.get('q') ?? '', status: url.searchParams.get('status') ?? '',
+            limit: intParam(url, 'limit', 200, { min: 1, max: 1000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') return sendJson(res, 201, planning.supplyRequests.create(await readJson(req), { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/supply-requests\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, planning.supplyRequests.get(Number(m[1]))), true;
+        if (method === 'PUT') return sendJson(res, 200, planning.supplyRequests.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.supplyRequests.delete(Number(m[1]))), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/supply-requests\/(\d{1,12})\/order$/.exec(path))) {
+        return sendJson(res, 200, planning.supplyRequests.order(Number(m[1]), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/supply-requests\/(\d{1,12})\/receive$/.exec(path))) {
+        return sendJson(res, 200, planning.supplyRequests.receive(Number(m[1]), { by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/supply-requests\/(\d{1,12})\/back$/.exec(path))) {
+        return sendJson(res, 200, planning.supplyRequests.back(Number(m[1]), { by: who(req) })), true;
+      }
+
       /* ---- hurda girisi (karantina giris-cikis EYS.FR.043 + tashih EYS.FR.049) ---- */
       if (path === '/api/planning/quarantine') {
         if (method === 'GET') {
@@ -501,6 +554,35 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       if (method === 'DELETE' && (m = /^\/api\/planning\/maintenance\/logs\/(\d{1,12})$/.exec(path))) {
         return sendJson(res, 200, planning.maintenance.deleteLog(Number(m[1]))), true;
       }
+      // otomatik tik anahtari: usta elle tiklemiyor, sistem periyodu gelince rastgele saatte kendisi tikler
+      // (kullanici bulgusu, 2026-11-19) - kayitsiz birakildi, yalniz yonetici.
+      if (method === 'GET' && path === '/api/planning/maintenance/auto-tick') {
+        return sendJson(res, 200, { enabled: planning.maintenance.autoTickEnabled() }), true;
+      }
+      if (method === 'PUT' && path === '/api/planning/maintenance/auto-tick') {
+        const body = await readJson(req);
+        return sendJson(res, 200, planning.maintenance.setAutoTickEnabled(Boolean(body.enabled))), true;
+      }
+
+      /* ---- takim ve pens takip (EYS.LS.026 + Takim Uclari/Tutuculari) ---- */
+      if (method === 'GET' && path === '/api/planning/tool-items/categories') return sendJson(res, 200, { items: planning.toolInventory.categories() }), true;
+      if (path === '/api/planning/tool-items') {
+        if (method === 'GET') {
+          return sendJson(res, 200, planning.toolInventory.list({
+            q: url.searchParams.get('q') ?? '', limit: intParam(url, 'limit', 500, { min: 1, max: 2000 }), offset: intParam(url, 'offset', 0, { max: 1_000_000 }),
+          })), true;
+        }
+        if (method === 'POST') return sendJson(res, 201, planning.toolInventory.create(await readJson(req), { by: who(req) })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/tool-items/import') {
+        const body = await readBuffer(req, MAX_CSV_BYTES);
+        return sendJson(res, 200, planning.toolInventory.importXlsx(body, { by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/tool-items\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendJson(res, 200, planning.toolInventory.get(Number(m[1]))), true;
+        if (method === 'PUT') return sendJson(res, 200, planning.toolInventory.update(Number(m[1]), await readJson(req), { by: who(req) })), true;
+        if (method === 'DELETE') return sendJson(res, 200, planning.toolInventory.delete(Number(m[1]))), true;
+      }
 
       /* ---- teknik resim takip (EYS.LS.007) ---- */
       if (method === 'GET' && path === '/api/planning/drawing-tracking/customers') return sendJson(res, 200, { items: planning.drawingTracking.customers() }), true;
@@ -532,6 +614,106 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         return sendJson(res, 200, {
           lines: planning.orderLines({ customerKey: p.get('customerKey'), custOrderKey: p.get('custOrderKey'), docKey: p.get('docKey') }),
         }), true;
+      }
+
+      /* ---- mail'den siparis girisi (PDF/e-posta tablosu -> taslak; Mikro'ya YAZMAZ, bkz. incoming-orders.js) ---- */
+      if (method === 'GET' && path === '/api/planning/incoming-orders') {
+        return sendJson(res, 200, { batches: planning.incomingOrders.listBatches({ limit: intParam(url, 'limit', 50, { min: 1, max: 200 }) }) }), true;
+      }
+      if (method === 'GET' && path === '/api/planning/incoming-orders/product-search') {
+        const r = planning.listProducts({ q: url.searchParams.get('q') ?? '', limit: intParam(url, 'limit', 30, { min: 1, max: 50 }), offset: 0 });
+        return sendJson(res, 200, { total: r.total, items: r.items.map((x) => ({ stockCode: x.stockCode, name: x.name, customerCode: x.customerCode })) }), true;
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/incoming-orders\/(\d{1,12})$/.exec(path))) {
+        return sendJson(res, 200, planning.incomingOrders.getBatch(Number(m[1]))), true;
+      }
+      if (method === 'POST' && path === '/api/planning/incoming-orders/pdf') {
+        const data = await readBuffer(req, MAX_DRAWING_BYTES + 4096);
+        const kind = url.searchParams.get('kind') === 'revizyon' ? 'revizyon' : 'yeni';
+        return sendJson(res, 201, planning.incomingOrders.importPdf(data, { filename: url.searchParams.get('filename'), kind, by: who(req) })), true;
+      }
+      if (method === 'POST' && path === '/api/planning/incoming-orders/email-table') {
+        const data = await readBuffer(req, MAX_CSV_BYTES);
+        const kind = url.searchParams.get('kind') === 'revizyon' ? 'revizyon' : 'yeni';
+        return sendJson(res, 201, planning.incomingOrders.importEmailTable(data.toString('utf8'), { filename: url.searchParams.get('filename'), kind, by: who(req) })), true;
+      }
+      if (method === 'PUT' && (m = /^\/api\/planning\/incoming-orders\/lines\/(\d{1,12})$/.exec(path))) {
+        const b = await readJson(req);
+        return sendJson(res, 200, planning.incomingOrders.updateLine(Number(m[1]), { ...b, by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/incoming-orders\/lines\/(\d{1,12})\/approve$/.exec(path))) {
+        const b = await readJson(req);
+        return sendJson(res, 200, planning.incomingOrders.approveLine(Number(m[1]), { stockCode: b.stockCode ?? null, by: who(req) })), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/incoming-orders\/lines\/(\d{1,12})\/reject$/.exec(path))) {
+        return sendJson(res, 200, planning.incomingOrders.rejectLine(Number(m[1]), { by: who(req) })), true;
+      }
+
+      /* ---- onaylanmis taslak -> gercek Mikro siparisi (SiparisKaydetV2) - ARASTIRILDI (2026-11-18), GERCEK
+         Mikro'ya karsi HENUZ DENENMEDI; mikroOrders.send() MIKRO_WRITE_ENABLED=1 olmadan hep 409 verir. Bu
+         yollar KAYITSIZ birakildi (material/mikro/transfer-* ile AYNI karar): yalniz admin. ---- */
+      if (method === 'GET' && path === '/api/planning/incoming-orders/mikro/customers') {
+        return sendJson(res, 200, { items: await planning.mikroOrders.searchCustomers(url.searchParams.get('q') ?? '', intParam(url, 'limit', 20, { min: 1, max: 50 })) }), true;
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/incoming-orders\/lines\/(\d{1,12})\/mikro-customer$/.exec(path))) {
+        const line = planning.incomingOrders.getLine(Number(m[1]));
+        if (!line.matchedStockCode) throw new PlanningError('Önce bu satırı bir ürüne eşleyin.', 400, 'no-product');
+        return sendJson(res, 200, { customer: await planning.mikroOrders.resolveCustomerForStock(line.matchedStockCode) }), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/incoming-orders\/lines\/(\d{1,12})\/mikro-(preview|send)$/.exec(path))) {
+        const line = planning.incomingOrders.getLine(Number(m[1]));
+        if (line.status !== 'onaylandi') throw new PlanningError('Bu satır önce onaylanmalı.', 409, 'not-approved');
+        if (!line.matchedStockCode) throw new PlanningError('Önce bu satırı bir ürüne eşleyin.', 400, 'no-product');
+        const b = await readJson(req);
+        const customerCode = b.customerCode || (await planning.mikroOrders.resolveCustomerForStock(line.matchedStockCode))?.customerCode;
+        if (!customerCode) throw new PlanningError('Müşteri kodu bulunamadı: elle seçin.', 400, 'no-customer');
+        // odemePlanNo musteri kartindan (sip_opno ile BIREBIR ayni, bkz. mikro-order.js), docSeri/docSira ofisin
+        // kendi "Yeni" ile yaptigi sira+1 hesabi - ikisi de GONDERMEDEN HEMEN ONCE taze okunur (preview'de de,
+        // send'de de; aralarinda baska bir siparis girilmis olabilir, en GUNCEL sirayi kullanmak icin).
+        const [odemePlanNo, doc] = await Promise.all([planning.mikroOrders.odemePlanOf(customerCode), planning.mikroOrders.nextOrderDocNo()]);
+        // b.unitPriceValue gonderilmediyse (undefined - key hic yok) PDF'ten cikarilan/elle duzeltilmis
+        // line.price'a dusulur; UNDEFINED kontrolu SART (bos string gonderip "fiyati sil" diyen bir istek
+        // null gonderir, bu YOK SAYILMAMALI).
+        const preview = planning.mikroOrders.previewCreateOrder({
+          customerCode, custOrderNo: line.custOrderNo,
+          items: [{ stockCode: line.matchedStockCode, qty: line.qty, dueDateMs: line.deliveryDate, unitPriceValue: b.unitPriceValue !== undefined ? b.unitPriceValue : line.price }],
+          note: b.note, odemePlanNo, docSeri: doc.seri, docSira: doc.sira,
+        });
+        if (m[2] === 'preview') return sendJson(res, 200, preview), true;
+        return sendJson(res, 200, { preview, result: await planning.mikroOrders.send(preview) }), true;
+      }
+
+      /* ---- taslagin TUM onayli satirlari -> TEK Mikro siparisi, coklu kalem (2026-11-19, kullanici istegi:
+         "bunların hepsi tek sipariş içinde... tek bir siparişte mikroya yaz"). Yukaridaki satir-bazli yol HALA
+         DURUYOR (tek kalemlik eski siparisler icin); bu, previewCreateOrder'in zaten destekledigi coklu-kalem
+         kapasitesini (bkz. mikro-order.js dosya basi, gercek HAVANA/SAS0003812 testi) BATCH duzeyinde acar. ---- */
+      if (method === 'GET' && (m = /^\/api\/planning\/incoming-orders\/(\d{1,12})\/mikro-customer$/.exec(path))) {
+        const { lines } = planning.incomingOrders.approvedLinesForOrder(Number(m[1]));
+        return sendJson(res, 200, { customer: await planning.mikroOrders.resolveCustomerForStock(lines[0].matchedStockCode) }), true;
+      }
+      if (method === 'POST' && (m = /^\/api\/planning\/incoming-orders\/(\d{1,12})\/mikro-(preview|send)$/.exec(path))) {
+        const { lines } = planning.incomingOrders.approvedLinesForOrder(Number(m[1]));
+        const b = await readJson(req);
+        let customerCode = b.customerCode;
+        if (!customerCode) {
+          // elle verilmediyse HER satirin kendi urununden coz; hepsi AYNI musteriye cikmali (tek evrak, tek
+          // musteri) - farkli musteriler cikarsa (ayni PDF'te iki farkli musteri olmasi beklenmez ama tespit
+          // edilmeli) sessizce birini secmek yerine ACIKCA reddedilir, kullanici elle secer.
+          const resolved = await Promise.all(lines.map((l) => planning.mikroOrders.resolveCustomerForStock(l.matchedStockCode)));
+          const codes = [...new Set(resolved.map((r) => r?.customerCode).filter(Boolean))];
+          if (codes.length === 0) throw new PlanningError('Müşteri kodu bulunamadı: elle seçin.', 400, 'no-customer');
+          if (codes.length > 1) throw new PlanningError(`Satırlar farklı müşterilere ait görünüyor (${codes.join(', ')}): elle seçin.`, 409, 'multiple-customers');
+          [customerCode] = codes;
+        }
+        const [odemePlanNo, doc] = await Promise.all([planning.mikroOrders.odemePlanOf(customerCode), planning.mikroOrders.nextOrderDocNo()]);
+        const custOrderNo = lines.find((l) => l.custOrderNo)?.custOrderNo ?? null;
+        const preview = planning.mikroOrders.previewCreateOrder({
+          customerCode, custOrderNo,
+          items: lines.map((l) => ({ stockCode: l.matchedStockCode, qty: l.qty, dueDateMs: l.deliveryDate, unitPriceValue: l.price })),
+          note: b.note, odemePlanNo, docSeri: doc.seri, docSira: doc.sira,
+        });
+        if (m[2] === 'preview') return sendJson(res, 200, preview), true;
+        return sendJson(res, 200, { preview, result: await planning.mikroOrders.send(preview) }), true;
       }
 
       /* ---- is emirleri ---- */
@@ -573,6 +755,10 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       // Hic baslatilmamis eski is emrini geriye donuk, ELLE bitirir (adet telemetriden sayilmaz).
       if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/finish-manual$/.exec(path))) {
         return sendJson(res, 200, planning.finishWorkOrderManually(m[1], await readJson(req), { by: who(req) })), true;
+      }
+      // GECICI (bkz. planning.js correctFinishedQty): BITMIS is emrinde adedi dogrudan duzeltir, "geri al + yeniden bitir" gerekmez.
+      if (method === 'POST' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/correct-qty$/.exec(path))) {
+        return sendJson(res, 200, planning.correctFinishedQty(m[1], await readJson(req), { by: who(req) })), true;
       }
       /* ---- bitmis urun depo akisi (Merkez<->Gecici, Mikro yazma MIKRO_WRITE_ENABLED=1 olmadan KAPALI; yalniz yonetici) ---- */
       if (method === 'GET' && (m = /^\/api\/planning\/work-orders\/(\d{10})\/depot-status$/.exec(path))) {
@@ -644,6 +830,20 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
       if ((m = /^\/api\/planning\/gkk\/(\d{1,12})$/.exec(path))) {
         if (method === 'PUT') return sendJson(res, 200, planning.quality.updateGkk(Number(m[1]), await readJson(req), { by: who(req) })), true;
         if (method === 'DELETE') return sendJson(res, 200, planning.quality.deleteGkk(Number(m[1]))), true;
+      }
+      if (method === 'GET' && (m = /^\/api\/planning\/gkk\/(\d{1,12})\/files$/.exec(path))) {
+        return sendJson(res, 200, planning.quality.filesOfGkk(Number(m[1]))), true;
+      }
+
+      /* ---- GKK kalite raporu klasoru: dosyalari hammadde cinsine gore GKK kayitlarina esle (tek seferlik; yonetici) ---- */
+      if ((m = /^\/api\/planning\/gkk-folder(?:\/(dir|match))?$/.exec(path))) {
+        if (!m[1] && method === 'GET') return sendJson(res, 200, planning.gkkFolder.status()), true;
+        if (m[1] === 'dir' && method === 'PUT') { planning.gkkFolder.setDir((await readJson(req)).dir); return sendJson(res, 200, planning.gkkFolder.status()), true; }
+        if (m[1] === 'match' && method === 'POST') return sendJson(res, 200, planning.gkkFolder.match({ by: who(req) })), true;
+      }
+      if ((m = /^\/api\/planning\/gkk-files\/(\d{1,12})$/.exec(path))) {
+        if (method === 'GET') return sendProductFile(res, planning.quality.gkkFileData(Number(m[1]))), true;
+        if (method === 'DELETE') { planning.quality.removeGkkFile(Number(m[1])); return sendJson(res, 200, { ok: true }), true; }
       }
 
       /* ---- ilk onay raporu / numune takip listesi (EYS.FR.013) ---- */
@@ -800,7 +1000,8 @@ export function createPlanningRoutes({ planning, closedSections = [] }) {
         return sendJson(res, 200, { ok: true }), true;
       }
       if (method === 'POST' && path === '/api/planning/programs/confirm-exact') {
-        return sendJson(res, 200, { confirmed: planning.confirmExactSuggestions({ by: who(req) }) }), true;
+        const b = await readJson(req);
+        return sendJson(res, 200, { confirmed: planning.confirmExactSuggestions({ by: who(req), kind: b.kind }) }), true;
       }
 
       /* ---- cizelgeleme / optimizasyon (OR-Tools CP-SAT; yalniz yonetici): oneri ASLA otomatik uygulanmaz ---- */

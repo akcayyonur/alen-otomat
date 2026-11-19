@@ -29,8 +29,11 @@
  * etkisi netleşmedi, 0 kabul edildi ama doğru değer bu mu bilmiyoruz).
  *
  * `previewCreateProduct`/`previewUpdateProductWeight` (2026-11-13): YENİ bir Mikro yazma SINIFI — stok
- * HAREKETİ değil, stok KARTININ KENDİSİ (`StokKaydetV2`, resmi dokümantasyondan kuruldu). Bu ikisi, buradaki
- * diğer her fonksiyonun aksine, **GERÇEK MİKRO'YA KARŞI HİÇ DENENMEDİ** — ayrıntı kendi doc-comment'lerinde.
+ * HAREKETİ değil, stok KARTININ KENDİSİ. **2026-11-16'da GERÇEK Mikro'ya karşı doğrulandı** (SR006.019,
+ * Nİ199.002 — ikisi de testten sonra silindi): `previewCreateProduct` `StokKaydetV2` + dokümante edilmemiş ama
+ * çalışan `user_tablo` ile; `previewUpdateProductWeight` ise `StokKaydetV2` DEĞİL (INSERT-ONLY olduğu
+ * kanıtlandı, var olanı reddediyor) genel `KayitKaydetV2` ucu (STOKLAR Tablo No 13, Güncelle) ile — ayrıntı
+ * kendi doc-comment'lerinde.
  */
 import { PlanningError } from './errors.js';
 
@@ -87,9 +90,10 @@ function pieceCount(v) {
  * karakterleri (`%`, `_`, `[`, `]`) ATILIR — tutulmaz/kaçırılmaz, çünkü kaçırma (escape) biçimi MikroAPI'nin SQL
  * lehçesine göre değişebilir ve burada doğrulanmadı; atmak (strip) hem basit hem her durumda güvenli. Adını taşıyan
  * tek bir fonksiyonda tutulur ki bu desen ileride başka bir Mikro SQL sorgusuna kopyalanırken karakter kümesi
- * unutulmasın/yanlış kopyalanmasın (2026-11-10, kod incelemesinde bulundu).
+ * unutulmasın/yanlış kopyalanmasın (2026-11-10, kod incelemesinde bulundu). Dışa aktarılır: `mikro-order.js`
+ * (müşteri arama) AYNI fonksiyonu kullanır — ikinci bir kopya YAZILMADI.
  */
-function likeTermForMikro(q) {
+export function likeTermForMikro(q) {
   return String(q ?? '').trim().replace(/[%_[\]']/g, '');
 }
 
@@ -243,46 +247,67 @@ export class MikroStock {
    * stok kategorisinde bu YAZMA ucu için TEK alternatif yok (`StokListesiV2` salt okuma) — `DahiliStokHareketKaydetV2`
    * ile AYNI yapıda (`stoklar` `Mikro` bloğunun İÇİNDE, `nestInMikro:true`).
    *
-   * Vergi/cins gibi doğru değeri bilinmeyen alanlar GÖNDERİLMEZ (Mikro kendi varsayılanını uygulasın; yanlış bir
-   * vergi/cins kodu girmekten daha güvenli). **BU UÇ GERÇEK MİKRO'YA KARŞI HENÜZ HİÇ DENENMEDİ** (yalnız resmi
-   * dokümantasyondan kuruldu, diğer her yeni yazma türünde olduğu gibi ilk gerçek deneme yönetici ile birlikte
-   * yapılmalı — `stoklar` dizisinin gerçekten `StokKaydetV2`'nin beklediği şema olup olmadığı dahil).
+   * **`sto_cins: 4` (Mamül) AÇIKÇA gönderilir (2026-11-16, kullanıcının gerçek bir Mikro ekran görüntüsünden
+   * fark etmesiyle eklendi):** Mikro'nun resmi "Tablo Alan Yapıları" sayfası (`STOKLAR.sto_cins`) değerleri
+   * sayıyor — `0:Ticari Mal 1:İlk Madde 2:Ara Mamül 3:Yarı Mamül 4:Mamül 5:Yan Mamül 6:İşletme Malzemesi
+   * 7:Tüketim Malzemesi 8:Yedek Parça 9:Akaryakıt Stok 10:Montaj Reçeteli Mamül 11:Temel Hammadde` — ve gerçek
+   * bir SR kodlu kartın ekranı da "Cinsi: Mamül" gösteriyor. SR/Nİ kodları Alen Otomat'ın KENDİ ürettiği parçalar
+   * (satın alınan ticari mal değil), bu yüzden `4` burada bir TAHMİN değil, doğrulanmış ve her zaman doğru bir
+   * sabit (bu fonksiyonun TEK çağrıcısı `sample-tracking.js`'in otomatik numune kodu akışı — başka bir sto_cins
+   * gerektiren bir çağrı yok). Doğru değeri hâlâ bilmediğimiz tek alanlar vergi kodları (`sto_perakende_vergi`/
+   * `sto_toptan_vergi`) — onlar GÖNDERİLMEZ (Mikro kendi varsayılanını uygulasın; yanlış bir vergi kodu girmekten
+   * daha güvenli).
+   *
+   * **`user_tablo` — MAKINA/HAMMADDE/ALIŞIM/TAM_BOY (2026-11-16, GERÇEK Mikro'ya karşı doğrulandı, SR006.019 ve
+   * Nİ199.002 ile — ikisi de testten sonra yönetici tarafından Mikro'dan silindi):** `StokKaydetV2`'nin resmi
+   * şemasında bu alan YOK, ama `DahiliStokHareketKaydetV2`/`MuhasebeFisKaydetV2`'de resmi olan bu mekanizma
+   * (dokümante edilmemiş olsa da) burada da çalışıyor — `stoklar[0].user_tablo: [{MAKINA, HAMMADDE, ALISIM,
+   * TAM_BOY}]` gönderilince Mikro **STOKLAR_USER satırını kendisi açıp `Record_uid`'i yeni kartın Guid'ine
+   * otomatik bağlıyor** (biz Guid vermiyoruz). Yalnız DOLU verilen alanlar `user_tablo`'ya girer; hiçbiri
+   * verilmezse `user_tablo` hiç gönderilmez (boş bir STOKLAR_USER satırı açılmaz). `hammadde` (numunenin
+   * `material` alanı) ve `tamBoy` (numunenin `lengthMm` alanı) için gerçek kaynak var; `makina`/`alisim` için
+   * henüz bir numune alanı yok (çağıran isterse verir, yoksa Mikro'da elle doldurulur).
    */
-  previewCreateProduct({ stockCode, name, unit = 'AD' } = {}) {
+  previewCreateProduct({ stockCode, name, unit = 'AD', hammadde, tamBoy, makina, alisim } = {}) {
     const code = stockCodeOf(stockCode);
     const isim = (String(name ?? '').trim() || code).slice(0, 50);
-    const body = { stoklar: [{ sto_kod: code, sto_isim: isim, sto_kisa_ismi: isim.slice(0, 20), sto_birim1_ad: unit }] };
+    const stok = { sto_kod: code, sto_isim: isim, sto_kisa_ismi: isim.slice(0, 20), sto_birim1_ad: unit, sto_cins: 4 };
+    const userTablo = {};
+    if (makina != null && makina !== '') userTablo.MAKINA = String(makina);
+    if (hammadde != null && hammadde !== '') userTablo.HAMMADDE = String(hammadde);
+    if (alisim != null && alisim !== '') userTablo.ALISIM = String(alisim);
+    if (tamBoy != null && Number.isFinite(Number(tamBoy))) userTablo.TAM_BOY = Number(tamBoy);
+    if (Object.keys(userTablo).length > 0) stok.user_tablo = [userTablo];
+    const body = { stoklar: [stok] };
     return {
       kind: 'stok-kart-olustur', endpoint: 'StokKaydetV2', body, writeEnabled: this.writeEnabled(),
-      assumed: ['stoklar[] şeması (resmi .md\'den, hiç gerçek yazmayla denenmedi)', 'sto_cins/sto_doviz_cinsi/vergi alanları (gönderilmedi, Mikro varsayılanı)'],
+      assumed: ['stoklar[] şeması (resmi .md\'den)', 'vergi alanları (gönderilmedi, Mikro varsayılanı)'],
     };
   }
 
   /**
-   * VAR OLAN bir stok kartının net ağırlığını günceller — Mikro'nun stok kategorisinde ayrı bir "güncelle" ucu
-   * YOK (yalnız `StokKaydetV2` + okuma ucu `StokListesiV2`, 2026-11-13 doğrulandı), bu yüzden AYNI uç yeniden
-   * çağrılır. `sto_birim1_agirlik` alan adı `STOKLAR` okumalarından biliniyor (BR/NT eşlemesi, CLAUDE.md "G
-   * aşaması") ama `StokKaydetV2`'nin RESMİ alan listesinde YOK — bu bir TAHMİN.
+   * VAR OLAN bir stok kartının net ağırlığını günceller — `StokKaydetV2` İLE DEĞİL (2026-11-16, GERÇEK Mikro'ya
+   * karşı denenip DÜZELTİLDİ): `StokKaydetV2` **INSERT-ONLY** — var olan bir `sto_kod`'u ikinci kez göndermek
+   * HER ZAMAN `"Gönderilen stok sistemde mevcuttur!"` hatasıyla reddediliyor (önceki tasarım bu yüzden KESİN
+   * olarak bozuktu: gerçek kullanımda — ki her zaman var olan bir karta ağırlık yazar — hep başarısız olurdu).
    *
-   * **ÇOK ÖNEMLİ KISIT — yalnız BİZİM OLUŞTURDUĞUMUZ (`sample-tracking.js`'in `auto_generated` kartları) stok
-   * kodları için çağrılmalı, Mikro'da BAŞKA bir yolla (Mikro'nun kendi ekranı, Excel/Mikro senkronu) zaten var
-   * olan bir kartı GÜNCELLEMEYE ÇALIŞMA:** `StokKaydetV2`'nin gönderilmeyen alanları KORUYUP KORUMADIĞI (kısmi
-   * güncelleme) yoksa TAM DEĞİŞTİRME mi yaptığı (gönderilmeyen alanları sıfırlayıp) HİÇ BİLİNMİYOR — tam
-   * değiştirme ise, bizim bilmediğimiz bir kartı burada güncellemeye çalışmak onun adını/diğer alanlarını
-   * SESSİZCE SİLEBİLİR. `sto_isim`/`sto_kisa_ismi` bu yüzden SAVUNMACI olarak yeniden gönderilir (en azından
-   * KENDİ oluşturduğumuz kart için adın kaybolmaması için) ama bu, başka bir kart için güvenli olduğu anlamına
-   * gelmez. **BU UÇ GERÇEK MİKRO'YA KARŞI HENÜZ HİÇ DENENMEDİ**; ilk deneme yönetici ile birlikte, kendi
-   * oluşturduğumuz bir test numunesiyle yapılmalı.
+   * Doğru yol: genel **`KayitKaydetV2`** ucu, STOKLAR'ın RESMİ Tablo No'suyla (**13**,
+   * `apidocs.mikro.com.tr/tablo-alan-adlari/stoklar.md`'den — TAHMİN değil) ve `KayitTipi:'1'` (Güncelle); satır
+   * `sto_kod` ile eşleşiyor. GERÇEK testte (SR006.019, sonradan silindi) doğrulandı: bu GERÇEK bir KISMİ/MERGE
+   * güncelleme — yalnız gönderilen alan (`sto_birim1_agirlik`) değişti, `sto_isim`/`sto_cins` gibi HİÇ
+   * GÖNDERİLMEYEN alanlar KORUNDU, ve `STOKLAR_USER` (ayrı tablo, `previewCreateProduct`'taki `user_tablo`) bu
+   * STOKLAR-only güncellemeden HİÇ etkilenmedi. Bu yüzden `previewCreateProduct`'ın aksine burada `sto_isim`/
+   * `sto_cins`'i SAVUNMACI olarak yeniden göndermeye GEREK YOK (eski tasarımın "tam değiştirme ihtimaline karşı"
+   * savunması artık geçersiz — kısmi güncelleme kanıtlı).
    */
-  previewUpdateProductWeight({ stockCode, name, netKg, unit = 'AD' } = {}) {
+  previewUpdateProductWeight({ stockCode, netKg } = {}) {
     const code = stockCodeOf(stockCode);
     const kg = Number(netKg);
     if (!Number.isFinite(kg) || kg <= 0 || kg > 100) throw new PlanningError('Net ağırlık 0 ile 100 kg arasında bir sayı olmalı.', 400, 'bad-weight');
-    const isim = (String(name ?? '').trim() || code).slice(0, 50);
-    const body = { stoklar: [{ sto_kod: code, sto_isim: isim, sto_kisa_ismi: isim.slice(0, 20), sto_birim1_ad: unit, sto_birim1_agirlik: round(kg, 4) }] };
+    const body = { Kayit: [{ sto_kod: code, sto_birim1_agirlik: round(kg, 4) }], Tablo: [{ KayitTipi: '1', No: '13' }] };
     return {
-      kind: 'stok-kart-agirlik', endpoint: 'StokKaydetV2', body, writeEnabled: this.writeEnabled(),
-      assumed: ['sto_birim1_agirlik (STOKLAR okumasından; StokKaydetV2 resmi şemasında YOK)', 'StokKaydetV2 kısmi mi tam değiştirme mi — bilinmiyor'],
+      kind: 'stok-kart-agirlik', endpoint: 'KayitKaydetV2', body, writeEnabled: this.writeEnabled(),
+      assumed: ['sto_birim1_agirlik (STOKLAR okumasından; KayitKaydetV2 genel bir uç olduğu için tablo-özel alan dokümantasyonu yok)'],
     };
   }
 

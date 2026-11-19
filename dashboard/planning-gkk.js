@@ -5,11 +5,18 @@
  * İş emrinin ERP hammadde kodu ("HM614.AA24.00XYU13.00") kayıttaki cinsle otomatik eşleştirilir (openGkkPicker): ustaya önce uyanlar sunulur,
  * "aynı ölçü ama işlem farklı" (ısıl işlemli, HB ...) ayrıca işaretlenir.
  * Herkes (izleyici dahil) okur; ekleme/düzenleme/silme yöneticiye özel. Yeni numarayı sistem verir (GK + yıl + sıra).
+ *
+ * Kalite raporu PDF'i (2026-11-17, kullanıcı isteği; 2026-11-19'da hammadde cinsi yerine RAPOR NUMARASINA
+ * bağlanacak şekilde düzeltildi): satırın üstüne basınca üretici kalite raporu PDF'i açılır (varsa).
+ * "Klasörden kalite raporu eşle…" (yalnız yönetici, tek seferlik, planning-gkk-folder.js) dosyaları,
+ * adlarından çıkan GK RAPOR NUMARASINA göre eşler — aynı rapor numarasını paylaşan kayıtlar aynı dosyayı
+ * görür; aynı hammaddenin farklı rapor numaraları (ayrı teslimat) ayrı dosya sayılır.
  */
 import { escapeHtml } from './format.js';
 import { api, post } from './lib-common.js';
 import { put, del, cellText, fmtNum, dateText, debounce, openModal, isoDate, isAdminRole, canWrite, chip, openListPrint, truncCell } from './planning-common.js';
 import { openFormDialog } from './auth-view.js';
+import { openGkkFolderDialog } from './planning-gkk-folder.js';
 
 const plainDate = (ms) => (ms ? new Date(ms).toLocaleDateString('tr-TR') : '');
 const MATCH = Object.freeze({
@@ -27,9 +34,11 @@ export function renderGkk(host) {
   host.innerHTML =
     '<div class="pl-bar"><input type="search" class="pl-search pl-search-big" data-role="q" placeholder="Hammadde cinsi (ör. AA24 X 13) ya da rapor no ara…" aria-label="GKK kaydı ara" autocomplete="off">' +
     '<button type="button" class="icon-btn" data-act="print">Listeyi yazdır</button>' +
+    (admin ? '<button type="button" class="icon-btn" data-act="folder">Klasörden kalite raporu eşle…</button>' : '') +
     (admin ? '<button type="button" class="icon-btn" data-act="seq">Numara tabanı…</button>' : '') +
     (yazabilir ? '<button type="button" class="icon-btn btn-primary" data-act="new">Yeni GK numarası…</button>' : '') + '</div>' +
     '<p class="hint" data-role="count"></p>' +
+    '<p class="hint">Kalite raporu eklenmiş bir satıra basınca PDF açılır.</p>' +
     '<div class="table-wrap table-wrap-tall" data-role="list"></div>';
   const $ = (r) => host.querySelector(`[data-role="${r}"]`);
 
@@ -39,12 +48,24 @@ export function renderGkk(host) {
       ? (st.q ? 'Eşleşen kayıt yok.' : `Henüz kayıt yok.${nasil.length ? ` ${nasil.join(' ya da ')}.` : ''}`)
       : `${fmtNum(st.total)}${st.total !== st.count ? ` / ${fmtNum(st.count)}` : ''} kayıt · sıradaki numara <b class="mono">${escapeHtml(st.next?.no ?? '—')}</b>`;
     $('list').innerHTML = st.items.length === 0 ? '' :
-      '<table class="tbl tbl-pl"><thead><tr><th class="num">Sıra</th><th>Hammadde cinsi</th><th>Rapor no</th><th>Üretici rapor tarihi</th><th>Açıklama</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +
+      '<table class="tbl tbl-pl"><thead><tr><th class="num">Sıra</th><th>Hammadde cinsi</th><th>Rapor no</th><th>Üretici rapor tarihi</th><th>Açıklama</th><th>Kalite raporu</th>' + (admin ? '<th></th>' : '') + '</tr></thead><tbody>' +
       st.items.map((g, i) =>
-        `<tr data-id="${g.id}"><td class="num">${fmtNum(i + 1)}</td><td class="trunc" title="${escapeHtml(g.material)}"><b>${escapeHtml(g.material)}</b></td><td class="mono pl-gk-no"><b>${escapeHtml(g.reportNo)}</b></td>` +
+        `<tr class="pl-row" data-id="${g.id}" tabindex="0"><td class="num">${fmtNum(i + 1)}</td><td class="trunc" title="${escapeHtml(g.material)}"><b>${escapeHtml(g.material)}</b></td><td class="mono pl-gk-no"><b>${escapeHtml(g.reportNo)}</b></td>` +
         `<td>${dateText(g.producerDate)}</td><td class="trunc"${truncCell(g.note)}>${cellText(g.note)}</td>` +
+        `<td>${g.fileCount > 0 ? chip('ok', '📄', `${fmtNum(g.fileCount)} dosya`) : chip('none', '–', 'yok')}</td>` +
         (admin ? `<td class="nowrap"><button type="button" class="icon-btn icon-btn-sm" data-act="edit" data-id="${g.id}">Düzenle</button> <button type="button" class="icon-btn icon-btn-sm" data-act="delete" data-id="${g.id}">Sil</button></td>` : '') + '</tr>').join('') +
       '</tbody></table>';
+  }
+
+  /** Satırın üstüne basınca: bu rapor numarasının kalite raporu PDF'i varsa açılır (tek dosya direkt, birden çoksa seçim listesi). */
+  async function openGkkReport(item) {
+    if (!item || !item.fileCount) { window.alert('Bu rapor numarasına henüz kalite raporu PDF\'i eklenmedi.'); return; }
+    let files;
+    try { files = await api(`/api/planning/gkk/${item.id}/files`); } catch (err) { window.alert(`Alınamadı: ${err.message}`); return; }
+    if (files.length === 0) { window.alert('Bu rapora bağlı kalite raporu yok.'); return; }
+    if (files.length === 1) { window.open(`/api/planning/gkk-files/${files[0].id}`, '_blank', 'noopener'); return; }
+    const m = openModal({ title: `${item.reportNo} · kalite raporları` });
+    m.body.innerHTML = `<ul class="pl-list">${files.map((f) => `<li><a href="/api/planning/gkk-files/${f.id}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a></li>`).join('')}</ul>`;
   }
 
   async function load() {
@@ -63,29 +84,40 @@ export function renderGkk(host) {
   host.oninput = (ev) => { if (ev.target.dataset?.role === 'q') search(ev.target.value); };
   host.onclick = async (ev) => {
     const b = ev.target.closest('[data-act]');
-    if (!b) return;
-    const item = st.items.find((x) => x.id === Number(b.dataset.id));
-    if (b.dataset.act === 'new') openGkkForm(null, st.next, load);
-    else if (b.dataset.act === 'edit' && item) openGkkForm(item, st.next, load);
-    else if (b.dataset.act === 'delete' && item) {
-      if (!window.confirm(`${item.reportNo} · ${item.material} kaydı silinsin mi? Bu işlem geri alınamaz.`)) return;
-      try { await del(`/api/planning/gkk/${item.id}`); load(); } catch (e) { window.alert(e.message); }
-    } else if (b.dataset.act === 'print') {
-      openListPrint({
-        title: 'GİRİŞ KALİTE KONTROL RAPOR NUMARASI TAKİP FORMU', formNo: 'EYS.FR.011',
-        heads: ['SIRA', 'ÜRÜN', 'RAPOR NO', 'ÜRETİCİ RAPOR TARİHİ', 'AÇIKLAMA'],
-        rows: st.items.map((g, i) => [i + 1, g.material, g.reportNo, plainDate(g.producerDate), g.note ?? '']),
-        note: st.q ? `Süzgeç: "${st.q}"` : '',
-      });
-    } else if (b.dataset.act === 'seq') {
-      openFormDialog({
-        title: 'GK numara tabanı',
-        intro: 'Kâğıtta verilmiş ama bu listede kaydı olmayan numaralar varsa, en son verilen numarayı yazın: yeni numaralar ondan devam eder. Küçültülemez.',
-        fields: [{ name: 'last', label: 'En son verilen GK numarası', hint: `ör. ${st.next?.no ?? 'GK26.396'}` }],
-        submitLabel: 'Ayarla',
-        onSubmit: async (v) => { await put('/api/planning/gkk/sequence', { last: v.last }); load(); },
-      });
+    if (b) {
+      const item = st.items.find((x) => x.id === Number(b.dataset.id));
+      if (b.dataset.act === 'new') openGkkForm(null, st.next, load);
+      else if (b.dataset.act === 'edit' && item) openGkkForm(item, st.next, load);
+      else if (b.dataset.act === 'delete' && item) {
+        if (!window.confirm(`${item.reportNo} · ${item.material} kaydı silinsin mi? Bu işlem geri alınamaz.`)) return;
+        try { await del(`/api/planning/gkk/${item.id}`); load(); } catch (e) { window.alert(e.message); }
+      } else if (b.dataset.act === 'print') {
+        openListPrint({
+          title: 'GİRİŞ KALİTE KONTROL RAPOR NUMARASI TAKİP FORMU', formNo: 'EYS.FR.011',
+          heads: ['SIRA', 'ÜRÜN', 'RAPOR NO', 'ÜRETİCİ RAPOR TARİHİ', 'AÇIKLAMA'],
+          rows: st.items.map((g, i) => [i + 1, g.material, g.reportNo, plainDate(g.producerDate), g.note ?? '']),
+          note: st.q ? `Süzgeç: "${st.q}"` : '',
+        });
+      } else if (b.dataset.act === 'seq') {
+        openFormDialog({
+          title: 'GK numara tabanı',
+          intro: 'Kâğıtta verilmiş ama bu listede kaydı olmayan numaralar varsa, en son verilen numarayı yazın: yeni numaralar ondan devam eder. Küçültülemez.',
+          fields: [{ name: 'last', label: 'En son verilen GK numarası', hint: `ör. ${st.next?.no ?? 'GK26.396'}` }],
+          submitLabel: 'Ayarla',
+          onSubmit: async (v) => { await put('/api/planning/gkk/sequence', { last: v.last }); load(); },
+        });
+      } else if (b.dataset.act === 'folder') {
+        openGkkFolderDialog({ onDone: load });
+      }
+      return;
     }
+    const row = ev.target.closest('.pl-row');
+    if (row) openGkkReport(st.items.find((x) => x.id === Number(row.dataset.id)));
+  };
+  host.onkeydown = (ev) => {
+    if (ev.key !== 'Enter') return;
+    const row = ev.target.closest?.('.pl-row');
+    if (row) openGkkReport(st.items.find((x) => x.id === Number(row.dataset.id)));
   };
   load();
 }

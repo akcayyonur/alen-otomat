@@ -2,7 +2,8 @@
  * Excel'den "CSV" olarak kaydedilen iki dosyanin iceri alinmasi. Bicim BASLIKLARDAN otomatik tanınır:
  *
  *   is emirleri listesi (PLANLANAN sayfasi): ALEN KOD, MAMÜL ADI, MÜŞTERİ KODU, HAMMADDE, ALTERNATİF HM, ÜRETİM SN, BRÜT GR, NET GR ...
- *       -> URUN KARTLARI (her stok kodu icin EN SON is emrindeki degerler)
+ *       -> URUN KARTLARI (her stok kodu icin EN SON is emrindeki degerler). TAM BOY ISTEGE BAGLI (gercek Excel'de
+ *          yok, mikro.js'in stok-karti senkronu icin eklendi, bkz. importIsEmri).
  *   siparis dosyasi (_SIPARIS sayfasi): Mamul_Kodu, Evrak_No, Must_Sip_No, Miktar, Sevk_Edilen_Miktar, Kalan_Miktar, HM, TAM BOY, BR, NT, SN ...
  *       -> SIPARIS SATIRLARI (+ urun kartlarinda eksik alanlar: tam boy, hammadde, agirliklar, sure)
  *   hammadde depo stogu (Mikro SQL sorgusu): Stok_Kod, Stok_Adi, Fiili_Stok, Gecici_Stok, Net_Agirlik, Dara
@@ -154,6 +155,10 @@ function importIsEmri(db, parsed, ctx) {
         plannedSec: sec,
         grossKg: positive(parseNumber(cell(idx, row, 'BRUTGR'))),
         netKg: positive(parseNumber(cell(idx, row, 'NETGR'))),
+        // TAM BOY: gercek "PLANLANAN" Excel sayfasinda bu sutun YOK (yalniz _SIPARIS sayfasinda vardi, importSiparis
+        // zaten okuyordu) - burada isteğe bağlı olarak eklendi (2026-11-16, mikro.js'in yeni "stok karti" senkronu
+        // icin, bkz. dosya basi): baslik yoksa cell() '' doner, positive(parseNumber('')) null olur, davranis DEGISMEZ.
+        lengthMm: positive(parseNumber(cell(idx, row, 'TAMBOY'))),
       };
       const outcome = saveIfChanged(db, key, stock, incoming, { source: 'csv-isemri', by: ctx.by, now: ctx.now });
       tally[outcome] += 1;

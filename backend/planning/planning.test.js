@@ -446,7 +446,7 @@ test('programlar: kutuphanedeki (hic calismamis) programlar da listede gorunur, 
   p.close();
 });
 
-test('programlar: toplu onay yalniz stok koduyla birebir tutan TEK oneriyi onaylar', () => {
+test('programlar: toplu onay yalniz stok koduyla birebir tutan TEK oneriyi onaylar (varsayilan kind)', () => {
   const p = planlamaVeProgramlar([
     { program: 'SR001-013', parts: 5, machines: [], lastTs: 1 },
     { program: 'NI002-001', parts: 5, machines: [], lastTs: 1 },
@@ -456,8 +456,23 @@ test('programlar: toplu onay yalniz stok koduyla birebir tutan TEK oneriyi onayl
   assert.equal(p.confirmExactSuggestions({ by: 'ayse' }), 2, 'musteri koduyla olan oneri toplu onaylanmaz');
   const r = p.listPrograms();
   assert.equal(r.counts.mapped, 2);
-  assert.equal(r.counts.suggested, 1);
+  assert.equal(r.counts.suggested, 1, 'musteri koduyla olan oneri hala bekliyor');
   assert.equal(r.counts.unmatched, 1);
+  p.close();
+});
+
+test("programlar: kind:'musteri-kodu' verilince musteri koduyla tek adayli onerileri de toplu onaylar", () => {
+  const p = planlamaVeProgramlar([
+    { program: 'SR001-013', parts: 5, machines: [], lastTs: 1 },
+    { program: '600000000001', parts: 5, machines: [], lastTs: 1 },
+    { program: 'XYZ', parts: 5, machines: [], lastTs: 1 },
+  ]);
+  assert.equal(p.confirmExactSuggestions({ by: 'ayse', kind: 'musteri-kodu' }), 1, 'stok koduyla olan bu seferde onaylanmaz');
+  const r = p.listPrograms();
+  assert.equal(r.counts.mapped, 1);
+  assert.equal(r.programs.find((x) => x.program === '600000000001').status, 'esli');
+  assert.equal(r.programs.find((x) => x.program === 'SR001-013').status, 'oneri', 'stok koduyla olan hala bekliyor');
+  assert.throws(() => p.confirmExactSuggestions({ kind: 'bilinmeyen' }), (err) => err.status === 400, 'gecersiz kind reddedilir');
   p.close();
 });
 
@@ -527,6 +542,9 @@ test('HTTP: urun CRUD, CSV iceri alma, siparis arama, program esleme uclari', as
     assert.equal((await j('/api/planning/programs/map?program=SR001-013', { method: 'DELETE' })).status, 200);
     assert.equal((await j('/api/planning/programs/map?program=SR001-013', { method: 'DELETE' })).status, 404);
     assert.equal((await post('/api/planning/programs/confirm-exact', {})).json.confirmed, 1);
+    // kind govdesiyle musteri koduyla tek adayli onerileri de onaylamak mumkun (burada yok, confirmed:0 doner); gecersiz kind 400.
+    assert.equal((await post('/api/planning/programs/confirm-exact', { kind: 'musteri-kodu' })).json.confirmed, 0);
+    assert.equal((await post('/api/planning/programs/confirm-exact', { kind: 'bilinmeyen' })).status, 400);
 
     assert.equal((await j('/api/planning/yok')).status, 404);
   } finally {

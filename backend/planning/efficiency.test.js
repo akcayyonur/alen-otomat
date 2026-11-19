@@ -77,6 +77,24 @@ test('is emri x vardiya: ayrilan sure, adet (vardiya siniri yari acik), verimlil
   assert.equal(summarize(sinir).availability, null, 'durum verisi yoksa kullanilabilirlik bilinmez (0 degil)');
 });
 
+test('"Urun degisikligi" (D1) kodlu neden allottedSec/excludedSec\'i etkiler, kullanilabilirligi (A) etkilemez; baska kod etkilemez', () => {
+  const spans = [{ state: 'IDLE', startedAt: day(8), endedAt: day(8, 20) }, { state: 'RUNNING', startedAt: day(8, 20), endedAt: day(9) }];
+  const events = [ev(day(8, 30), 100, { cycleSec: 24 })];
+  const segs = orderSegments({ wo: wo(), from: day(8), to: day(9), events, spans, reasons: [{ from: day(8), to: day(8, 20), code: 'D1' }] });
+  const s = segs[0];
+  // vardiya parcasi 1 sa (3600 sn); D1 20 dk (1200 sn) disarida -> allotted 2400 sn; gozlenen/calisan sure DEGISMEZ
+  assert.deepEqual([s.allottedSec, s.excludedSec, s.observedSec, s.runningSec], [2400, 1200, 3600, 2400]);
+  const sum = summarize(segs);
+  assert.equal(sum.efficiency, 1.25, '100 x 30 sn = 3000 sn kazanilan / 2400 sn (D1 disarida) ayrilan');
+  assert.equal(sum.availability, 0.6667, 'A etkilenmedi: 40 dk calisti / 60 dk gozlendi (D1 gozlenenden cikarilmadi)');
+
+  const reasonsiz = orderSegments({ wo: wo(), from: day(8), to: day(9), events, spans });
+  assert.deepEqual([reasonsiz[0].allottedSec, reasonsiz[0].excludedSec], [3600, 0], 'reasons verilmezse disarida tutulan sure yok');
+
+  const digerKod = orderSegments({ wo: wo(), from: day(8), to: day(9), events, spans, reasons: [{ from: day(8), to: day(8, 20), code: 'D4' }] });
+  assert.deepEqual([digerKod[0].allottedSec, digerKod[0].excludedSec], [3600, 0], 'D1 disindaki kodlar verimlilikten disarida tutulmaz');
+});
+
 test('toplamlar SURE AGIRLIKLI: 10 sa %96 + 2 sa %50 -> %88,3; planlanan cevrimi olmayan verimlilige katilmaz ama sayilir', () => {
   const seg = (allottedSec, eff, o = {}) => ({ woNo: 'W', allottedSec, qty: 100, approxQty: 0, plannedSec: 30, earnedSec: allottedSec * eff, runningSec: allottedSec, observedSec: allottedSec, cycleN: 0, cycleSum: 0, grossKg: null, netKg: null, ...o });
   const t = summarize([seg(36000, 0.96), seg(7200, 0.5)]);
@@ -138,6 +156,22 @@ test('verimlilik raporu: is emri x vardiya, tezgah x vardiya matrisi, gun, tezga
   assert.equal(r.totals.grossKg, Math.round((1000 * 0.039 + 160 * 0.1065) * 1000) / 1000);
   assert.equal(p.efficiencyReport({ from: '2026-10-12', to: '2026-10-12', machine: 'CNC-03', now: NOW }).totals.qty, 0);
   assert.throws(() => p.efficiencyReport({ machine: 'CNC-99', now: NOW }), /Bilinmeyen tezgah/);
+});
+
+test('verimlilik raporu: "Urun degisikligi" (D1) durusu allottedSec\'ten cikarilir ve uyari verilir; baska kod etkilemez', () => {
+  const { p, st } = kur();
+  uretim(p, st);
+  const once = p.efficiencyReport({ from: '2026-10-12', to: '2026-10-12', now: NOW });
+  assert.equal(once.totals.excludedSec, 0);
+  p.addDowntimeReason({ machineId: 'CNC-01', from: day(14), to: day(14, 30), code: 'D1' }, { now: NOW });
+  const r = p.efficiencyReport({ from: '2026-10-12', to: '2026-10-12', now: NOW });
+  assert.equal(r.totals.allottedSec, once.totals.allottedSec - 1800, 'D1 suresi (30 dk) ayrilan sureden cikarildi');
+  assert.equal(r.totals.excludedSec, 1800);
+  assert.match(r.warnings.join('|'), /Ürün değişikliği/);
+
+  p.addDowntimeReason({ machineId: 'CNC-01', from: day(14, 30), to: day(14, 40), code: 'D4' }, { now: NOW });
+  const r2 = p.efficiencyReport({ from: '2026-10-12', to: '2026-10-12', now: NOW });
+  assert.equal(r2.totals.excludedSec, 1800, 'D4 verimlilikten disarida tutmaya katilmaz');
 });
 
 test('verimlilik raporu: suren iş emri simdiye kadar, uretimdeyken iptal edilen dahil, planlanan cevrimi olmayan uyarilir, aralik disi is emri girmez', () => {
